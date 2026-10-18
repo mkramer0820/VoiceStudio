@@ -73,6 +73,23 @@ class FishAudioBackend(TTSBackend):
     def ensure_ready(self) -> None:  # nothing to load
         return None
 
+    def list_voices(self, *, mine: bool = True, title: Optional[str] = None,
+                    language: Optional[str] = None) -> list[dict]:
+        """Voices on the Fish account (``mine``) or the public library.
+
+        Makes a network call, so it runs only on an explicit request, never
+        during availability probing. ``id`` is what ``voice=`` / the default
+        voice setting expect.
+        """
+        api_key = resolve_api_key()
+        if not api_key:
+            raise RuntimeError(self.is_available()[1])
+        try:
+            return client.list_all_voices(api_key=api_key, cfg=load_config(),
+                                          mine=mine, title=title, language=language)
+        except client.FishAPIError as exc:
+            raise RuntimeError(exc.message) from exc
+
     # ── generation ──
     def generate(self, text: str, *, speed: float = 1.0, language: Optional[str] = None,
                  ref_audio: Optional[str] = None, **extras) -> torch.Tensor:

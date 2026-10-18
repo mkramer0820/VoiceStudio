@@ -46,8 +46,24 @@ VoiceStudio's own processing (provenance watermark, loudness, resampling). Edit
 those files when you want Fish's exact output. The file your project exports
 goes through the normal pipeline.
 
+## Your voices
+
+List the voices already on your Fish account, then pick a default:
+
+```bash
+curl "http://127.0.0.1:<port>/api/fish/voices"                      # your saved voices
+curl "http://127.0.0.1:<port>/api/fish/voices?scope=library&title=calm&language=en"
+curl -X PUT http://127.0.0.1:<port>/api/fish/default-voice -H "Content-Type: application/json" -d '{"voice_id":"<id>"}'
+```
+
+Each entry has `id`, `title`, `languages`, `tags`, `visibility`, `state`, `author`
+and a Fish-hosted `sample_url` (VoiceStudio does not fetch it). `id` is the value
+for `FISH_TTS_REFERENCE_ID` / the default voice, or the per-request `voice`.
+Listing is an explicit request that contacts Fish; it never runs at startup or
+while checking availability. From Python: `FishAudioBackend().list_voices(mine=True)`.
+
 ## Limits (phase 1)
 
-- Saved voices by `reference_id` only; no inline cloning or voice upload yet.
+- Saved voices by `reference_id` only (list them as above); no inline cloning or voice upload yet.
 - No voice design, no streaming.
 - Licensing and pricing are Fish's; check their terms for commercial use.

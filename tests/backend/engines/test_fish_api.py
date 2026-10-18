@@ -146,3 +146,71 @@ def test_registered_in_registry():
     from services.tts_backend import _REGISTRY
 
     assert _REGISTRY["fish-audio"] is FishAudioBackend
+
+
+# ── voice listing ──
+
+_LIST = {
+    "total": 3, "has_more": True,
+    "items": [
+        {"_id": "v1", "title": "Narrator", "languages": ["en"], "visibility": "private",
+         "state": "trained", "tags": ["calm"], "author": {"nickname": "me"},
+         "samples": [{"audio": "https://cdn.fish.audio/s1.mp3"}], "created_at": "2026-10-01"},
+        {"_id": "v2", "title": "Villain"},
+    ],
+}
+
+
+def test_list_voices_normalizes_and_uses_self_param():
+    seen = {}
+
+    def handler(request):
+        seen["query"] = dict(request.url.params)
+        seen["auth"] = request.headers["authorization"]
+        return httpx.Response(200, json=_LIST)
+
+    res = client.list_voices(api_key="k", cfg=load_config(), transport=_transport(handler))
+    assert seen["query"]["self"] == "true" and seen["query"]["page_size"] == "100"
+    assert seen["auth"] == "Bearer k"
+    assert res["items"][0] == {
+        "id": "v1", "title": "Narrator", "description": "", "languages": ["en"], "tags": ["calm"],
+        "visibility": "private", "state": "trained", "author": "me",
+        "sample_url": "https://cdn.fish.audio/s1.mp3", "created_at": "2026-10-01",
+    }
+    assert res["items"][1]["id"] == "v2" and res["has_more"] is True
+
+
+def test_library_scope_omits_self():
+    seen = {}
+    client.list_voices(api_key="k", cfg=load_config(), mine=False, title="x",
+                       transport=_transport(lambda r: (seen.update(q=dict(r.url.params)),
+                                                       httpx.Response(200, json={"items": [], "total": 0}))[1]))
+    assert "self" not in seen["q"] and seen["q"]["title"] == "x"
+
+
+def test_list_all_voices_pages_until_done():
+    pages = {1: {"total": 3, "has_more": True, "items": [{"_id": "a"}, {"_id": "b"}]},
+             2: {"total": 3, "has_more": False, "items": [{"_id": "c"}]}}
+
+    def handler(request):
+        return httpx.Response(200, json=pages[int(request.url.params["page_number"])])
+
+    out = client.list_all_voices(api_key="k", cfg=load_config(), transport=_transport(handler))
+    assert [v["id"] for v in out] == ["a", "b", "c"]
+
+
+def test_backend_list_voices_requires_key(monkeypatch):
+    monkeypatch.setattr("services.settings_store.get_secret", lambda name: None)
+    with pytest.raises(RuntimeError, match="API key"):
+        FishAudioBackend().list_voices()
+
+
+def test_backend_list_voices_maps_errors(monkeypatch):
+    monkeypatch.setenv("FISH_API_KEY", "k")
+
+    def fail(**kw):
+        raise client.FishAPIError(401, "bad key")
+
+    monkeypatch.setattr(client, "list_all_voices", fail)
+    with pytest.raises(RuntimeError, match="bad key"):
+        FishAudioBackend().list_voices()

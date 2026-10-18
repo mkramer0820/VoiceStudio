@@ -103,29 +103,32 @@ def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str] = None
     return body
 
 
-def synthesize(body: dict, *, api_key: str, cfg: FishConfig,
-               transport: Optional[httpx.BaseTransport] = None,
-               sleep=time.sleep) -> bytes:
-    """POST the request; return the raw audio bytes exactly as Fish sent them."""
+def _request(method: str, path: str, *, api_key: str, cfg: FishConfig,
+             json_body: Optional[dict] = None, params: Optional[dict] = None,
+             send_model: bool = False,
+             transport: Optional[httpx.BaseTransport] = None,
+             sleep=time.sleep) -> httpx.Response:
+    """One authenticated call with the shared retry/error policy."""
     _validate_base_url(cfg.base_url)
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "model": cfg.model,
-    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    if send_model:
+        headers["model"] = cfg.model
     gate = _acquire_gate(cfg.max_concurrency)
     delay = 1.0
     with gate, httpx.Client(timeout=_TIMEOUT, transport=transport) as http:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             resp = None
             try:
-                resp = http.post(f"{cfg.base_url}/v1/tts", json=body, headers=headers)
+                resp = http.request(method, f"{cfg.base_url}{path}", json=json_body,
+                                    params=params, headers=headers)
             except httpx.HTTPError as exc:
                 if attempt == _MAX_ATTEMPTS:
                     raise FishAPIError(0, f"Could not reach Fish Audio: {type(exc).__name__}") from exc
             else:
                 if resp.status_code == 200:
-                    return resp.content
+                    return resp
                 if resp.status_code not in _RETRY_STATUSES or attempt == _MAX_ATTEMPTS:
                     m = _message(resp)
                     tpl = _FRIENDLY.get(resp.status_code)
@@ -143,3 +146,60 @@ def synthesize(body: dict, *, api_key: str, cfg: FishConfig,
             sleep(min(wait, 30.0))
             delay *= 2
     raise FishAPIError(0, "Fish Audio request failed")  # pragma: no cover
+
+
+def synthesize(body: dict, *, api_key: str, cfg: FishConfig,
+               transport: Optional[httpx.BaseTransport] = None,
+               sleep=time.sleep) -> bytes:
+    """POST the request; return the raw audio bytes exactly as Fish sent them."""
+    return _request("POST", "/v1/tts", api_key=api_key, cfg=cfg, json_body=body,
+                    send_model=True, transport=transport, sleep=sleep).content
+
+
+def _voice(item: dict) -> dict:
+    samples = item.get("samples") or []
+    first = samples[0] if samples and isinstance(samples[0], dict) else {}
+    author = item.get("author") if isinstance(item.get("author"), dict) else {}
+    return {
+        "id": item.get("_id"),
+        "title": item.get("title") or "",
+        "description": item.get("description") or "",
+        "languages": item.get("languages") or [],
+        "tags": item.get("tags") or [],
+        "visibility": item.get("visibility"),
+        "state": item.get("state"),
+        "author": author.get("nickname"),
+        "sample_url": first.get("audio"),  # a Fish-hosted URL; never fetched by the backend
+        "created_at": item.get("created_at"),
+    }
+
+
+def list_voices(*, api_key: str, cfg: FishConfig, mine: bool = True,
+                title: Optional[str] = None, language: Optional[str] = None,
+                page_number: int = 1, page_size: int = 100,
+                transport: Optional[httpx.BaseTransport] = None,
+                sleep=time.sleep) -> dict:
+    """One page of voices: your own (``mine``) or the public Voice Library."""
+    params: dict = {"page_size": max(1, min(100, page_size)), "page_number": max(1, page_number)}
+    if mine:
+        params["self"] = "true"
+    if title:
+        params["title"] = title
+    if language:
+        params["language"] = language
+    data = _request("GET", "/model", api_key=api_key, cfg=cfg, params=params,
+                    transport=transport, sleep=sleep).json()
+    items = [_voice(i) for i in data.get("items", []) if isinstance(i, dict) and i.get("_id")]
+    return {"total": data.get("total", len(items)), "items": items,
+            "has_more": bool(data.get("has_more"))}
+
+
+def list_all_voices(*, api_key: str, cfg: FishConfig, max_pages: int = 20, **kw) -> list[dict]:
+    """Every page of ``list_voices`` (bounded so a huge library cannot loop forever)."""
+    out: list[dict] = []
+    for page in range(1, max_pages + 1):
+        res = list_voices(api_key=api_key, cfg=cfg, page_number=page, **kw)
+        out.extend(res["items"])
+        if not res["items"] or not (res["has_more"] or len(out) < res["total"]):
+            break
+    return out
