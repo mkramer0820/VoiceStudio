@@ -62,6 +62,8 @@ tts_engines:
     doc: docs/engines/confucius4-tts.md
   - id: pockettts
   - id: audiocpp
+  - id: fish-audio
+    doc: docs/engines/fish-audio.md
     doc: docs/engines/audio-cpp.md
 
 # Same contract against backend/services/asr_backend.py _REGISTRY.

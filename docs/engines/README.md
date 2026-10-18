@@ -46,6 +46,7 @@ approval), [Windows](../install/windows.md), [Linux](../install/linux.md),
 | PocketTTS (Kyutai) | [pockettts](pockettts.md) | CPU (not Intel Mac) | ✅ | `uv sync --extra pockettts` + license |
 | Confucius4-TTS | [confucius4-tts](confucius4-tts.md) | CUDA · CPU | ✅ | clone + env var |
 | audio.cpp (Breeze-TTS-2) | [audio-cpp](audio-cpp.md) | CPU + Vulkan/Metal/CUDA/HIP/ROCm where compiled | ✅ + voice design | prebuilt binary + env var (weights research/non-commercial) |
+| Fish Audio (cloud API) | [fish-audio](fish-audio.md) | cloud (no local model) | saved voices (by id) | `FISH_API_KEY`; opt-in, text is sent to Fish |
 
 ### Reference clip length
 

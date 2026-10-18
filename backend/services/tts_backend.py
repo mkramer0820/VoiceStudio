@@ -3340,6 +3340,8 @@ _LAZY_REGISTRY: dict[str, tuple[str, str]] = {
     # same import-cycle reason as the entries above (engines.audiocpp
     # imports services.tts_backend for TTSBackend).
     "audiocpp": ("engines.audiocpp", "AudioCPPBackend"),
+    # Fork extension: Fish Audio cloud API (opt-in, key-gated, no local model).
+    "fish-audio": ("engines.fish_api", "FishAudioBackend"),
 }
 
 
@@ -3444,6 +3446,7 @@ _INSTALL_HINTS: dict[str, str] = {
     "moss-tts-v15":  "git clone OpenMOSS/MOSS-TTS + set OMNIVOICE_MOSS_TTS_V15_DIR  (own venv, transformers==5.0; 8B, ~16 GB weights; CUDA/ROCm/XPU/NPU/CPU, no MPS; Apache-2.0)",
     "dots-tts":      "git clone rednote-hilab/dots.tts + set OMNIVOICE_DOTS_TTS_DIR  (own venv, transformers==4.57; 2B, ~9 GB weights; CUDA/CPU, Linux/macOS only — no Windows; Apache-2.0)",
     "confucius4-tts":"git clone netease-youdao/Confucius4-TTS + set OMNIVOICE_CONFUCIUS4_TTS_DIR  (own Python 3.10 venv; 14-lang cross-lingual zero-shot clone; ~5 GB weights auto-download; CUDA/ROCm/XPU/NPU/CPU, no MPS; Apache-2.0)",
+    "fish-audio":   "Cloud API, no install: set FISH_API_KEY (or store a key in Settings). Text you synthesize is sent to Fish Audio. Models s2.1-pro / s2-pro / drama-3; default lossless WAV 44.1 kHz.",
     "audiocpp":     "download the matching audio.cpp v0.7.4 prebuilt + set OMNIVOICE_AUDIOCPP_BIN, then explicitly install Breeze-TTS-2 in Model Catalogue → Models  (native CPU/Vulkan/CUDA/Metal GGUF server, no Python; en+zh clone+design; ~4.73 GiB; weights research/non-commercial only)",
 }
 
@@ -3492,6 +3495,7 @@ _ENGINE_DOCS: dict[str, str] = {
     "supertonic3":          "docs/engines/supertonic3.md",
     "pockettts":            "docs/engines/pockettts.md",
     "audiocpp":             "docs/engines/audio-cpp.md",
+    "fish-audio":           "docs/engines/fish-audio.md",
 }
 
 
