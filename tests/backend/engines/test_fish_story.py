@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from engines.fish_api import client, story
+from engines.fish_api import client, story, story_jobs
 from engines.fish_api.config import FishConfig, load_config
 
 
@@ -42,7 +42,7 @@ def _draft(n=4, **settings) -> story.Draft:
 def _wait(job_id, timeout=10):
     end = time.time() + timeout
     while time.time() < end:
-        job = story.get_job(job_id)
+        job = story_jobs.get_job(job_id)
         if job["status"] != "running":
             return job
         time.sleep(0.02)
@@ -97,12 +97,12 @@ def test_render_uses_each_chunks_voice_and_writes_masters_and_join(monkeypatch):
         return _wav()
 
     monkeypatch.setattr(client, "synthesize", fake)
-    job = _wait(story.start_render(_draft(4, default_voice="vnarr"), draft_id="d1")["id"])
+    job = _wait(story_jobs.start_render(_draft(4, default_voice="vnarr"), draft_id="d1")["id"])
     assert job["status"] == "done" and job["done"] == 4 and job["failed"] == 0
     assert dict((t, v) for t, v, _ in seen) == {"line 0": "vsun", "line 1": "vsun",
                                                 "line 2": "vnarr", "line 3": "vnarr"}
     files = [c["file"] for c in job["chunks"]]
-    assert files[0].startswith("001_sun_2") and all(f.endswith(".wav") for f in files)
+    assert files[0].startswith("001_narration_sun_2") and all(f.endswith(".wav") for f in files)
     assert job["joined"] == "story.wav"
     import os
     data, rate = sf.read(os.path.join(job["out_dir"], "story.wav"))
@@ -125,7 +125,7 @@ def test_render_never_exceeds_the_concurrency_cap(monkeypatch):
         return _wav()
 
     monkeypatch.setattr(client, "synthesize", fake)
-    job = _wait(story.start_render(_draft(8, default_voice="v", max_concurrency=2))["id"])
+    job = _wait(story_jobs.start_render(_draft(8, default_voice="v", max_concurrency=2))["id"])
     assert job["done"] == 8 and 1 <= peak <= 2
 
 
@@ -139,7 +139,7 @@ def test_out_of_credits_stops_the_rest_and_keeps_finished_chunks(monkeypatch):
         return _wav()
 
     monkeypatch.setattr(client, "synthesize", fake)
-    job = _wait(story.start_render(_draft(6, default_voice="v", max_concurrency=1))["id"])
+    job = _wait(story_jobs.start_render(_draft(6, default_voice="v", max_concurrency=1))["id"])
     assert job["status"] == "stopped" and "credits" in job["message"]
     states = [c["status"] for c in job["chunks"]]
     assert states[0] == "done" and states[1] == "failed" and "skipped" in states[2:]
@@ -153,24 +153,24 @@ def test_one_failed_chunk_does_not_stop_the_others(monkeypatch):
         return _wav()
 
     monkeypatch.setattr(client, "synthesize", fake)
-    job = _wait(story.start_render(_draft(3, default_voice="v"))["id"])
+    job = _wait(story_jobs.start_render(_draft(3, default_voice="v"))["id"])
     assert job["status"] == "partial" and job["done"] == 2 and job["failed"] == 1
 
 
 def test_render_subset_and_formats_without_a_join(monkeypatch):
     monkeypatch.setattr(client, "synthesize", lambda body, **_: b"ID3fake")
-    job = _wait(story.start_render(_draft(4, default_voice="v", format="mp3"), chunk_ids=["c2", "c3"])["id"])
+    job = _wait(story_jobs.start_render(_draft(4, default_voice="v", format="mp3"), chunk_ids=["c2", "c3"])["id"])
     assert job["total"] == 2 and job["joined"] is None
     assert all(c["file"].endswith(".mp3") for c in job["chunks"])
 
 
 def test_render_needs_a_key_and_something_to_render(monkeypatch):
     with pytest.raises(ValueError):
-        story.start_render(story.Draft(chunks=[story.Chunk(id="a", text="  ")]))
+        story_jobs.start_render(story.Draft(chunks=[story.Chunk(id="a", text="  ")]))
     monkeypatch.delenv("FISH_API_KEY")
     monkeypatch.setattr("services.settings_store.get_secret", lambda n: None)
     with pytest.raises(RuntimeError):
-        story.start_render(_draft(1))
+        story_jobs.start_render(_draft(1))
 
 
 def test_get_balance_parses_the_wallet_response():
@@ -209,6 +209,6 @@ def test_manifest_records_the_speaker_for_each_line(monkeypatch):
         chunks=[story.Chunk(id="a", text="Hello", speaker="Shadow", voice="vsh")],
         voices={"vsh": "sun_2"},
     )
-    job = _wait(story.start_render(draft)["id"])
+    job = _wait(story_jobs.start_render(draft)["id"])
     with open(os.path.join(job["out_dir"], "manifest.json"), encoding="utf-8") as fh:
         assert json.load(fh)["chunks"][0]["speaker"] == "Shadow"

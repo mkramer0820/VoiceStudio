@@ -5,6 +5,7 @@ import {
   CloudDownloadIcon,
   CloudIcon,
   FilePlusIcon,
+  ListChecksIcon,
   LoaderCircleIcon,
   MousePointerClickIcon,
   TagsIcon,
@@ -19,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SettingsActionError } from '@/features/settings/settings-action-error';
 import { ChunkList } from './chunk-list';
+import { JobsDialog, useRunningJobs } from './jobs-dialog';
 import { RenderPanel } from './render-panel';
 import { SettingsPanel } from './settings-panel';
 import { TagsDialog } from './tags-dialog';
@@ -59,6 +61,8 @@ export function FishStoryPage() {
   const [maxChars, setMaxChars] = useState('');
   const [showImport, setShowImport] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const runningJobs = useRunningJobs(story.ready);
 
   const order = useMemo(() => voiceOrder(draft.chunks), [draft.chunks]);
   const hueFor = useCallback((voice: string | null | undefined) => voiceHue(voice, order), [order]);
@@ -142,6 +146,8 @@ export function FishStoryPage() {
         </span>
       </WorkspaceHeader>
 
+      <JobsDialog open={jobsOpen} onOpenChange={setJobsOpen} onError={story.setError} />
+
       <TagsDialog
         open={tagsOpen}
         onOpenChange={setTagsOpen}
@@ -162,6 +168,8 @@ export function FishStoryPage() {
             defaults={story.defaults}
             voiceNames={draft.voices}
             onChange={story.setSettings}
+            onSaveDefaults={story.saveDefaults}
+            onError={story.setError}
           />
         </SecondarySidebar>
 
@@ -189,6 +197,14 @@ export function FishStoryPage() {
                 onClick={() => setTagsOpen(true)}
               >
                 <TagsIcon /> {t('fishStory.tags_button')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setJobsOpen(true)}>
+                <ListChecksIcon /> {t('fishStory.jobs_button')}
+                {runningJobs > 0 && (
+                  <span className="rounded-full bg-primary/20 px-1.5 text-[10px]">
+                    {t('fishStory.jobs_running_count', { count: runningJobs })}
+                  </span>
+                )}
               </Button>
               <Button variant="outline" size="sm" disabled={!story.canUndo} onClick={story.undo}>
                 <Undo2Icon /> {t('fishStory.undo')}

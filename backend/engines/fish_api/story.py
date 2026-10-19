@@ -1,35 +1,25 @@
-"""Fish Audio story board: staged drafts and a bounded render job.
+"""Fish Audio story board: staged drafts and the pre-submit plan.
 
 A *draft* is local JSON (text chunks, a Fish voice per chunk, output options).
-Saving, editing and planning a draft never contact Fish. Only an explicit
-``start_render`` sends text to Fish Audio, with at most ``max_concurrency``
-requests in flight. Every chunk is written untouched (Fish's own bytes) so the
-files can be edited externally; a joined WAV is added when the format allows.
+Saving, editing and planning a draft never contact Fish; rendering lives in
+``story_jobs`` and only runs on an explicit, confirmed request.
 """
 from __future__ import annotations
 
 import dataclasses
 import json
-import logging
 import os
 import re
-import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import client
-from .config import FishConfig, load_config, resolve_api_key
-
-logger = logging.getLogger("omnivoice.fish_api.story")
+from .config import FishConfig, load_config
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 VOICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-_EXT = {"wav": "wav", "pcm": "pcm", "mp3": "mp3", "opus": "opus"}
-_MAX_JOBS = 20
 
 
 class StorySettings(BaseModel):
@@ -52,6 +42,12 @@ class StorySettings(BaseModel):
     default_voice: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
     pause_ms: int = Field(350, ge=0, le=5000)  # silence between chunks in the joined file
     join: bool = True
+
+
+class SavedSettings(StorySettings):
+    """Defaults the user saves to Settings (every field optional; ``null`` clears it)."""
+
+    output_dir: Optional[str] = Field(None, max_length=400)
 
 
 class Chunk(BaseModel):
@@ -172,188 +168,5 @@ def plan(draft: Draft) -> dict:
     }
 
 
-# ── render job ──
-_FATAL = {401, 402, 403}
-_jobs: dict[str, dict] = {}
-_jobs_lock = threading.Lock()
-
-
-def _safe(label: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", label)[:24] or "voice"
-
-
-def _snapshot(job: dict) -> dict:
-    with job["lock"]:
-        return {k: ([dict(c) for c in v] if k == "chunks" else v) for k, v in job.items() if k not in {"lock", "cancel"}}
-
-
-def get_job(job_id: str) -> Optional[dict]:
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    return _snapshot(job) if job else None
-
-
-def cancel_job(job_id: str) -> bool:
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if not job:
-        return False
-    job["cancel"].set()
-    return True
-
-
-def start_render(draft: Draft, *, draft_id: Optional[str] = None,
-                 chunk_ids: Optional[list[str]] = None) -> dict:
-    """Validate and start a background render. Raises ``ValueError`` / ``RuntimeError``."""
-    api_key = resolve_api_key()
-    if not api_key:
-        raise RuntimeError("No Fish Audio API key. Add one in Settings → Models → TTS.")
-    cfg = effective_config(draft.settings)
-    default = draft.settings.default_voice or cfg.reference_id
-    wanted = set(chunk_ids) if chunk_ids else None
-    items = [(i, c) for i, c in enumerate(draft.chunks, 1)
-             if c.text.strip() and (wanted is None or c.id in wanted)]
-    if not items:
-        raise ValueError("Nothing to render: every chunk is empty or unselected.")
-
-    with _jobs_lock:
-        for old in [j for j, v in _jobs.items() if v["status"] != "running"][: max(0, len(_jobs) - _MAX_JOBS)]:
-            _jobs.pop(old, None)
-    job_id = uuid.uuid4().hex[:12]
-    from core.config import DATA_DIR
-
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = os.path.join(DATA_DIR, "fish_stories", draft_id or "adhoc", "renders", stamp)
-    os.makedirs(out_dir, exist_ok=True)
-    job = {
-        "id": job_id, "status": "running", "message": "", "out_dir": out_dir, "joined": None,
-        "total": len(items), "done": 0, "failed": 0, "started_at": time.time(),
-        "chunks": [{"id": c.id, "index": i, "status": "queued", "file": None, "error": None,
-                    "voice": c.voice or default} for i, c in items],
-        "lock": threading.Lock(), "cancel": threading.Event(),
-    }
-    with _jobs_lock:
-        _jobs[job_id] = job
-    threading.Thread(target=_run, args=(job, items, draft, cfg, api_key, default),
-                     name=f"fish-story-{job_id}", daemon=True).start()
-    return _snapshot(job)
-
-
-def _run(job, items, draft, cfg, api_key, default) -> None:
-    fatal: dict = {}
-    slots = {c.id: n for n, (_, c) in enumerate(items)}
-    names = draft.voices
-
-    def one(index: int, chunk: Chunk) -> None:
-        slot = slots[chunk.id]
-        if job["cancel"].is_set() or fatal:
-            with job["lock"]:
-                job["chunks"][slot]["status"] = "skipped"
-            return
-        voice = chunk.voice or default
-        with job["lock"]:
-            job["chunks"][slot]["status"] = "running"
-        try:
-            body = client.build_body(chunk.text.strip(), cfg, reference_id=voice,
-                                     speed=draft.settings.speed)
-            raw = client.synthesize(body, api_key=api_key, cfg=cfg)
-            label = _safe(names.get(voice or "", voice or "default"))
-            path = os.path.join(job["out_dir"], f"{index:03d}_{label}.{_EXT.get(cfg.format, 'bin')}")
-            with open(path, "wb") as fh:
-                fh.write(raw)
-            with job["lock"]:
-                job["chunks"][slot].update(status="done", file=os.path.basename(path))
-                job["done"] += 1
-        except client.FishAPIError as exc:
-            if exc.status in _FATAL:
-                fatal.update(status=exc.status, message=exc.message)
-            with job["lock"]:
-                job["chunks"][slot].update(status="failed", error=exc.message)
-                job["failed"] += 1
-        except Exception as exc:  # noqa: BLE001 — one chunk must not kill the batch
-            logger.warning("Fish story chunk %s failed: %s", chunk.id, type(exc).__name__)
-            with job["lock"]:
-                job["chunks"][slot].update(status="failed", error=f"{type(exc).__name__}")
-                job["failed"] += 1
-
-    try:
-        with ThreadPoolExecutor(max_workers=cfg.max_concurrency) as pool:
-            for index, chunk in items:
-                pool.submit(one, index, chunk)
-        joined = None
-        if draft.settings.join and job["done"] and not job["cancel"].is_set():
-            joined = _join(job, items, draft, cfg)
-        _manifest(job, items, draft, cfg, joined)
-        with job["lock"]:
-            job["joined"] = joined
-            if job["cancel"].is_set():
-                job["status"], job["message"] = "cancelled", "Cancelled; finished chunks were kept."
-            elif fatal:
-                job["status"], job["message"] = "stopped", fatal["message"]
-            else:
-                job["status"] = "done" if not job["failed"] else "partial"
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Fish story render crashed")
-        with job["lock"]:
-            job["status"], job["message"] = "error", type(exc).__name__
-
-
-def _join(job, items, draft, cfg) -> Optional[str]:
-    """One WAV from the per-chunk files, in story order (wav/pcm formats only)."""
-    if cfg.format not in ("wav", "pcm"):
-        return None
-    try:
-        import numpy as np
-        import soundfile as sf
-
-        parts, rate = [], None
-        gap = None
-        for slot, (_, chunk) in enumerate(items):
-            entry = job["chunks"][slot]
-            if entry["status"] != "done":
-                continue
-            path = os.path.join(job["out_dir"], entry["file"])
-            if cfg.format == "pcm":
-                with open(path, "rb") as fh:
-                    raw = fh.read()
-                data = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype("float32") / 32768.0
-                data, sr = data.reshape(-1, 1), cfg.sample_rate
-            else:
-                data, sr = sf.read(path, dtype="float32", always_2d=True)
-            if rate is None:
-                rate = sr
-                gap = np.zeros((int(sr * draft.settings.pause_ms / 1000), data.shape[1]), dtype="float32")
-            if sr != rate:
-                logger.warning("Fish story: chunk rate differs; join skipped")
-                return None
-            if parts and gap is not None and len(gap):
-                parts.append(gap)
-            parts.append(data)
-        if not parts or rate is None:
-            return None
-        out = os.path.join(job["out_dir"], "story.wav")
-        sf.write(out, np.concatenate(parts), rate, subtype="PCM_24")
-        return os.path.basename(out)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Fish story: join failed (%s)", type(exc).__name__)
-        return None
-
-
-def _manifest(job, items, draft, cfg, joined) -> None:
-    """What was rendered with which settings. Contains no key and no secrets."""
-    try:
-        info = {
-            "settings": {k: v for k, v in dataclasses.asdict(cfg).items() if k != "base_url"},
-            "speed": draft.settings.speed, "pause_ms": draft.settings.pause_ms, "joined": joined,
-            "chunks": [{"index": i, "id": c.id, "speaker": c.speaker, "voice": c.voice, "text": c.text,
-                        "file": job["chunks"][n]["file"], "status": job["chunks"][n]["status"]}
-                       for n, (i, c) in enumerate(items)],
-        }
-        with open(os.path.join(job["out_dir"], "manifest.json"), "w", encoding="utf-8") as fh:
-            json.dump(info, fh, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
-
-
-__all__ = ["Chunk", "Draft", "StorySettings", "plan", "start_render", "get_job", "cancel_job",
+__all__ = ["Chunk", "Draft", "StorySettings", "SavedSettings", "effective_config", "plan",
            "save_draft", "load_draft", "delete_draft", "list_drafts", "new_draft_id"]

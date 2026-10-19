@@ -1,5 +1,7 @@
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@/components/ui/button';
+import { getBridge } from '@/components/bridge';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import type { StorySettings } from './story-model';
@@ -59,13 +61,20 @@ export function SettingsPanel({
   defaults,
   voiceNames,
   onChange,
+  onSaveDefaults,
+  onError,
 }: {
   settings: StorySettings;
   defaults: FishDefaults | null;
   voiceNames: Record<string, string>;
   onChange: (patch: Partial<StorySettings>) => void;
+  /** Persist to Settings; resolves true on success. */
+  onSaveDefaults: (patch: Record<string, unknown>) => Promise<boolean>;
+  onError: (message: string) => void;
 }) {
   const { t } = useTranslation();
+  const [folder, setFolder] = useState('');
+  const [note, setNote] = useState('');
   const format = settings.format ?? defaults?.format ?? 'wav';
   const lossless = format === 'wav' || format === 'pcm';
   const inherit = (value: string | number | null | undefined) =>
@@ -330,6 +339,88 @@ export function SettingsPanel({
             />
           )}
         </Field>
+      </Group>
+
+      <Group title={t('fishStory.group_storage')}>
+        <Field label={t('fishStory.output_folder')} hint={t('fishStory.output_folder_hint')}>
+          {(id) => (
+            <Input
+              id={id}
+              className="font-mono text-xs"
+              placeholder={defaults?.output_dir_default ?? ''}
+              value={folder || defaults?.output_dir || ''}
+              onChange={(e) => {
+                setFolder(e.target.value);
+                setNote('');
+              }}
+            />
+          )}
+        </Field>
+        <p className="break-all text-[11px] text-muted-foreground">
+          {t('fishStory.output_folder_effective', { path: defaults?.output_dir_effective ?? '' })}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={!folder.trim() || folder.trim() === (defaults?.output_dir ?? '')}
+            onClick={() =>
+              void onSaveDefaults({ output_dir: folder.trim() }).then((ok) => {
+                if (ok) {
+                  setFolder('');
+                  setNote(t('fishStory.output_folder_saved'));
+                }
+              })
+            }
+          >
+            {t('fishStory.output_folder_save')}
+          </Button>
+          {defaults?.output_dir && (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => void onSaveDefaults({ output_dir: null }).then(() => setFolder(''))}
+            >
+              {t('fishStory.output_folder_reset')}
+            </Button>
+          )}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              void getBridge()
+                ?.files.revealPath(defaults?.output_dir_effective ?? '')
+                .catch((reason) => onError(String(reason?.message ?? reason)))
+            }
+          >
+            {t('fishStory.reveal')}
+          </Button>
+        </div>
+        <div className="space-y-1">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const keys = [
+                'model', 'format', 'sample_rate', 'mp3_bitrate', 'latency', 'normalize', 'temperature',
+                'top_p', 'chunk_length', 'volume', 'normalize_loudness', 'language', 'max_concurrency',
+                'default_voice',
+              ] as const;
+              const patch = Object.fromEntries(
+                keys.flatMap((k) => (settings[k] === null || settings[k] === undefined ? [] : [[k, settings[k]]])),
+              );
+              void onSaveDefaults(patch).then((ok) => ok && setNote(t('fishStory.defaults_saved')));
+            }}
+          >
+            {t('fishStory.save_defaults')}
+          </Button>
+          <p className="text-[11px] leading-snug text-muted-foreground">{t('fishStory.save_defaults_hint')}</p>
+        </div>
+        {note && (
+          <p role="status" className="text-xs text-emerald-500">
+            {note}
+          </p>
+        )}
       </Group>
 
       <Group title={t('fishStory.group_requests')}>

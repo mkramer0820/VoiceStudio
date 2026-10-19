@@ -115,8 +115,13 @@ def _request(method: str, path: str, *, api_key: str, cfg: FishConfig,
              json_body: Optional[dict] = None, params: Optional[dict] = None,
              send_model: bool = False,
              transport: Optional[httpx.BaseTransport] = None,
-             sleep=time.sleep) -> httpx.Response:
-    """One authenticated call with the shared retry/error policy."""
+             sleep=time.sleep, meta: Optional[dict] = None) -> httpx.Response:
+    """One authenticated call with the shared retry/error policy.
+
+    ``meta`` (optional) is filled with what a request log needs: ``attempts``,
+    ``elapsed_ms`` and the final ``status`` / ``content_type``. It never holds
+    the key or the body.
+    """
     _validate_base_url(cfg.base_url)
     headers = {"Authorization": f"Bearer {api_key}"}
     if json_body is not None:
@@ -125,9 +130,15 @@ def _request(method: str, path: str, *, api_key: str, cfg: FishConfig,
         headers["model"] = cfg.model
     gate = _acquire_gate(cfg.max_concurrency)
     delay = 1.0
+    started = time.monotonic()
+    if meta is not None:
+        meta.update(attempts=0, elapsed_ms=0, status=0, content_type=None)
     with gate, httpx.Client(timeout=_TIMEOUT, transport=transport) as http:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             resp = None
+            if meta is not None:
+                meta["attempts"] = attempt
+                meta["elapsed_ms"] = int((time.monotonic() - started) * 1000)
             try:
                 resp = http.request(method, f"{cfg.base_url}{path}", json=json_body,
                                     params=params, headers=headers)
@@ -135,6 +146,9 @@ def _request(method: str, path: str, *, api_key: str, cfg: FishConfig,
                 if attempt == _MAX_ATTEMPTS:
                     raise FishAPIError(0, f"Could not reach Fish Audio: {type(exc).__name__}") from exc
             else:
+                if meta is not None:
+                    meta.update(status=resp.status_code, content_type=resp.headers.get("content-type"),
+                                elapsed_ms=int((time.monotonic() - started) * 1000))
                 if resp.status_code == 200:
                     return resp
                 if resp.status_code not in _RETRY_STATUSES or attempt == _MAX_ATTEMPTS:
@@ -158,10 +172,10 @@ def _request(method: str, path: str, *, api_key: str, cfg: FishConfig,
 
 def synthesize(body: dict, *, api_key: str, cfg: FishConfig,
                transport: Optional[httpx.BaseTransport] = None,
-               sleep=time.sleep) -> bytes:
+               sleep=time.sleep, meta: Optional[dict] = None) -> bytes:
     """POST the request; return the raw audio bytes exactly as Fish sent them."""
     return _request("POST", "/v1/tts", api_key=api_key, cfg=cfg, json_body=body,
-                    send_model=True, transport=transport, sleep=sleep).content
+                    send_model=True, transport=transport, sleep=sleep, meta=meta).content
 
 
 def _voice(item: dict) -> dict:

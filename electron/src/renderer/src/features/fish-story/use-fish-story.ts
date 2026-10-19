@@ -30,6 +30,9 @@ export interface FishDefaults {
   normalize_loudness: boolean;
   language: string | null;
   reference_id: string | null;
+  output_dir: string | null;
+  output_dir_default: string;
+  output_dir_effective: string;
 }
 
 export interface FishBalance {
@@ -184,6 +187,23 @@ export function useFishStory() {
     setDraft((d) => ({ ...EMPTY, settings: d.settings }));
   }, []);
 
+  /** Saves render defaults (and the output folder) to Settings; local only. */
+  const saveDefaults = useCallback(async (patch: Record<string, unknown>): Promise<boolean> => {
+    setError('');
+    try {
+      setDefaults(
+        await apiJson<FishDefaults>('/api/fish/settings', {
+          method: 'PUT',
+          body: JSON.stringify(patch),
+        }),
+      );
+      return true;
+    } catch (reason) {
+      setError(describeError(reason));
+      return false;
+    }
+  }, []);
+
   /** Contacts Fish (explicit button): the account's saved voices. */
   const loadVoices = useCallback(async () => {
     setVoicesBusy(true);
@@ -243,5 +263,6 @@ export function useFishStory() {
     newStory,
     loadVoices,
     checkBalance,
+    saveDefaults,
   };
 }

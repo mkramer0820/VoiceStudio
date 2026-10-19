@@ -37,7 +37,13 @@ _KEYS = {
     "volume": ("tts.fish.volume", "FISH_TTS_VOLUME"),
     "normalize_loudness": ("tts.fish.normalize_loudness", "FISH_TTS_NORMALIZE_LOUDNESS"),
     "language": ("tts.fish.language", "FISH_TTS_LANGUAGE"),
+    "output_dir": ("tts.fish.output_dir", "FISH_STORY_OUTPUT_DIR"),
 }
+
+
+def store_key(name: str) -> str:
+    """The Settings-store key for a setting name (used when saving defaults)."""
+    return _KEYS[name][0]
 
 
 def _raw(name: str) -> Optional[str]:
@@ -98,6 +104,7 @@ class FishConfig:
     volume: float = 0.0  # dB, prosody.volume
     normalize_loudness: bool = True  # prosody.normalize_loudness (S2 family default)
     language: Optional[str] = None
+    output_dir: Optional[str] = None  # story renders root; None = <data dir>/fish_stories/renders
 
 
 def load_config() -> FishConfig:
@@ -132,4 +139,5 @@ def load_config() -> FishConfig:
         volume=max(-30.0, min(30.0, _num(_raw("volume"), float, 0.0))),
         normalize_loudness=_bool(_raw("normalize_loudness"), True),
         language=_raw("language"),
+        output_dir=_raw("output_dir"),
     )

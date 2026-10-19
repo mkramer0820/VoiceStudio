@@ -36,6 +36,7 @@ set as the model.
 | Volume (dB) | `FISH_TTS_VOLUME` | `0` | -30 to 30 |
 | Loudness normalization | `FISH_TTS_NORMALIZE_LOUDNESS` | `true` | S2 family; turn off to keep raw levels |
 | Language | `FISH_TTS_LANGUAGE` | unset | e.g. `en`; unset lets Fish detect it |
+| Story output folder | `FISH_STORY_OUTPUT_DIR` | `<data dir>/fish_stories/renders` | absolute path; one folder per story and run is created inside |
 | Base URL | `FISH_API_BASE_URL` | `https://api.fish.audio` | must be https (http for loopback only) |
 
 Each setting can also be stored under `tts.fish.<name>` in the settings store.
@@ -83,7 +84,27 @@ Submit and confirm** in the review dialog.
 5. **Render settings** (left panel): format (WAV/PCM/MP3/Opus), sample rate, MP3 bitrate, speed, volume, language, model, latency mode, text and loudness normalization, temperature, top-p, chunk length, default voice, simultaneous requests, and the pause used in the joined file. Empty fields follow Settings/env.
 6. **Review & submit to Fish** shows lines, characters, model, format and per-voice counts. **Check balance** shows your remaining credit (explicit request).
 
-Output lands in `<data dir>/fish_stories/<draft>/renders/<timestamp>/`: one untouched file per line (`001_sun_2.wav`, …), a `manifest.json` (settings and text, no key) and, for WAV/PCM, a joined `story.wav`. Failed lines can be retried; running out of credits stops the job and keeps what finished. **Cancel** stops after the requests in flight.
+### Output, job tracking and logs
+
+Each render gets its own folder, so nothing is ever overwritten:
+
+```text
+<output folder>/<story-title>-<draft id>/<YYYYMMDD-HHMMSS>_<job id>/
+  001_Shadow_sun_2.wav …   one untouched Fish response per line (speaker + voice in the name)
+  story.wav                joined file (WAV/PCM; mixed sample rates are resampled to the most common one)
+  job.json                 live state; survives closing the app
+  story.json               the submitted story (used by Resume)
+  settings.json            the options used (never the key)
+  requests.jsonl           one record per line: exact request, HTTP status, attempts, timing, size, SHA-256, audio duration and sample rate
+  run.log                  readable event log (started, each line, retries, warnings, finish)
+  manifest.json            final summary with the text, speaker and voice for every line
+```
+
+- **Output folder:** the default is `<data dir>/fish_stories/renders`. Set another absolute path in the board's **Output folder** field (or `FISH_STORY_OUTPUT_DIR`). The folder is created and checked for write access when you save it. A renamed story keeps using its own folder.
+- **Render jobs:** the **Render jobs** button lists every run, newest first, with status, progress, model and format, minutes of audio, folder, and the log. A render cut off by closing the app shows as *Interrupted*.
+- **Resume:** *Resume N unfinished* (after a confirmation) re-sends only the lines that did not finish, into the same folder, and rebuilds the joined file. Running out of credits stops the job and keeps what finished, so top up and resume.
+- **Warnings:** if Fish returns a different sample rate than requested, the job and log say so.
+- **Defaults:** **Save these as my defaults** stores the render options in Settings for every new story. Environment variables still win.
 
 ## Limits (phase 1)
 

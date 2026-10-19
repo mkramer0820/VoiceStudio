@@ -40,6 +40,9 @@ const DEFAULTS = {
   normalize_loudness: true,
   language: null,
   reference_id: null,
+  output_dir: null,
+  output_dir_default: 'C:/data/fish_stories/renders',
+  output_dir_effective: 'C:/data/fish_stories/renders',
 };
 const VOICES = {
   voices: [
@@ -67,6 +70,7 @@ beforeEach(() => {
   mock.api.mockImplementation((path: string, init?: RequestInit) => {
     if (path === '/api/fish/story/drafts' && !init?.method) return Promise.resolve({ drafts: [] });
     if (path === '/api/fish/story/defaults') return Promise.resolve(DEFAULTS);
+    if (path.startsWith('/api/fish/story/jobs')) return Promise.resolve({ jobs: [] });
     if (path === '/api/fish/story/drafts') return Promise.resolve({ id: 'd1' });
     if (path.startsWith('/api/fish/story/drafts/')) return Promise.resolve({ id: 'd1' });
     if (path === '/api/fish/voices?scope=mine') return Promise.resolve(VOICES);
@@ -218,4 +222,81 @@ it('maps [Name] tags to voices and leaves narration on the narrator voice', asyn
   // Snuggle was never mapped: still the narrator, but the name is kept on the line.
   expect(within(rows[2]).getByText('Snuggle')).toBeInTheDocument();
   expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
+});
+
+const JOB = {
+  id: 'abc123abc123',
+  title: 'The Long Night',
+  status: 'partial',
+  message: '',
+  total: 10,
+  done: 7,
+  failed: 3,
+  started_at: 1760000000,
+  finished_at: 1760000090,
+  out_dir: 'C:/data/fish_stories/renders/the-long-night-abc123/20261019-130000_abc123abc123',
+  joined: 'story.wav',
+  format: 'wav',
+  model: 's2.1-pro',
+  sample_rate: 44100,
+  audio_seconds: 61.5,
+  warnings: ['Fish returned 24000 Hz although 44100 Hz was requested.'],
+};
+
+it('lists past render jobs with progress, shows the log, and resumes only after confirmation', async () => {
+  mock.api.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/fish/story/jobs' || path === '/api/fish/story/jobs?limit=20')
+      return Promise.resolve({ jobs: [JOB] });
+    if (path === `/api/fish/story/jobs/${JOB.id}/log`)
+      return Promise.resolve({ log: '2026-10-19 13:00:01 ERROR #4 failed (HTTP 429): rate limited' });
+    if (path === `/api/fish/story/jobs/${JOB.id}/resume` && init?.method === 'POST')
+      return Promise.resolve({ ...JOB, status: 'running' });
+    if (path === '/api/fish/story/drafts') return Promise.resolve({ drafts: [] });
+    if (path === '/api/fish/story/defaults') return Promise.resolve(DEFAULTS);
+    return Promise.resolve({});
+  });
+  render(<FishStoryPage />);
+  fireEvent.click(await screen.findByRole('button', { name: /fishStory\.jobs_button/ }));
+
+  const row = await screen.findByTestId('job-row');
+  expect(within(row).getByText('The Long Night')).toBeInTheDocument();
+  expect(within(row).getByText('fishStory.job_partial')).toBeInTheDocument();
+  expect(within(row).getByText(/"done":7,"total":10,"failed":3/)).toBeInTheDocument();
+  expect(within(row).getByText(/Fish returned 24000 Hz/)).toBeInTheDocument();
+  expect(within(row).getByText(JOB.out_dir)).toBeInTheDocument();
+
+  fireEvent.click(within(row).getByRole('button', { name: 'fishStory.jobs_log' }));
+  expect(await within(row).findByText(/failed \(HTTP 429\)/)).toBeInTheDocument();
+
+  // Resume needs a second, explicit click and only then calls the API (3 lines left).
+  fireEvent.click(within(row).getByRole('button', { name: /fishStory\.jobs_resume \{"count":3\}/ }));
+  expect(calls().some(([p]) => String(p).endsWith('/resume'))).toBe(false);
+  expect(within(row).getByText(/fishStory\.jobs_resume_confirm/)).toBeInTheDocument();
+  fireEvent.click(within(row).getByRole('button', { name: 'fishStory.jobs_resume_yes' }));
+  await waitFor(() => expect(calls()).toContainEqual([`/api/fish/story/jobs/${JOB.id}/resume`, 'POST']));
+  const [, init] = mock.api.mock.calls.find(([p]) => String(p).endsWith('/resume'))!;
+  expect(JSON.parse(init.body)).toEqual({ confirm: true });
+});
+
+it('saves the output folder and render defaults to Settings (local calls only)', async () => {
+  render(<FishStoryPage />);
+  const folder = (await screen.findByPlaceholderText('C:/data/fish_stories/renders')) as HTMLInputElement;
+  fireEvent.change(folder, { target: { value: 'D:\\Stories' } });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.output_folder_save' }));
+  await waitFor(() =>
+    expect(mock.api).toHaveBeenCalledWith('/api/fish/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ output_dir: 'D:\\Stories' }),
+    }),
+  );
+
+  fireEvent.change(screen.getByLabelText('fishStory.format'), { target: { value: 'mp3' } });
+  fireEvent.change(screen.getByLabelText('fishStory.mp3_bitrate'), { target: { value: '192' } });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.save_defaults' }));
+  await waitFor(() => {
+    const saved = mock.api.mock.calls.filter(([p, i]) => p === '/api/fish/settings' && i?.method === 'PUT');
+    expect(saved).toHaveLength(2);
+    expect(JSON.parse(saved[1][1].body)).toEqual({ format: 'mp3', mp3_bitrate: 192 });
+  });
+  expect(calls().some(([p]) => p === '/api/fish/story/render' || p === '/api/fish/balance')).toBe(false);
 });
