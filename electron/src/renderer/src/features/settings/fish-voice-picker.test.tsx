@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const mock = vi.hoisted(() => ({ api: vi.fn(), engines: vi.fn() }));
+const mock = vi.hoisted(() => ({ api: vi.fn(), engines: vi.fn(), invalidate: vi.fn() }));
 
 vi.mock('@/lib/api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api/client')>()),
@@ -10,6 +10,10 @@ vi.mock('@/lib/api/client', async (importOriginal) => ({
 vi.mock('@/hooks/use-engines', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/use-engines')>()),
   useEngines: mock.engines,
+}));
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useQueryClient: () => ({ invalidateQueries: mock.invalidate }),
 }));
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => <a href="#">{children}</a>,
@@ -42,6 +46,14 @@ const VOICES = {
   scope: 'mine',
 };
 
+const KEY_NONE = { has_key: false, stored: false, from_env: false };
+
+beforeEach(() => {
+  mock.api.mockImplementation((path: string) =>
+    path === '/api/fish/key' ? Promise.resolve(KEY_NONE) : Promise.resolve(VOICES),
+  );
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -58,14 +70,13 @@ it('asks for a key and makes no request while the engine is unavailable', () => 
   render(<FishVoicePicker />);
   expect(screen.getByText('settings.fish_need_key')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'settings.fish_load' })).not.toBeInTheDocument();
-  expect(mock.api).not.toHaveBeenCalled();
+  expect(mock.api).not.toHaveBeenCalledWith(expect.stringContaining('/api/fish/voices'));
 });
 
 it('contacts Fish only when Load is pressed, then marks the default voice', async () => {
   mock.engines.mockReturnValue(enginesWith({ available: true }));
-  mock.api.mockResolvedValue(VOICES);
   render(<FishVoicePicker />);
-  expect(mock.api).not.toHaveBeenCalled();
+  expect(mock.api).not.toHaveBeenCalledWith(expect.stringContaining('/api/fish/voices'));
 
   fireEvent.click(screen.getByRole('button', { name: 'settings.fish_load' }));
   const rows = await screen.findAllByRole('radio', { name: /Narrator|Villain/ });
@@ -77,9 +88,11 @@ it('contacts Fish only when Load is pressed, then marks the default voice', asyn
 it('saves the chosen voice as the default', async () => {
   mock.engines.mockReturnValue(enginesWith({ available: true }));
   mock.api.mockImplementation((path: string) =>
-    path.startsWith('/api/fish/voices')
-      ? Promise.resolve(VOICES)
-      : Promise.resolve({ default_voice_id: 'v2' }),
+    path === '/api/fish/key'
+      ? Promise.resolve(KEY_NONE)
+      : path.startsWith('/api/fish/voices')
+        ? Promise.resolve(VOICES)
+        : Promise.resolve({ default_voice_id: 'v2' }),
   );
   render(<FishVoicePicker />);
   fireEvent.click(screen.getByRole('button', { name: 'settings.fish_load' }));
@@ -98,7 +111,9 @@ it('saves the chosen voice as the default', async () => {
 
 it('searches the public library with the typed title', async () => {
   mock.engines.mockReturnValue(enginesWith({ available: true }));
-  mock.api.mockResolvedValue({ ...VOICES, voices: [], scope: 'library' });
+  mock.api.mockImplementation((path: string) =>
+    Promise.resolve(path === '/api/fish/key' ? KEY_NONE : { ...VOICES, voices: [], scope: 'library' }),
+  );
   render(<FishVoicePicker />);
   fireEvent.click(screen.getByRole('radio', { name: 'settings.fish_scope_library' }));
   fireEvent.change(screen.getByLabelText('settings.fish_search'), { target: { value: 'calm' } });
@@ -112,8 +127,34 @@ it('searches the public library with the typed title', async () => {
 
 it('shows the Fish error message when listing fails', async () => {
   mock.engines.mockReturnValue(enginesWith({ available: true }));
-  mock.api.mockRejectedValue(new Error('Fish Audio rejected the API key'));
+  mock.api.mockImplementation((path: string) =>
+    path === '/api/fish/key'
+      ? Promise.resolve(KEY_NONE)
+      : Promise.reject(new Error('Fish Audio rejected the API key')),
+  );
   render(<FishVoicePicker />);
   fireEvent.click(screen.getByRole('button', { name: 'settings.fish_load' }));
   expect(await screen.findByRole('alert')).toBeInTheDocument();
+});
+
+it('stores the key through the backend and never echoes it back', async () => {
+  mock.engines.mockReturnValue(enginesWith({ available: false }));
+  mock.api.mockImplementation((_path: string, init?: RequestInit) =>
+    Promise.resolve(init?.method === 'PUT' ? { has_key: true, stored: true, from_env: false } : KEY_NONE),
+  );
+  render(<FishVoicePicker />);
+  const input = screen.getByPlaceholderText('settings.llmp_key_paste') as HTMLInputElement;
+  expect(input.type).toBe('password');
+  fireEvent.change(input, { target: { value: 'fk-secret-123456' } });
+  fireEvent.click(screen.getByRole('button', { name: 'common.save' }));
+
+  await waitFor(() =>
+    expect(mock.api).toHaveBeenCalledWith('/api/fish/key', {
+      method: 'PUT',
+      body: JSON.stringify({ api_key: 'fk-secret-123456' }),
+    }),
+  );
+  await waitFor(() => expect(mock.invalidate).toHaveBeenCalled());
+  await waitFor(() => expect(input.value).toBe(''));
+  expect(screen.getByRole('button', { name: 'settings.fish_key_remove' })).toBeInTheDocument();
 });

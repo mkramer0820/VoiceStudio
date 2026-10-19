@@ -31,6 +31,47 @@ class _DefaultVoice(BaseModel):
                                     description="Fish voice id; null clears the default")
 
 
+class _KeyBody(BaseModel):
+    api_key: str = Field(..., min_length=8, max_length=512, pattern=r"^\S+$",
+                         description="Fish Audio API key; stored encrypted, never returned")
+
+
+def _key_status() -> dict:
+    import os
+
+    from engines.fish_api import config as fish_config
+    from services import settings_store
+
+    env = bool((os.environ.get("FISH_API_KEY") or "").strip())
+    stored = bool(settings_store.get_secret(fish_config.SECRET_NAME))
+    return {"has_key": env or stored, "stored": stored, "from_env": env}
+
+
+@router.get("/key", dependencies=[Depends(reject_cross_site_get)])
+def get_key_status():
+    """Whether a key is set. The key itself is never returned."""
+    return _key_status()
+
+
+@router.put("/key")
+def set_key(body: _KeyBody):
+    """Store the key in the encrypted secret store (FISH_API_KEY env still wins)."""
+    from engines.fish_api import config as fish_config
+    from services import settings_store
+
+    settings_store.set_secret(fish_config.SECRET_NAME, body.api_key.strip())
+    return _key_status()
+
+
+@router.delete("/key")
+def delete_key():
+    from engines.fish_api import config as fish_config
+    from services import settings_store
+
+    settings_store.clear_secret(fish_config.SECRET_NAME)
+    return _key_status()
+
+
 def _voices(mine: bool, title: Optional[str], language: Optional[str]) -> list[dict]:
     from engines.fish_api import FishAudioBackend
 

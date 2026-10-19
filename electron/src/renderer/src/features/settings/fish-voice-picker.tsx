@@ -1,10 +1,12 @@
 import { CheckCircle2Icon, CloudIcon, LoaderCircleIcon, SearchIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useEngines, engineFamilyState } from '@/hooks/use-engines';
 import { apiJson, describeError } from '@/lib/api/client';
+import { queryKeys } from '@/lib/query';
 import { cn } from '@/lib/utils';
 import { SettingsActionError } from './settings-action-error';
 import { SettingsRow, SettingsSection } from './settings-layout';
@@ -24,6 +26,12 @@ export interface FishVoice {
   author?: string | null;
 }
 
+interface FishKeyStatus {
+  has_key: boolean;
+  stored: boolean;
+  from_env: boolean;
+}
+
 interface FishVoicesResponse {
   voices: FishVoice[];
   default_voice_id: string | null;
@@ -38,6 +46,7 @@ interface FishVoicesResponse {
 export function FishVoicePicker() {
   const { t } = useTranslation();
   const engines = useEngines();
+  const queryClient = useQueryClient();
   const fish = engineFamilyState(engines.data, 'tts')?.backends.find(
     (backend) => backend.id === FISH_ENGINE_ID,
   );
@@ -48,8 +57,39 @@ export function FishVoicePicker() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [keyStatus, setKeyStatus] = useState<FishKeyStatus | null>(null);
+  const [keyInput, setKeyInput] = useState('');
+  const [keySaving, setKeySaving] = useState(false);
+  const registered = Boolean(fish);
+
+  useEffect(() => {
+    if (!registered) return;
+    apiJson<FishKeyStatus>('/api/fish/key')
+      .then(setKeyStatus)
+      .catch((reason) => setError(describeError(reason)));
+  }, [registered]);
 
   if (!fish) return null;
+
+  const saveKey = async (remove: boolean) => {
+    if (keySaving) return;
+    setKeySaving(true);
+    setError('');
+    try {
+      const next = await apiJson<FishKeyStatus>('/api/fish/key', {
+        method: remove ? 'DELETE' : 'PUT',
+        ...(remove ? {} : { body: JSON.stringify({ api_key: keyInput.trim() }) }),
+      });
+      setKeyStatus(next);
+      setKeyInput('');
+      if (remove) setVoices(null);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.engines });
+    } catch (reason) {
+      setError(describeError(reason));
+    } finally {
+      setKeySaving(false);
+    }
+  };
 
   const load = async (nextScope: Scope = scope) => {
     if (loading) return;
@@ -109,6 +149,38 @@ export function FishVoicePicker() {
           />
         </div>
       )}
+
+      <SettingsRow
+        id="fish-key"
+        title={t('settings.fish_key_title')}
+        description={
+          keyStatus?.from_env
+            ? t('settings.fish_key_env')
+            : keyStatus?.stored
+              ? t('settings.llmp_key_stored')
+              : t('settings.llmp_key_paste')
+        }
+      >
+        <Input
+          aria-label={t('settings.fish_key_title')}
+          type="password"
+          value={keyInput}
+          className="w-full font-mono @2xl:w-72"
+          placeholder={keyStatus?.stored ? '••••••••' : t('settings.llmp_key_paste')}
+          autoComplete="off"
+          disabled={keySaving}
+          onChange={(event) => setKeyInput(event.target.value)}
+        />
+        <Button disabled={keySaving || keyInput.trim().length < 8} onClick={() => void saveKey(false)}>
+          {keySaving && <LoaderCircleIcon className="animate-spin" />}
+          {keySaving ? t('common.saving') : t('common.save')}
+        </Button>
+        {keyStatus?.stored && (
+          <Button variant="outline" disabled={keySaving} onClick={() => void saveKey(true)}>
+            {t('settings.fish_key_remove')}
+          </Button>
+        )}
+      </SettingsRow>
 
       {fish.available && (
         <>

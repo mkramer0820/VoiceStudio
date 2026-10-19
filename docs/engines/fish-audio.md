@@ -8,9 +8,9 @@ checking availability, and the app works fully without it.
 ## Setup
 
 1. Create an API key at fish.audio.
-2. Set it before launching: PowerShell
-   `[Environment]::SetEnvironmentVariable('FISH_API_KEY','<key>','User')`
-   (or store it in the encrypted secret store as `fish_audio_key`).
+2. Open **Settings → Models → TTS → Fish Audio voices**, paste the key into **Fish Audio API key** and press **Save**.
+   It is stored encrypted in VoiceStudio's local secret store, shown as a password field, and never sent back to the UI.
+   (Alternatively set the `FISH_API_KEY` environment variable; it takes precedence over the stored key.)
 3. Pick **Fish Audio** in **Model Catalogue**, or pin it with
    `OMNIVOICE_TTS_BACKEND=fish-audio`.
 
