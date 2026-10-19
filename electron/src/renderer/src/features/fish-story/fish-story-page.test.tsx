@@ -75,6 +75,26 @@ beforeEach(() => {
     if (path.startsWith('/api/fish/story/drafts/')) return Promise.resolve({ id: 'd1' });
     if (path === '/api/fish/voices?scope=mine') return Promise.resolve(VOICES);
     if (path === '/api/fish/story/plan') return Promise.resolve(PLAN);
+    if (path.startsWith('/api/fish/voices?scope=library'))
+      return Promise.resolve({ voices: [{ id: 'pub1', title: 'Deep Narrator', author: 'someone', languages: ['en'] }] });
+    if (path === '/api/fish/story/preview')
+      return Promise.resolve({
+        ok: true,
+        total: 20,
+        invalid: 0,
+        shown: 1,
+        endpoint: 'https://api.fish.audio/v1/tts',
+        headers: { Authorization: 'Bearer <hidden>', model: 's2.1-pro' },
+        folder: 'C:/out/story/run-NNN',
+        curl: 'curl -X POST https://api.fish.audio/v1/tts',
+        first_invalid: null,
+        requests: [
+          {
+            index: 1, id: 'x', speaker: null, voice: 'pub1', voice_name: 'Deep Narrator', file: '001_narration_Deep.wav',
+            chars: 14, body: { text: 'Line number 1.', format: 'wav' }, issues: [], notes: [],
+          },
+        ],
+      });
     if (path === '/api/fish/story/render')
       return Promise.resolve({
         id: 'j1',
@@ -299,4 +319,36 @@ it('saves the output folder and render defaults to Settings (local calls only)',
     expect(JSON.parse(saved[1][1].body)).toEqual({ format: 'mp3', mp3_bitrate: 192 });
   });
   expect(calls().some(([p]) => p === '/api/fish/story/render' || p === '/api/fish/balance')).toBe(false);
+});
+
+it('adds a voice by id or link, and from a public library search, without a render', async () => {
+  await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.more_voices/ }));
+  const id = await screen.findByLabelText('fishStory.voice_id');
+  fireEvent.change(id, { target: { value: 'not a valid id!' } });
+  expect(screen.getByRole('alert')).toHaveTextContent('fishStory.voice_id_invalid');
+  fireEvent.change(id, { target: { value: 'https://fish.audio/m/abc123def456/' } });
+  fireEvent.change(screen.getByLabelText('fishStory.voice_name'), { target: { value: 'Friend' } });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.voice_add' }));
+
+  fireEvent.change(screen.getByLabelText('fishStory.library_search'), { target: { value: 'narrator' } });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.library_go' }));
+  await waitFor(() => expect(calls()).toContainEqual(['/api/fish/voices?scope=library&title=narrator', 'GET']));
+  fireEvent.click(await screen.findByRole('button', { name: /voice_add_named/ }));
+
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.done' }));
+  expect(await screen.findAllByRole('option', { name: 'Friend' })).not.toHaveLength(0);
+  expect(screen.getAllByRole('option', { name: 'Deep Narrator' }).length).toBeGreaterThan(0);
+  expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
+});
+
+it('previews the raw requests with a schema verdict and sends nothing to Fish', async () => {
+  await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.preview_button/ }));
+  await screen.findByText(/fishStory\.preview_ok/);
+  expect(screen.getByLabelText(/fishStory\.preview_body/)).toHaveTextContent('"format": "wav"');
+  expect(screen.getAllByText(/POST https:\/\/api\.fish\.audio\/v1\/tts/).length).toBeGreaterThan(0);
+  const [, init] = mock.api.mock.calls.find(([p]) => p === '/api/fish/story/preview')!;
+  expect(JSON.parse(init.body).draft.chunks).toHaveLength(20);
+  expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 });

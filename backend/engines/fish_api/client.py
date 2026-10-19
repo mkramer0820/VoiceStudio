@@ -96,6 +96,13 @@ def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str] = None
         body["top_p"] = cfg.top_p
     if cfg.chunk_length is not None:
         body["chunk_length"] = cfg.chunk_length
+    if cfg.format == "opus" and cfg.opus_bitrate is not None:
+        body["opus_bitrate"] = cfg.opus_bitrate
+    for name in ("repetition_penalty", "max_new_tokens", "min_chunk_length",
+                 "condition_on_previous_chunks", "early_stop_threshold"):
+        value = getattr(cfg, name)
+        if value is not None:
+            body[name] = value
     prosody: dict = {}
     if speed and abs(speed - 1.0) > 1e-6:
         prosody["speed"] = max(0.5, min(2.0, float(speed)))

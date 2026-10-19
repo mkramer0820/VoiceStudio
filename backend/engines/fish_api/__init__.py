@@ -74,7 +74,7 @@ class FishAudioBackend(TTSBackend):
         return None
 
     def list_voices(self, *, mine: bool = True, title: Optional[str] = None,
-                    language: Optional[str] = None) -> list[dict]:
+                    language: Optional[str] = None, one_page: bool = False) -> list[dict]:
         """Voices on the Fish account (``mine``) or the public library.
 
         Makes a network call, so it runs only on an explicit request, never
@@ -85,6 +85,9 @@ class FishAudioBackend(TTSBackend):
         if not api_key:
             raise RuntimeError(self.is_available()[1])
         try:
+            if one_page:  # the public library is huge: a search shows its best matches only
+                return client.list_voices(api_key=api_key, cfg=load_config(), mine=mine, title=title,
+                                          language=language, page_size=30)["items"]
             return client.list_all_voices(api_key=api_key, cfg=load_config(),
                                           mine=mine, title=title, language=language)
         except client.FishAPIError as exc:

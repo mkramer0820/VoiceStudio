@@ -2,7 +2,7 @@
 
 Each render gets its own run folder::
 
-    <output root>/<story-title>-<draft id>/<YYYYMMDD-HHMMSS>_<job id>/
+    <output root>/<story title>/run-<NNN>_<YYYYMMDD-HHMMSS>_<job id>/
         001_Shadow_sun_2.wav ...   one untouched Fish response per line
         story.wav                  joined file (WAV/PCM only)
         job.json                   live state: survives restarts, drives the Jobs list
@@ -34,6 +34,7 @@ from typing import Optional
 from . import client
 from .config import FishConfig, load_config, resolve_api_key
 from .story import Chunk, Draft, effective_config
+from .story import check_request as story_check
 
 logger = logging.getLogger("omnivoice.fish_api.story_jobs")
 
@@ -115,15 +116,58 @@ def _safe(label: str, fallback: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", label).strip("_")[:24] or fallback
 
 
+STORY_MARKER = ".story-id"
+
+
+def _marker(folder: str) -> Optional[str]:
+    try:
+        with open(os.path.join(folder, STORY_MARKER), encoding="utf-8") as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
 def _story_dir(root: str, title: str, draft_id: Optional[str]) -> str:
+    """One readable folder per story (``the-long-night``), kept even if the title changes.
+
+    A hidden marker file records which draft owns the folder, so two stories that
+    share a title get ``the-long-night-2`` instead of mixing their runs.
+    """
     tag = re.sub(r"[^A-Za-z0-9]", "", draft_id or "")[:6] or "adhoc"
     try:
-        for name in os.listdir(root):  # keep one folder per draft even if it is renamed
-            if name.endswith(f"-{tag}") and os.path.isdir(os.path.join(root, name)):
-                return os.path.join(root, name)
+        names = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)))
+    except OSError:
+        names = []
+    for name in names:  # same draft: reuse (rename-proof); also folders made before markers existed
+        folder = os.path.join(root, name)
+        if _marker(folder) == tag or (_marker(folder) is None and name.endswith(f"-{tag}")):
+            return folder
+    base = _slug(title)
+    name, n = base, 1
+    while os.path.exists(os.path.join(root, name)):
+        n += 1
+        name = f"{base}-{n}"
+    return os.path.join(root, name)
+
+
+def _claim_story_dir(folder: str, draft_id: Optional[str]) -> None:
+    os.makedirs(folder, exist_ok=True)
+    tag = re.sub(r"[^A-Za-z0-9]", "", draft_id or "")[:6] or "adhoc"
+    if _marker(folder) is None:
+        with open(os.path.join(folder, STORY_MARKER), "w", encoding="utf-8") as fh:
+            fh.write(tag)
+
+
+def _next_run_name(story_dir: str, job_id: str) -> str:
+    n = 1
+    try:
+        for name in os.listdir(story_dir):
+            m = re.match(r"^run-(\d+)_", name)
+            if m:
+                n = max(n, int(m.group(1)) + 1)
     except OSError:
         pass
-    return os.path.join(root, f"{_slug(title)}-{tag}")
+    return f"run-{n:03d}_{time.strftime('%Y%m%d-%H%M%S')}_{job_id}"
 
 
 # ── job record + logs ──
@@ -294,6 +338,65 @@ def _chunk_entry(index: int, chunk: Chunk, default: Optional[str], names: dict) 
             "sample_rate": None}
 
 
+def _audio_name(index: int, speaker: Optional[str], voice_name: Optional[str], ext: str) -> str:
+    return (f"{index:03d}_{_safe(speaker or 'narration', 'narration')}"
+            f"_{_safe(voice_name or 'default', 'default')}.{ext}")
+
+
+def _items(draft: Draft, chunk_ids: Optional[list[str]]) -> list[tuple[int, Chunk]]:
+    wanted = set(chunk_ids) if chunk_ids else None
+    return [(i, c) for i, c in enumerate(draft.chunks, 1)
+            if c.text.strip() and (wanted is None or c.id in wanted)]
+
+
+def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int = 5,
+            draft_id: Optional[str] = None) -> dict:
+    """Dry run: the exact requests a render would send, checked against the schema.
+
+    Local only. Nothing is sent to Fish, no folder is created, and the API key is
+    never included (the Authorization header is shown as a placeholder).
+    """
+    cfg = effective_config(draft.settings)
+    default = draft.settings.default_voice or cfg.reference_id
+    ext = _EXT.get(cfg.format, "bin")
+    rows, problems = [], 0
+    for index, chunk in _items(draft, chunk_ids):
+        voice = chunk.voice or default
+        body = client.build_body(chunk.text.strip(), cfg, reference_id=voice, speed=draft.settings.speed)
+        issues = story_check(body)
+        notes = [] if voice else ["No voice set: Fish will use its default voice."]
+        problems += bool(issues)
+        rows.append({"index": index, "id": chunk.id, "speaker": chunk.speaker, "voice": voice,
+                     "voice_name": draft.voices.get(voice or "", voice),
+                     "file": _audio_name(index, chunk.speaker, draft.voices.get(voice or "", voice), ext),
+                     "chars": len(body["text"]), "body": body, "issues": issues, "notes": notes})
+    try:
+        root = default_output_root() if not cfg.output_dir else os.path.normpath(cfg.output_dir)
+        folder = os.path.join(root, os.path.basename(_story_dir(root, draft.title, draft_id)),
+                              "run-NNN_<date-time>_<job id>")
+    except OSError:
+        folder = None
+    shown = rows[: max(1, limit)]
+    first = shown[0] if shown else None
+    curl = None
+    if first:
+        cont = " \\\n  "
+        curl = cont.join([
+            f"curl -X POST {cfg.base_url}/v1/tts",
+            '-H "Authorization: Bearer $FISH_API_KEY"',
+            f'-H "model: {cfg.model}"',
+            '-H "Content-Type: application/json"',
+            "-d '" + json.dumps(first["body"], ensure_ascii=False).replace("'", "'\\''") + "'",
+            "--output line.wav",
+        ])
+    return {"ok": bool(rows) and problems == 0, "total": len(rows), "invalid": problems,
+            "shown": len(shown), "endpoint": cfg.base_url + "/v1/tts",
+            "headers": {"Authorization": "Bearer <hidden>", "model": cfg.model,
+                        "Content-Type": "application/json"},
+            "folder": folder, "requests": shown, "curl": curl,
+            "first_invalid": next((r["index"] for r in rows if r["issues"]), None)}
+
+
 def _register(job: dict) -> None:
     with _jobs_lock:
         for old in [j for j, v in _jobs.items() if v["status"] != "running"][: max(0, len(_jobs) - _MAX_LIVE)]:
@@ -309,16 +412,20 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
         raise RuntimeError("No Fish Audio API key. Add one in Settings → Models → TTS.")
     cfg = effective_config(draft.settings)
     default = draft.settings.default_voice or cfg.reference_id
-    wanted = set(chunk_ids) if chunk_ids else None
-    items = [(i, c) for i, c in enumerate(draft.chunks, 1)
-             if c.text.strip() and (wanted is None or c.id in wanted)]
+    items = _items(draft, chunk_ids)
     if not items:
         raise ValueError("Nothing to render: every chunk is empty or unselected.")
+    for index, chunk in items:  # the same schema check the preview shows, before anything is sent
+        bad = story_check(client.build_body(chunk.text.strip(), cfg, reference_id=chunk.voice or default,
+                                            speed=draft.settings.speed))
+        if bad:
+            raise ValueError(f"Line {index} would be rejected: {bad[0]}")
 
     root = output_root(cfg)
     job_id = uuid.uuid4().hex[:12]
-    run_dir = os.path.join(_story_dir(root, draft.title, draft_id),
-                           f"{time.strftime('%Y%m%d-%H%M%S')}_{job_id}")
+    story_dir = _story_dir(root, draft.title, draft_id)
+    _claim_story_dir(story_dir, draft_id)
+    run_dir = os.path.join(story_dir, _next_run_name(story_dir, job_id))
     os.makedirs(run_dir, exist_ok=True)
     job = _new_job(run_dir, draft, draft_id, cfg,
                    [_chunk_entry(i, c, default, draft.voices) for i, c in items], job_id, time.time())
@@ -399,8 +506,7 @@ def _run(job: dict, items: list, draft: Draft, cfg: FishConfig, api_key: str,
                   "speaker": chunk.speaker, "voice": voice, "request": body}
         try:
             raw = client.synthesize(body, api_key=api_key, cfg=cfg, meta=meta)
-            name = (f"{index:03d}_{_safe(chunk.speaker or 'narration', 'narration')}"
-                    f"_{_safe(entry['voice_name'] or 'default', 'default')}.{ext}")
+            name = _audio_name(index, chunk.speaker, entry["voice_name"], ext)
             with open(os.path.join(job["out_dir"], name), "wb") as fh:
                 fh.write(raw)
             audio = _audio_info(raw, cfg.format, cfg)

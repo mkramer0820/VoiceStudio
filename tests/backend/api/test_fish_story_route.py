@@ -117,3 +117,14 @@ def test_defaults_report_where_renders_go(api):
     d = api.get("/api/fish/story/defaults").json()
     assert d["output_dir"] is None and d["output_dir_effective"] == d["output_dir_default"]
     assert d["output_dir_default"].replace("\\", "/").endswith("fish_stories/renders")
+
+
+def test_preview_returns_checked_requests_and_needs_no_key_or_network(api, monkeypatch):
+    monkeypatch.setattr("engines.fish_api.client.synthesize",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no network")))
+    r = api.post("/api/fish/story/preview", json={"draft": DRAFT, "limit": 3})
+    assert r.status_code == 200
+    out = r.json()
+    assert out["ok"] and out["total"] == 1 and out["requests"][0]["body"]["reference_id"] == "v1"
+    assert out["headers"]["Authorization"] == "Bearer <hidden>"
+    assert api.post("/api/fish/story/preview", json={"draft": {"chunks": [{"id": "!", "text": "x"}]}}).status_code == 422

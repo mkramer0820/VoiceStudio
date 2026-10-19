@@ -162,6 +162,20 @@ def plan(draft: dict):
     return story.plan(_draft(draft))
 
 
+class _PreviewBody(BaseModel):
+    draft: dict
+    draft_id: Optional[str] = Field(None, max_length=64)
+    chunk_ids: Optional[list[str]] = Field(None, max_length=3000)
+    limit: int = Field(5, ge=1, le=50)
+
+
+@router.post("/story/preview")
+def preview(body: _PreviewBody):
+    """Dry run: the exact requests a render would send, schema-checked. No network, no files."""
+    return _jobs().preview(_draft(body.draft), chunk_ids=body.chunk_ids, limit=body.limit,
+                           draft_id=body.draft_id)
+
+
 @router.post("/story/render")
 async def render(body: _RenderBody):
     story = _story()

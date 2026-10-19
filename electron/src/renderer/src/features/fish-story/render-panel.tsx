@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircleIcon, CheckCircle2Icon, FolderOpenIcon, LoaderCircleIcon, SendIcon, SquareIcon } from 'lucide-react';
+import { AlertCircleIcon, CheckCircle2Icon, EyeIcon, FolderOpenIcon, LoaderCircleIcon, SendIcon, SquareIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { getBridge } from '@/components/bridge';
 import { apiJson, describeError } from '@/lib/api/client';
+import { PreviewDialog } from './preview-dialog';
 import type { StoryDraft } from './story-model';
 
 interface PlanResult {
@@ -66,6 +67,7 @@ export function RenderPanel({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [plan, setPlan] = useState<PlanResult | null>(null);
   const [planning, setPlanning] = useState(false);
   const [onlySelected, setOnlySelected] = useState(false);
@@ -94,6 +96,12 @@ export function RenderPanel({
       alive = false;
     };
   }, [open, scoped, onError]);
+
+  // What the preview and the render both cover: a retry list, the selection, or everything.
+  const previewIds = useMemo(
+    () => retryIds ?? (onlySelected && selectedIds.size > 0 ? [...selectedIds] : undefined),
+    [retryIds, onlySelected, selectedIds],
+  );
 
   const running = job?.status === 'running';
   useEffect(() => {
@@ -151,6 +159,10 @@ export function RenderPanel({
         >
           <SendIcon />
           {t('fishStory.review_submit')}
+        </Button>
+        <Button variant="outline" disabled={disabled} onClick={() => setPreviewOpen(true)}>
+          <EyeIcon />
+          {t('fishStory.preview_button')}
         </Button>
         {selectedIds.size > 0 && (
           <span className="text-xs text-muted-foreground">
@@ -225,6 +237,15 @@ export function RenderPanel({
         </section>
       )}
 
+      <PreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        draft={draft}
+        draftId={draftId}
+        chunkIds={previewIds}
+        onError={onError}
+      />
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -278,6 +299,9 @@ export function RenderPanel({
             </div>
           )}
           <DialogFooter>
+            <Button variant="outline" onClick={() => setPreviewOpen(true)}>
+              <EyeIcon /> {t('fishStory.preview_button')}
+            </Button>
             <DialogClose render={<Button variant="outline" />}>{t('common.cancel')}</DialogClose>
             <Button disabled={starting || planning || !plan || plan.chunks === 0} onClick={() => void submit()}>
               {starting ? <LoaderCircleIcon className="animate-spin" /> : <SendIcon />}

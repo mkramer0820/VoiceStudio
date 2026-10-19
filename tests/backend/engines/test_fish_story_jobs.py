@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import time
 
 import numpy as np
@@ -24,7 +25,8 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(story, "_store_dir", lambda: str(tmp_path / "drafts"))
     os.makedirs(tmp_path / "drafts", exist_ok=True)
     monkeypatch.setattr("core.config.DATA_DIR", str(tmp_path / "data"), raising=False)
-    return tmp_path
+    yield tmp_path
+    story_jobs._jobs.clear()  # other test modules list jobs; leave none behind
 
 
 def _wav(rate=44100, seconds=0.2) -> bytes:
@@ -75,8 +77,8 @@ def test_run_folder_is_organised_by_story_and_run(monkeypatch):
     job = _wait(story_jobs.start_render(_draft(), draft_id="abc123def")["id"])
     run = job["out_dir"]
     story_folder = os.path.basename(os.path.dirname(run))
-    assert story_folder == "the-long-night-abc123"
-    assert os.path.basename(run).endswith(f"_{job['id']}")
+    assert story_folder == "the-long-night"
+    assert re.match(rf"^run-001_\d{{8}}-\d{{6}}_{job['id']}$", os.path.basename(run))
     assert os.path.dirname(os.path.dirname(run)) == story_jobs.default_output_root()
     names = sorted(os.listdir(run))
     for expected in ("job.json", "story.json", "settings.json", "requests.jsonl", "run.log",
@@ -240,3 +242,40 @@ def test_mixed_sample_rates_are_resampled_into_the_joined_file_not_skipped(monke
     # The per-line masters keep the rate Fish returned.
     odd = next(c for c in job["chunks"] if c["index"] == 2)
     assert sf.info(os.path.join(job["out_dir"], odd["file"])).samplerate == 48000
+
+
+def test_two_stories_with_the_same_title_get_separate_folders_and_runs_count_up(monkeypatch):
+    _ok(monkeypatch)
+    a1 = _wait(story_jobs.start_render(_draft("Same"), draft_id="aaaaaa111")["id"])
+    b1 = _wait(story_jobs.start_render(_draft("Same"), draft_id="bbbbbb222")["id"])
+    a2 = _wait(story_jobs.start_render(_draft("Renamed"), draft_id="aaaaaa111")["id"])
+    assert os.path.basename(os.path.dirname(a1["out_dir"])) == "same"
+    assert os.path.basename(os.path.dirname(b1["out_dir"])) == "same-2"
+    assert os.path.dirname(a2["out_dir"]) == os.path.dirname(a1["out_dir"])
+    assert os.path.basename(a2["out_dir"]).startswith("run-002_")
+
+
+def test_preview_shows_the_exact_requests_without_any_network_or_files(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("preview must not contact Fish")
+
+    monkeypatch.setattr(client, "synthesize", boom)
+    out = story_jobs.preview(_draft(speed=1.2, repetition_penalty=1.1, max_new_tokens=512), limit=2)
+    assert out["ok"] and out["total"] == 3 and out["shown"] == 2 and out["invalid"] == 0
+    first = out["requests"][0]
+    assert first["body"]["reference_id"] == "vsh" and first["body"]["prosody"] == {"speed": 1.2}
+    assert first["body"]["repetition_penalty"] == 1.1 and first["body"]["max_new_tokens"] == 512
+    assert first["file"] == "001_Shadow_sun_2.wav"
+    assert out["headers"]["model"] == "s2.1-pro" and out["headers"]["Authorization"] == "Bearer <hidden>"
+    assert "sk-super-secret" not in json.dumps(out) and "$FISH_API_KEY" in out["curl"]
+    assert not os.path.exists(story_jobs.default_output_root())  # nothing was created
+
+
+def test_request_schema_catches_bad_bodies_and_blocks_the_render(monkeypatch):
+    assert story.check_request({"text": "hi", "format": "wav", "latency": "normal", "normalize": True}) == []
+    bad = story.check_request({"text": "hi", "format": "flac", "latency": "normal", "normalize": True, "oops": 1})
+    assert any(b.startswith("format") for b in bad) and any(b.startswith("oops") for b in bad)
+    _ok(monkeypatch)
+    monkeypatch.setattr(client, "build_body", lambda *a, **k: {"text": "hi", "format": "flac"})
+    with pytest.raises(ValueError, match="Line 1 would be rejected"):
+        story_jobs.start_render(_draft())

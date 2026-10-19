@@ -75,7 +75,8 @@ def delete_key():
 def _voices(mine: bool, title: Optional[str], language: Optional[str]) -> list[dict]:
     from engines.fish_api import FishAudioBackend
 
-    return FishAudioBackend().list_voices(mine=mine, title=title, language=language)
+    return FishAudioBackend().list_voices(mine=mine, title=title, language=language,
+                                          one_page=not mine)
 
 
 @router.get("/voices", dependencies=[Depends(reject_cross_site_get)])

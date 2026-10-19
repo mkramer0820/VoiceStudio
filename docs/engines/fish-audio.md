@@ -22,7 +22,7 @@ set as the model.
 
 | Setting | Env var | Default | Notes |
 |---|---|---|---|
-| Model | `FISH_TTS_MODEL` | `s2.1-pro` | `s2-pro`, `drama-3`; unknown names fall back to `s2.1-pro` at Fish |
+| Model | `FISH_TTS_MODEL` | `s2.1-pro` | `s2.1-pro-free` (free, for testing; no latency guarantees), `s2-pro`, `drama-3`; unknown names fall back to `s2.1-pro` at Fish |
 | Format | `FISH_TTS_FORMAT` | `wav` | `wav`, `pcm` (16-bit mono), `mp3`, `opus` |
 | Sample rate | `FISH_TTS_SAMPLE_RATE` | `44100` | wav / pcm / mp3 |
 | MP3 bitrate | `FISH_TTS_MP3_BITRATE` | `192` | 64 / 128 / 192; mp3 only. WAV is lossless, so no bitrate applies |
@@ -35,6 +35,12 @@ set as the model.
 | Concurrency cap | `FISH_TTS_MAX_CONCURRENCY` | `2` | 429 backs off and retries |
 | Volume (dB) | `FISH_TTS_VOLUME` | `0` | -30 to 30 |
 | Loudness normalization | `FISH_TTS_NORMALIZE_LOUDNESS` | `true` | S2 family; turn off to keep raw levels |
+| Repetition penalty | `FISH_TTS_REPETITION_PENALTY` | unset | above 1.0 reduces repeated sounds |
+| Max audio tokens | `FISH_TTS_MAX_NEW_TOKENS` | unset | caps audio length per chunk |
+| Min chunk length | `FISH_TTS_MIN_CHUNK_LENGTH` | unset | |
+| Condition on previous chunks | `FISH_TTS_CONDITION_ON_PREVIOUS` | unset | keeps the voice consistent across chunks |
+| Early stop threshold | `FISH_TTS_EARLY_STOP_THRESHOLD` | unset | |
+| Opus bitrate | `FISH_TTS_OPUS_BITRATE` | unset | `-1000` = automatic; opus only |
 | Language | `FISH_TTS_LANGUAGE` | unset | e.g. `en`; unset lets Fish detect it |
 | Story output folder | `FISH_STORY_OUTPUT_DIR` | `<data dir>/fish_stories/renders` | absolute path; one folder per story and run is created inside |
 | Base URL | `FISH_API_BASE_URL` | `https://api.fish.audio` | must be https (http for loopback only) |
@@ -74,7 +80,7 @@ on it is local: text, voice assignments and options autosave as a draft in
 Submit and confirm** in the review dialog.
 
 1. **Add text**: paste a story and split it into lines, paragraphs or sentences (optional max characters per line).
-2. **Load my voices** (contacts Fish) lists your saved voices.
+2. **Load my voices** (contacts Fish) lists your saved voices. **More voices** adds any other voice: paste a voice id (or a `fish.audio/m/<id>` link) with an optional name, or search the public voice library by title and language (searching contacts Fish; adding is local). Added voices show up everywhere a voice can be chosen, including the character mapping.
 3. **Select lines** by shift/ctrl-click, by checkbox, or by number (*Lines 1 to 15* → **Select**), then choose a voice and **Apply**. **Apply & select next block** moves on to the following lines with the same count, so a long story goes quickly. Used voices appear as colored chips: click one to apply it to the current selection.
 4. **Tags & cast** handles AI-directed scripts such as `[Shadow] [slow][soft] It feels strange, [pause] to become a [emphasis] human.` It opens by itself when pasted text has `[Name]` tags at the start of lines.
    - **Narrator (default voice):** used for narration and every line with no speaker tag, so characters only need their own lines tagged.
@@ -82,14 +88,15 @@ Submit and confirm** in the review dialog.
    - **Delivery tags** (`[slow]`, `[soft]`, `[pause]`, `[emphasis]`…) are kept for Fish by default; remove them or replace them with other tags.
    - **Find and replace** works on plain text across the whole story (include the brackets to change a tag).
 5. **Render settings** (left panel): format (WAV/PCM/MP3/Opus), sample rate, MP3 bitrate, speed, volume, language, model, latency mode, text and loudness normalization, temperature, top-p, chunk length, default voice, simultaneous requests, and the pause used in the joined file. Empty fields follow Settings/env.
-6. **Review & submit to Fish** shows lines, characters, model, format and per-voice counts. **Check balance** shows your remaining credit (explicit request).
+6. **Preview requests** is a dry run: it shows the exact JSON bodies a render would send (with the endpoint, the `model` header, the planned file name and the output folder), checks each one against the request schema, and offers the first request as a `curl` command. It sends nothing, creates no files and never shows your key. A render also runs the same check and refuses to start if a line would be rejected.
+7. **Review & submit to Fish** shows lines, characters, model, format and per-voice counts. **Check balance** shows your remaining credit (explicit request).
 
 ### Output, job tracking and logs
 
 Each render gets its own folder, so nothing is ever overwritten:
 
 ```text
-<output folder>/<story-title>-<draft id>/<YYYYMMDD-HHMMSS>_<job id>/
+<output folder>/<story title>/run-<NNN>_<YYYYMMDD-HHMMSS>_<job id>/
   001_Shadow_sun_2.wav …   one untouched Fish response per line (speaker + voice in the name)
   story.wav                joined file (WAV/PCM; mixed sample rates are resampled to the most common one)
   job.json                 live state; survives closing the app
@@ -100,7 +107,7 @@ Each render gets its own folder, so nothing is ever overwritten:
   manifest.json            final summary with the text, speaker and voice for every line
 ```
 
-- **Output folder:** the default is `<data dir>/fish_stories/renders`. Set another absolute path in the board's **Output folder** field (or `FISH_STORY_OUTPUT_DIR`). The folder is created and checked for write access when you save it. A renamed story keeps using its own folder.
+- **Output folder:** the default is `<data dir>/fish_stories/renders`. Set another absolute path in the board's **Output folder** field (or `FISH_STORY_OUTPUT_DIR`). The folder is created and checked for write access when you save it. Each story gets a readable folder named after its title (`the-long-night`; a second story with the same title becomes `the-long-night-2`) and runs are numbered `run-001`, `run-002`… A renamed story keeps using its own folder.
 - **Render jobs:** the **Render jobs** button lists every run, newest first, with status, progress, model and format, minutes of audio, folder, and the log. A render cut off by closing the app shows as *Interrupted*.
 - **Resume:** *Resume N unfinished* (after a confirmation) re-sends only the lines that did not finish, into the same folder, and rebuilds the joined file. Running out of credits stops the job and keeps what finished, so top up and resume.
 - **Warnings:** if Fish returns a different sample rate than requested, the job and log say so.

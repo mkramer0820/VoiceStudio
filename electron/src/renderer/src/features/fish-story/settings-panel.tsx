@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import type { StorySettings } from './story-model';
 import type { FishDefaults } from './use-fish-story';
 
-const MODELS = ['s2.1-pro', 's2-pro', 'drama-3'];
+const MODELS = ['s2.1-pro', 's2.1-pro-free', 's2-pro', 'drama-3'];
 const FORMATS = ['wav', 'pcm', 'mp3', 'opus'] as const;
 const SAMPLE_RATES = [24000, 32000, 44100, 48000];
 const BITRATES = [64, 128, 192] as const;
@@ -339,6 +339,95 @@ export function SettingsPanel({
             />
           )}
         </Field>
+      </Group>
+
+      <Group title={t('fishStory.group_advanced')}>
+        <p className="text-[11px] leading-snug text-muted-foreground">{t('fishStory.advanced_note')}</p>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label={t('fishStory.repetition_penalty')} hint={t('fishStory.repetition_penalty_hint')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={0.5}
+                max={2}
+                step={0.05}
+                placeholder={inherit(defaults?.repetition_penalty)}
+                value={inherit(settings.repetition_penalty)}
+                onChange={(e) => onChange({ repetition_penalty: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+          <Field label={t('fishStory.max_new_tokens')} hint={t('fishStory.max_new_tokens_hint')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={64}
+                max={8192}
+                step={64}
+                placeholder={inherit(defaults?.max_new_tokens)}
+                value={inherit(settings.max_new_tokens)}
+                onChange={(e) => onChange({ max_new_tokens: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+          <Field label={t('fishStory.min_chunk_length')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={0}
+                max={300}
+                placeholder={inherit(defaults?.min_chunk_length)}
+                value={inherit(settings.min_chunk_length)}
+                onChange={(e) => onChange({ min_chunk_length: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+          <Field label={t('fishStory.early_stop')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                placeholder={inherit(defaults?.early_stop_threshold)}
+                value={inherit(settings.early_stop_threshold)}
+                onChange={(e) => onChange({ early_stop_threshold: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+        </div>
+        <Field label={t('fishStory.condition_previous')} hint={t('fishStory.condition_previous_hint')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={triState(settings.condition_on_previous_chunks)}
+              onChange={(e) => onChange({ condition_on_previous_chunks: fromTriState(e.target.value) })}
+            >
+              <option value="default">{t('fishStory.fish_default')}</option>
+              <option value="on">{t('fishStory.on')}</option>
+              <option value="off">{t('fishStory.off')}</option>
+            </select>
+          )}
+        </Field>
+        {settings.format === 'opus' && (
+          <Field label={t('fishStory.opus_bitrate')} hint={t('fishStory.opus_bitrate_hint')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={-1000}
+                placeholder="-1000"
+                value={inherit(settings.opus_bitrate)}
+                onChange={(e) => onChange({ opus_bitrate: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+        )}
       </Group>
 
       <Group title={t('fishStory.group_storage')}>

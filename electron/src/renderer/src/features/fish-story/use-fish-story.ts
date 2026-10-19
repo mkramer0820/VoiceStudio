@@ -25,6 +25,12 @@ export interface FishDefaults {
   temperature: number | null;
   top_p: number | null;
   chunk_length: number | null;
+  opus_bitrate: number | null;
+  repetition_penalty: number | null;
+  max_new_tokens: number | null;
+  min_chunk_length: number | null;
+  condition_on_previous_chunks: boolean | null;
+  early_stop_threshold: number | null;
   max_concurrency: number;
   volume: number;
   normalize_loudness: boolean;
@@ -228,6 +234,27 @@ export function useFishStory() {
     }
   }, [edit]);
 
+  /** Local only: put a voice on the board by its Fish id (public voices, a friend's, one you pasted). */
+  const addVoice = useCallback(
+    (id: string, name?: string) =>
+      edit((d) => ({ ...d, voices: { ...d.voices, [id]: name?.trim() || d.voices[id] || id } }), false),
+    [edit],
+  );
+
+  /** Contacts Fish (explicit action): search the public Voice Library. */
+  const searchLibrary = useCallback(async (title: string, language: string): Promise<FishVoice[] | null> => {
+    setError('');
+    try {
+      const q = new URLSearchParams({ scope: 'library' });
+      if (title.trim()) q.set('title', title.trim());
+      if (language.trim()) q.set('language', language.trim());
+      return (await apiJson<{ voices: FishVoice[] }>(`/api/fish/voices?${q}`)).voices;
+    } catch (reason) {
+      setError(describeError(reason));
+      return null;
+    }
+  }, []);
+
   /** Contacts Fish (explicit button): remaining API credit. */
   const checkBalance = useCallback(async () => {
     setBalanceBusy(true);
@@ -262,6 +289,8 @@ export function useFishStory() {
     undo,
     newStory,
     loadVoices,
+    addVoice,
+    searchLibrary,
     checkBalance,
     saveDefaults,
   };

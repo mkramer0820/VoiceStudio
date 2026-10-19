@@ -14,7 +14,7 @@ import time
 import uuid
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import FishConfig, load_config
 
@@ -34,6 +34,12 @@ class StorySettings(BaseModel):
     temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
     chunk_length: Optional[int] = Field(None, ge=100, le=300)
+    opus_bitrate: Optional[int] = Field(None, ge=-1000, le=512000)
+    repetition_penalty: Optional[float] = Field(None, ge=0.5, le=2.0)
+    max_new_tokens: Optional[int] = Field(None, ge=64, le=8192)
+    min_chunk_length: Optional[int] = Field(None, ge=0, le=300)
+    condition_on_previous_chunks: Optional[bool] = None
+    early_stop_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
     speed: float = Field(1.0, ge=0.5, le=2.0)
     volume: Optional[float] = Field(None, ge=-30.0, le=30.0)
     normalize_loudness: Optional[bool] = None
@@ -63,6 +69,46 @@ class Draft(BaseModel):
     voices: dict[str, str] = Field(default_factory=dict, max_length=300)  # voice id -> display name
     cast: dict[str, str] = Field(default_factory=dict, max_length=300)  # speaker name -> voice id
     settings: StorySettings = Field(default_factory=StorySettings)
+
+
+class _Prosody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    speed: Optional[float] = Field(None, ge=0.5, le=2.0)
+    volume: Optional[float] = Field(None, ge=-30.0, le=30.0)
+    normalize_loudness: Optional[bool] = None
+
+
+class TTSRequest(BaseModel):
+    """The JSON body of ``POST /v1/tts``. ``extra="forbid"`` catches a misspelt field."""
+
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(..., min_length=1, max_length=20000)
+    reference_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    format: Literal["wav", "pcm", "mp3", "opus"]
+    sample_rate: Optional[int] = Field(None, ge=8000, le=96000)
+    mp3_bitrate: Optional[Literal[64, 128, 192]] = None
+    opus_bitrate: Optional[int] = Field(None, ge=-1000, le=512000)
+    latency: Literal["normal", "balanced"]
+    normalize: bool
+    temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    chunk_length: Optional[int] = Field(None, ge=100, le=300)
+    repetition_penalty: Optional[float] = Field(None, ge=0.5, le=2.0)
+    max_new_tokens: Optional[int] = Field(None, ge=64, le=8192)
+    min_chunk_length: Optional[int] = Field(None, ge=0, le=300)
+    condition_on_previous_chunks: Optional[bool] = None
+    early_stop_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    prosody: Optional[_Prosody] = None
+    language: Optional[str] = Field(None, max_length=35, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+def check_request(body: dict) -> list[str]:
+    """Schema problems in one request body (empty = it will be accepted by the schema)."""
+    try:
+        TTSRequest.model_validate(body)
+    except ValidationError as exc:
+        return [f"{'.'.join(str(p) for p in e['loc']) or 'body'}: {e['msg']}" for e in exc.errors()]
+    return []
 
 
 def effective_config(settings: StorySettings) -> FishConfig:
@@ -168,5 +214,5 @@ def plan(draft: Draft) -> dict:
     }
 
 
-__all__ = ["Chunk", "Draft", "StorySettings", "SavedSettings", "effective_config", "plan",
+__all__ = ["Chunk", "Draft", "StorySettings", "SavedSettings", "effective_config", "plan", "TTSRequest", "check_request",
            "save_draft", "load_draft", "delete_draft", "list_drafts", "new_draft_id"]

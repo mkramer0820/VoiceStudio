@@ -9,6 +9,7 @@ import {
   LoaderCircleIcon,
   MousePointerClickIcon,
   TagsIcon,
+  UsersRoundIcon,
   Trash2Icon,
   Undo2Icon,
   WalletIcon,
@@ -24,6 +25,7 @@ import { JobsDialog, useRunningJobs } from './jobs-dialog';
 import { RenderPanel } from './render-panel';
 import { SettingsPanel } from './settings-panel';
 import { TagsDialog } from './tags-dialog';
+import { VoicesDialog } from './voices-dialog';
 import {
   applyVoice,
   idsBetween,
@@ -62,6 +64,7 @@ export function FishStoryPage() {
   const [showImport, setShowImport] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
+  const [voicesOpen, setVoicesOpen] = useState(false);
   const runningJobs = useRunningJobs(story.ready);
 
   const order = useMemo(() => voiceOrder(draft.chunks), [draft.chunks]);
@@ -148,6 +151,14 @@ export function FishStoryPage() {
 
       <JobsDialog open={jobsOpen} onOpenChange={setJobsOpen} onError={story.setError} />
 
+      <VoicesDialog
+        open={voicesOpen}
+        onOpenChange={setVoicesOpen}
+        voiceNames={draft.voices}
+        onAdd={story.addVoice}
+        onSearch={story.searchLibrary}
+      />
+
       <TagsDialog
         open={tagsOpen}
         onOpenChange={setTagsOpen}
@@ -197,6 +208,9 @@ export function FishStoryPage() {
                 onClick={() => setTagsOpen(true)}
               >
                 <TagsIcon /> {t('fishStory.tags_button')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setVoicesOpen(true)}>
+                <UsersRoundIcon /> {t('fishStory.more_voices')}
               </Button>
               <Button variant="outline" size="sm" onClick={() => setJobsOpen(true)}>
                 <ListChecksIcon /> {t('fishStory.jobs_button')}

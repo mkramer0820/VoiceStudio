@@ -14,7 +14,7 @@ from typing import Optional
 SECRET_NAME = "fish_audio_key"
 DEFAULT_BASE_URL = "https://api.fish.audio"
 
-MODELS = ("s2.1-pro", "s2-pro", "drama-3")
+MODELS = ("s2.1-pro", "s2.1-pro-free", "s2-pro", "drama-3")
 FORMATS = ("wav", "pcm", "mp3", "opus")
 MP3_BITRATES = (64, 128, 192)
 LATENCIES = ("normal", "balanced")
@@ -38,6 +38,12 @@ _KEYS = {
     "normalize_loudness": ("tts.fish.normalize_loudness", "FISH_TTS_NORMALIZE_LOUDNESS"),
     "language": ("tts.fish.language", "FISH_TTS_LANGUAGE"),
     "output_dir": ("tts.fish.output_dir", "FISH_STORY_OUTPUT_DIR"),
+    "opus_bitrate": ("tts.fish.opus_bitrate", "FISH_TTS_OPUS_BITRATE"),
+    "repetition_penalty": ("tts.fish.repetition_penalty", "FISH_TTS_REPETITION_PENALTY"),
+    "max_new_tokens": ("tts.fish.max_new_tokens", "FISH_TTS_MAX_NEW_TOKENS"),
+    "min_chunk_length": ("tts.fish.min_chunk_length", "FISH_TTS_MIN_CHUNK_LENGTH"),
+    "condition_on_previous_chunks": ("tts.fish.condition_on_previous_chunks", "FISH_TTS_CONDITION_ON_PREVIOUS"),
+    "early_stop_threshold": ("tts.fish.early_stop_threshold", "FISH_TTS_EARLY_STOP_THRESHOLD"),
 }
 
 
@@ -105,6 +111,13 @@ class FishConfig:
     normalize_loudness: bool = True  # prosody.normalize_loudness (S2 family default)
     language: Optional[str] = None
     output_dir: Optional[str] = None  # story renders root; None = <data dir>/fish_stories/renders
+    # Advanced tuning: only sent when set, so Fish's own tuned defaults stay in charge.
+    opus_bitrate: Optional[int] = None  # -1000 = automatic
+    repetition_penalty: Optional[float] = None
+    max_new_tokens: Optional[int] = None
+    min_chunk_length: Optional[int] = None
+    condition_on_previous_chunks: Optional[bool] = None
+    early_stop_threshold: Optional[float] = None
 
 
 def load_config() -> FishConfig:
@@ -140,4 +153,11 @@ def load_config() -> FishConfig:
         normalize_loudness=_bool(_raw("normalize_loudness"), True),
         language=_raw("language"),
         output_dir=_raw("output_dir"),
+        opus_bitrate=_num(_raw("opus_bitrate"), int, None),
+        repetition_penalty=_num(_raw("repetition_penalty"), float, None),
+        max_new_tokens=_num(_raw("max_new_tokens"), int, None),
+        min_chunk_length=_num(_raw("min_chunk_length"), int, None),
+        condition_on_previous_chunks=(None if _raw("condition_on_previous_chunks") is None
+                                      else _bool(_raw("condition_on_previous_chunks"), True)),
+        early_stop_threshold=_num(_raw("early_stop_threshold"), float, None),
     )

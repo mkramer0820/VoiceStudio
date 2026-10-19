@@ -19,6 +19,12 @@ export interface StorySettings {
   temperature?: number | null;
   top_p?: number | null;
   chunk_length?: number | null;
+  opus_bitrate?: number | null;
+  repetition_penalty?: number | null;
+  max_new_tokens?: number | null;
+  min_chunk_length?: number | null;
+  condition_on_previous_chunks?: boolean | null;
+  early_stop_threshold?: number | null;
   speed: number;
   volume?: number | null;
   normalize_loudness?: boolean | null;
