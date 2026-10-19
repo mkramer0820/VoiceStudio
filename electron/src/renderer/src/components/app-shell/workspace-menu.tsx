@@ -4,6 +4,7 @@ import { Link, useRouterState } from '@tanstack/react-router';
 import {
   AudioLinesIcon,
   FingerprintIcon,
+  BookAudioIcon,
   BookOpenIcon,
   FolderIcon,
   WrenchIcon,
@@ -28,6 +29,7 @@ type Destination = readonly [
     | '/clone'
     | '/stories'
     | '/audiobook'
+    | '/fish-story'
     | '/projects'
     | '/tools'
     | '/batch'
@@ -54,6 +56,7 @@ const voiceDestinations: Destination[] = [
 const storyDestinations: Destination[] = [
   ['/stories', 'nav.stories', AudioLinesIcon],
   ['/audiobook', 'audiobook.title', BookOpenIcon],
+  ['/fish-story', 'fishStory.nav', BookAudioIcon],
 ];
 const dubDestinations: Destination[] = [
   ['/dub', 'dubWorkspace.title', FilmIcon],
@@ -79,6 +82,7 @@ const iconMotion: Record<Destination[0], string> = {
   '/gallery': 'lift',
   '/stories': 'wave',
   '/audiobook': 'tilt',
+  '/fish-story': 'wave',
   '/dub': 'tilt',
   '/batch': 'lift',
   '/transcriptions': 'nudge',

@@ -18,6 +18,7 @@ import { isMac } from '@/components/bridge';
 import { KeyboardCheatsheet } from '@/components/keyboard-cheatsheet';
 import {
   AudioLinesIcon,
+  BookAudioIcon,
   BookOpenIcon,
   FilmIcon,
   FolderIcon,
@@ -176,6 +177,13 @@ export function CommandPalette() {
       group: workspaceGroup,
       icon: WandSparklesIcon,
       run: () => navigate({ to: '/design' }),
+    },
+    {
+      id: 'fish-story',
+      label: t('fishStory.nav'),
+      group: workspaceGroup,
+      icon: BookAudioIcon,
+      run: () => navigate({ to: '/fish-story' }),
     },
     {
       id: 'audiobook',

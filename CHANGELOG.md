@@ -15,6 +15,7 @@ metadata and the backend fallback mirror it.
 ### Added
 
 - Opt-in Fish Audio cloud engine (s2.1-pro, s2-pro, drama-3) with lossless WAV output at a configurable sample rate and archived untouched masters — thanks @mkramer0820!
+- Fish story board: stage a multi-voice story, assign a Fish voice to selected lines, set output options, and submit only when you confirm — thanks @mkramer0820!
 - GitHub Sponsors is now the lead way to support VoiceStudio — on the Support page, the footer support menu, the repository Sponsor button, and SPONSORS.md (#2918)
 
 ### Changed

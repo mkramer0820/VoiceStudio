@@ -34,6 +34,9 @@ _KEYS = {
     "reference_id": ("tts.fish.reference_id", "FISH_TTS_REFERENCE_ID"),
     "archive_masters": ("tts.fish.archive_masters", "FISH_TTS_ARCHIVE_MASTERS"),
     "max_concurrency": ("tts.fish.max_concurrency", "FISH_TTS_MAX_CONCURRENCY"),
+    "volume": ("tts.fish.volume", "FISH_TTS_VOLUME"),
+    "normalize_loudness": ("tts.fish.normalize_loudness", "FISH_TTS_NORMALIZE_LOUDNESS"),
+    "language": ("tts.fish.language", "FISH_TTS_LANGUAGE"),
 }
 
 
@@ -92,6 +95,9 @@ class FishConfig:
     reference_id: Optional[str]
     archive_masters: bool
     max_concurrency: int
+    volume: float = 0.0  # dB, prosody.volume
+    normalize_loudness: bool = True  # prosody.normalize_loudness (S2 family default)
+    language: Optional[str] = None
 
 
 def load_config() -> FishConfig:
@@ -123,4 +129,7 @@ def load_config() -> FishConfig:
         reference_id=_raw("reference_id"),
         archive_masters=_bool(_raw("archive_masters"), True),
         max_concurrency=max(1, _num(_raw("max_concurrency"), int, 2)),
+        volume=max(-30.0, min(30.0, _num(_raw("volume"), float, 0.0))),
+        normalize_loudness=_bool(_raw("normalize_loudness"), True),
+        language=_raw("language"),
     )

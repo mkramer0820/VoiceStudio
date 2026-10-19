@@ -1,0 +1,356 @@
+import { useId, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import type { StorySettings } from './story-model';
+import type { FishDefaults } from './use-fish-story';
+
+const MODELS = ['s2.1-pro', 's2-pro', 'drama-3'];
+const FORMATS = ['wav', 'pcm', 'mp3', 'opus'] as const;
+const SAMPLE_RATES = [24000, 32000, 44100, 48000];
+const BITRATES = [64, 128, 192] as const;
+
+const selectClass =
+  'h-8 w-full rounded-md border border-input bg-input/20 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30';
+
+function Field({
+  label,
+  hint,
+  children,
+  inline = false,
+}: {
+  label: string;
+  hint?: string;
+  children: (id: string) => ReactNode;
+  inline?: boolean;
+}) {
+  const id = useId();
+  return (
+    <div className={inline ? 'flex items-center justify-between gap-3' : 'space-y-1'}>
+      <label htmlFor={id} className="text-xs font-medium text-foreground/80">
+        {label}
+      </label>
+      {children(id)}
+      {hint && <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <fieldset className="space-y-3 border-t border-border/50 pt-3 first:border-t-0 first:pt-0">
+      <legend className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        {title}
+      </legend>
+      {children}
+    </fieldset>
+  );
+}
+
+/** Empty input = inherit the Settings/env value shown as the placeholder. */
+function numberOrNull(raw: string): number | null {
+  if (raw.trim() === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+export function SettingsPanel({
+  settings,
+  defaults,
+  voiceNames,
+  onChange,
+}: {
+  settings: StorySettings;
+  defaults: FishDefaults | null;
+  voiceNames: Record<string, string>;
+  onChange: (patch: Partial<StorySettings>) => void;
+}) {
+  const { t } = useTranslation();
+  const format = settings.format ?? defaults?.format ?? 'wav';
+  const lossless = format === 'wav' || format === 'pcm';
+  const inherit = (value: string | number | null | undefined) =>
+    value === null || value === undefined ? '' : String(value);
+  const triState = (value: boolean | null | undefined) =>
+    value === null || value === undefined ? 'default' : value ? 'on' : 'off';
+  const fromTriState = (value: string) => (value === 'default' ? null : value === 'on');
+
+  return (
+    <div className="space-y-4 p-1 text-sm">
+      <Group title={t('fishStory.group_output')}>
+        <Field label={t('fishStory.format')} hint={lossless ? t('fishStory.format_lossless') : t('fishStory.format_lossy')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={settings.format ?? ''}
+              onChange={(e) => onChange({ format: (e.target.value || null) as StorySettings['format'] })}
+            >
+              <option value="">{t('fishStory.inherit', { value: defaults?.format ?? 'wav' })}</option>
+              {FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {f.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        {format !== 'opus' && (
+          <Field label={t('fishStory.sample_rate')}>
+            {(id) => (
+              <select
+                id={id}
+                className={selectClass}
+                value={settings.sample_rate ?? ''}
+                onChange={(e) => onChange({ sample_rate: numberOrNull(e.target.value) })}
+              >
+                <option value="">{t('fishStory.inherit', { value: `${defaults?.sample_rate ?? 44100} Hz` })}</option>
+                {SAMPLE_RATES.map((r) => (
+                  <option key={r} value={r}>
+                    {r} Hz
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        )}
+        {format === 'mp3' && (
+          <Field label={t('fishStory.mp3_bitrate')}>
+            {(id) => (
+              <select
+                id={id}
+                className={selectClass}
+                value={settings.mp3_bitrate ?? ''}
+                onChange={(e) =>
+                  onChange({ mp3_bitrate: (numberOrNull(e.target.value) as StorySettings['mp3_bitrate']) })
+                }
+              >
+                <option value="">{t('fishStory.inherit', { value: `${defaults?.mp3_bitrate ?? 192} kbps` })}</option>
+                {BITRATES.map((b) => (
+                  <option key={b} value={b}>
+                    {b} kbps
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        )}
+        <Field label={t('fishStory.join')} hint={lossless ? t('fishStory.join_hint') : t('fishStory.join_unavailable')} inline>
+          {(id) => (
+            <Switch
+              id={id}
+              checked={settings.join && lossless}
+              disabled={!lossless}
+              onCheckedChange={(join) => onChange({ join })}
+            />
+          )}
+        </Field>
+        <Field label={t('fishStory.pause')} hint={t('fishStory.pause_hint')}>
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={0}
+              max={5000}
+              step={50}
+              value={settings.pause_ms}
+              onChange={(e) =>
+                onChange({ pause_ms: Math.max(0, Math.min(5000, Number(e.target.value) || 0)) })
+              }
+            />
+          )}
+        </Field>
+      </Group>
+
+      <Group title={t('fishStory.group_voice')}>
+        <Field label={t('fishStory.model')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={settings.model ?? ''}
+              onChange={(e) => onChange({ model: e.target.value || null })}
+            >
+              <option value="">{t('fishStory.inherit', { value: defaults?.model ?? 's2.1-pro' })}</option>
+              {MODELS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label={t('fishStory.default_voice')} hint={t('fishStory.default_voice_hint')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={settings.default_voice ?? ''}
+              onChange={(e) => onChange({ default_voice: e.target.value || null })}
+            >
+              <option value="">
+                {defaults?.reference_id
+                  ? t('fishStory.inherit', { value: voiceNames[defaults.reference_id] ?? defaults.reference_id })
+                  : t('fishStory.fish_default')}
+              </option>
+              {Object.entries(voiceNames).map(([vid, name]) => (
+                <option key={vid} value={vid}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label={`${t('fishStory.speed')} · ${settings.speed.toFixed(2)}×`} hint={t('fishStory.speed_hint')}>
+          {(id) => (
+            <input
+              id={id}
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={settings.speed}
+              className="w-full accent-[hsl(var(--primary))]"
+              onChange={(e) => onChange({ speed: Number(e.target.value) })}
+            />
+          )}
+        </Field>
+        <Field label={t('fishStory.volume')} hint={t('fishStory.volume_hint')}>
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={-30}
+              max={30}
+              step={0.5}
+              placeholder={inherit(defaults?.volume)}
+              value={inherit(settings.volume)}
+              onChange={(e) => onChange({ volume: numberOrNull(e.target.value) })}
+            />
+          )}
+        </Field>
+        <Field label={t('fishStory.language')} hint={t('fishStory.language_hint')}>
+          {(id) => (
+            <Input
+              id={id}
+              maxLength={35}
+              placeholder={defaults?.language ?? t('fishStory.auto')}
+              value={settings.language ?? ''}
+              onChange={(e) => onChange({ language: e.target.value.trim() || null })}
+            />
+          )}
+        </Field>
+      </Group>
+
+      <Group title={t('fishStory.group_quality')}>
+        <Field label={t('fishStory.latency')} hint={t('fishStory.latency_hint')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={settings.latency ?? ''}
+              onChange={(e) => onChange({ latency: (e.target.value || null) as StorySettings['latency'] })}
+            >
+              <option value="">{t('fishStory.inherit', { value: defaults?.latency ?? 'normal' })}</option>
+              <option value="normal">{t('fishStory.latency_normal')}</option>
+              <option value="balanced">{t('fishStory.latency_balanced')}</option>
+            </select>
+          )}
+        </Field>
+        <Field label={t('fishStory.normalize')} hint={t('fishStory.normalize_hint')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={triState(settings.normalize)}
+              onChange={(e) => onChange({ normalize: fromTriState(e.target.value) })}
+            >
+              <option value="default">{t('fishStory.inherit', { value: defaults?.normalize ? 'on' : 'off' })}</option>
+              <option value="on">{t('fishStory.on')}</option>
+              <option value="off">{t('fishStory.off')}</option>
+            </select>
+          )}
+        </Field>
+        <Field label={t('fishStory.loudness')} hint={t('fishStory.loudness_hint')}>
+          {(id) => (
+            <select
+              id={id}
+              className={selectClass}
+              value={triState(settings.normalize_loudness)}
+              onChange={(e) => onChange({ normalize_loudness: fromTriState(e.target.value) })}
+            >
+              <option value="default">
+                {t('fishStory.inherit', { value: defaults?.normalize_loudness === false ? 'off' : 'on' })}
+              </option>
+              <option value="on">{t('fishStory.on')}</option>
+              <option value="off">{t('fishStory.off')}</option>
+            </select>
+          )}
+        </Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label={t('fishStory.temperature')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                placeholder={inherit(defaults?.temperature)}
+                value={inherit(settings.temperature)}
+                onChange={(e) => onChange({ temperature: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+          <Field label={t('fishStory.top_p')}>
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                placeholder={inherit(defaults?.top_p)}
+                value={inherit(settings.top_p)}
+                onChange={(e) => onChange({ top_p: numberOrNull(e.target.value) })}
+              />
+            )}
+          </Field>
+        </div>
+        <Field label={t('fishStory.chunk_length')} hint={t('fishStory.chunk_length_hint')}>
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={100}
+              max={300}
+              step={10}
+              placeholder={inherit(defaults?.chunk_length)}
+              value={inherit(settings.chunk_length)}
+              onChange={(e) => onChange({ chunk_length: numberOrNull(e.target.value) })}
+            />
+          )}
+        </Field>
+      </Group>
+
+      <Group title={t('fishStory.group_requests')}>
+        <Field label={t('fishStory.concurrency')} hint={t('fishStory.concurrency_hint')}>
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={1}
+              max={8}
+              step={1}
+              placeholder={inherit(defaults?.max_concurrency)}
+              value={inherit(settings.max_concurrency)}
+              onChange={(e) => {
+                const n = numberOrNull(e.target.value);
+                onChange({ max_concurrency: n === null ? null : Math.max(1, Math.min(8, Math.round(n))) });
+              }}
+            />
+          )}
+        </Field>
+      </Group>
+    </div>
+  );
+}

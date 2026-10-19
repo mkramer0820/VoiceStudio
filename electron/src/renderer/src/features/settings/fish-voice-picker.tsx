@@ -1,6 +1,6 @@
 import { CheckCircle2Icon, CloudIcon, LoaderCircleIcon, SearchIcon } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -61,6 +61,7 @@ export function FishVoicePicker() {
   const [keyInput, setKeyInput] = useState('');
   const [keySaving, setKeySaving] = useState(false);
   const registered = Boolean(fish);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!registered) return;
@@ -101,6 +102,8 @@ export function FishVoicePicker() {
       const result = await apiJson<FishVoicesResponse>(`/api/fish/voices?${params}`);
       setVoices(result.voices);
       setDefaultId(result.default_voice_id);
+      // The list renders below the controls; bring it into view so a load is never silent.
+      requestAnimationFrame(() => listRef.current?.scrollIntoView?.({ block: 'nearest' }));
     } catch (reason) {
       setError(describeError(reason));
     } finally {
@@ -184,7 +187,11 @@ export function FishVoicePicker() {
 
       {fish.available && (
         <>
-          <SettingsRow id="fish-voices-load" title={t('settings.fish_load_title')}>
+          <SettingsRow
+            id="fish-voices-load"
+            title={t('settings.fish_load_title')}
+            description={voices ? t('settings.fish_loaded', { count: voices.length }) : undefined}
+          >
             <div role="radiogroup" aria-label={t('settings.fish_scope')} className="flex gap-1">
               {(['mine', 'library'] as const).map((item) => (
                 <Button
@@ -231,6 +238,7 @@ export function FishVoicePicker() {
 
           {voices && (
             <div
+              ref={listRef}
               role="radiogroup"
               aria-label={t('settings.fish_voices')}
               className="max-h-96 space-y-1 overflow-y-auto p-2"

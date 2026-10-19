@@ -96,8 +96,16 @@ def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str] = None
         body["top_p"] = cfg.top_p
     if cfg.chunk_length is not None:
         body["chunk_length"] = cfg.chunk_length
+    prosody: dict = {}
     if speed and abs(speed - 1.0) > 1e-6:
-        body["prosody"] = {"speed": max(0.5, min(2.0, float(speed)))}
+        prosody["speed"] = max(0.5, min(2.0, float(speed)))
+    if abs(cfg.volume) > 1e-6:
+        prosody["volume"] = cfg.volume
+    if not cfg.normalize_loudness:  # Fish's own default is on; only send a change
+        prosody["normalize_loudness"] = False
+    if prosody:
+        body["prosody"] = prosody
+    language = language or cfg.language
     if language and len(language) <= 35:
         body["language"] = language
     return body
@@ -203,3 +211,14 @@ def list_all_voices(*, api_key: str, cfg: FishConfig, max_pages: int = 20, **kw)
         if not res["items"] or not (res["has_more"] or len(out) < res["total"]):
             break
     return out
+
+
+def get_balance(*, api_key: str, cfg: FishConfig,
+                transport: Optional[httpx.BaseTransport] = None,
+                sleep=time.sleep) -> dict:
+    """API credit for the key's own account (``GET /wallet/self/api-credit``)."""
+    data = _request("GET", "/wallet/self/api-credit", api_key=api_key, cfg=cfg,
+                    transport=transport, sleep=sleep).json()
+    return {"credit": str(data.get("credit", "")),
+            "cumulative_top_up": str(data.get("cumulative_top_up", "")),
+            "has_free_credit": data.get("has_free_credit")}
