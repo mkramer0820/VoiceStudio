@@ -25,6 +25,7 @@ import { SettingsRowsSkeleton, SettingsSection, SettingsRow } from './settings-l
 import { SettingsActionError } from './settings-action-error';
 import { VoicePreviewsSettings } from './voice-previews-settings';
 import { AsrOpenAiCompatSettings } from './asr-openai-compat-settings';
+import { FishVoicePicker } from './fish-voice-picker';
 import { AecSettings } from './aec-settings';
 import { ExternalLink } from '@/components/external-link';
 import { ComputeVendorIcon, formatComputeRuntime } from '@/components/compute-vendor-icon';
@@ -593,6 +594,7 @@ export function ModelSettings({
         )}
       </SettingsSection>
       {family === 'asr' && <AsrOpenAiCompatSettings />}
+      {family === 'tts' && <FishVoicePicker />}
       {showLibrary && <ModelLibrary family={family} />}
       {family === 'dictation' && (
         <>

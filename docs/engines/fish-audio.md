@@ -48,7 +48,7 @@ goes through the normal pipeline.
 
 ## Your voices
 
-List the voices already on your Fish account, then pick a default:
+In the app: **Settings → Models → TTS → Fish Audio voices**. Choose *My voices* or *Public library*, optionally type a title, press **Load voices**, then click a voice to make it the default. Nothing is requested until you press Load. The same thing over HTTP:
 
 ```bash
 curl "http://127.0.0.1:<port>/api/fish/voices"                      # your saved voices
