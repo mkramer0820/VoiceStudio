@@ -7,6 +7,7 @@ import {
   FilePlusIcon,
   LoaderCircleIcon,
   MousePointerClickIcon,
+  TagsIcon,
   Trash2Icon,
   Undo2Icon,
   WalletIcon,
@@ -20,6 +21,7 @@ import { SettingsActionError } from '@/features/settings/settings-action-error';
 import { ChunkList } from './chunk-list';
 import { RenderPanel } from './render-panel';
 import { SettingsPanel } from './settings-panel';
+import { TagsDialog } from './tags-dialog';
 import {
   applyVoice,
   idsBetween,
@@ -35,6 +37,7 @@ import {
   voiceOrder,
   type SplitMode,
 } from './story-model';
+import { detectSpeakers } from './tag-tools';
 import { useFishStory } from './use-fish-story';
 
 const selectClass =
@@ -55,6 +58,7 @@ export function FishStoryPage() {
   const [mode, setMode] = useState<SplitMode>('lines');
   const [maxChars, setMaxChars] = useState('');
   const [showImport, setShowImport] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
 
   const order = useMemo(() => voiceOrder(draft.chunks), [draft.chunks]);
   const hueFor = useCallback((voice: string | null | undefined) => voiceHue(voice, order), [order]);
@@ -101,9 +105,13 @@ export function FishStoryPage() {
     setPaste('');
     setShowImport(false);
     setSelected(new Set());
+    // AI-directed scripts name their speakers in [brackets]: offer to map them right away.
+    if (detectSpeakers(added).size > 0) setTagsOpen(true);
   };
 
   const importOpen = showImport || draft.chunks.length === 0;
+  const narratorId = draft.settings.default_voice ?? story.defaults?.reference_id ?? null;
+  const narratorName = narratorId ? (draft.voices[narratorId] ?? narratorId) : '';
 
   return (
     <div
@@ -134,6 +142,19 @@ export function FishStoryPage() {
         </span>
       </WorkspaceHeader>
 
+      <TagsDialog
+        open={tagsOpen}
+        onOpenChange={setTagsOpen}
+        chunks={draft.chunks}
+        voiceNames={draft.voices}
+        cast={draft.cast}
+        narrator={draft.settings.default_voice ?? null}
+        inheritedNarrator={story.defaults?.reference_id ?? null}
+        onChunks={(next) => setChunks(next)}
+        onCast={story.setCast}
+        onNarrator={(voice) => story.setSettings({ default_voice: voice })}
+      />
+
       <div className="flex min-h-0 flex-1 @max-[40rem]:flex-col">
         <SecondarySidebar title={t('fishStory.settings')} icon={CloudIcon} size="wide" variant="controls">
           <SettingsPanel
@@ -160,6 +181,14 @@ export function FishStoryPage() {
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => setShowImport((v) => !v)}>
                 <FilePlusIcon /> {t('fishStory.add_text')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={draft.chunks.length === 0}
+                onClick={() => setTagsOpen(true)}
+              >
+                <TagsIcon /> {t('fishStory.tags_button')}
               </Button>
               <Button variant="outline" size="sm" disabled={!story.canUndo} onClick={story.undo}>
                 <Undo2Icon /> {t('fishStory.undo')}
@@ -363,6 +392,7 @@ export function FishStoryPage() {
               chunks={draft.chunks}
               selected={selected}
               voiceNames={draft.voices}
+              defaultVoiceName={narratorName}
               hueFor={hueFor}
               onSelect={onSelect}
               onEdit={(id, text) =>

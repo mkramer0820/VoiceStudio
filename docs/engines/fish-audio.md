@@ -75,8 +75,13 @@ Submit and confirm** in the review dialog.
 1. **Add text**: paste a story and split it into lines, paragraphs or sentences (optional max characters per line).
 2. **Load my voices** (contacts Fish) lists your saved voices.
 3. **Select lines** by shift/ctrl-click, by checkbox, or by number (*Lines 1 to 15* → **Select**), then choose a voice and **Apply**. **Apply & select next block** moves on to the following lines with the same count, so a long story goes quickly. Used voices appear as colored chips: click one to apply it to the current selection.
-4. **Render settings** (left panel): format (WAV/PCM/MP3/Opus), sample rate, MP3 bitrate, speed, volume, language, model, latency mode, text and loudness normalization, temperature, top-p, chunk length, default voice, simultaneous requests, and the pause used in the joined file. Empty fields follow Settings/env.
-5. **Review & submit to Fish** shows lines, characters, model, format and per-voice counts. **Check balance** shows your remaining credit (explicit request).
+4. **Tags & cast** handles AI-directed scripts such as `[Shadow] [slow][soft] It feels strange, [pause] to become a [emphasis] human.` It opens by itself when pasted text has `[Name]` tags at the start of lines.
+   - **Narrator (default voice):** used for narration and every line with no speaker tag, so characters only need their own lines tagged.
+   - **Characters:** a capitalised tag that starts a line (`[Shadow]`, `[Snuggle]`) is a character. Map each to a voice and press **Apply characters and voices**; the name is removed from the text and recorded on the line. A tag in the middle of a line starts a new line. Untagged lines stay narration unless you tick *keep the previous character*. Delivery words such as `[Pause]` are never treated as characters, and each tag can be flipped with *Not a character* / *Is a character*.
+   - **Delivery tags** (`[slow]`, `[soft]`, `[pause]`, `[emphasis]`…) are kept for Fish by default; remove them or replace them with other tags.
+   - **Find and replace** works on plain text across the whole story (include the brackets to change a tag).
+5. **Render settings** (left panel): format (WAV/PCM/MP3/Opus), sample rate, MP3 bitrate, speed, volume, language, model, latency mode, text and loudness normalization, temperature, top-p, chunk length, default voice, simultaneous requests, and the pause used in the joined file. Empty fields follow Settings/env.
+6. **Review & submit to Fish** shows lines, characters, model, format and per-voice counts. **Check balance** shows your remaining credit (explicit request).
 
 Output lands in `<data dir>/fish_stories/<draft>/renders/<timestamp>/`: one untouched file per line (`001_sun_2.wav`, …), a `manifest.json` (settings and text, no key) and, for WAV/PCM, a joined `story.wav`. Failed lines can be retried; running out of credits stops the job and keeps what finished. **Cancel** stops after the requests in flight.
 

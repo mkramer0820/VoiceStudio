@@ -184,3 +184,38 @@ it('checks the balance only when the button is pressed', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'fishStory.check_balance' }));
   expect(await screen.findByText(/12\.5/)).toBeInTheDocument();
 });
+
+const DIRECTED = [
+  '[Shadow] [slow][soft] It feels strange, [pause] to become a [emphasis] human once more.',
+  'He looked at his hands.',
+  '[Snuggle] Hello!',
+].join('\n');
+
+it('maps [Name] tags to voices and leaves narration on the narrator voice', async () => {
+  render(<FishStoryPage />);
+  fireEvent.click(await screen.findByRole('button', { name: 'fishStory.load_voices' }));
+  await screen.findAllByRole('option', { name: 'sun_2' });
+  fireEvent.change(screen.getByLabelText('fishStory.paste'), { target: { value: DIRECTED } });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.append' }));
+
+  // Speaker tags were found, so the Tags & cast dialog opens by itself.
+  const shadow = await screen.findByLabelText(/fishStory\.speaker_voice.*Shadow/);
+  expect(screen.getByLabelText(/fishStory\.speaker_voice.*Snuggle/)).toBeInTheDocument();
+  fireEvent.change(shadow, { target: { value: 'v-sun' } });
+  fireEvent.change(screen.getByLabelText('fishStory.narrator'), { target: { value: 'v-narr' } });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.apply_cast' }));
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.done' }));
+
+  await waitFor(() => expect(screen.getAllByTestId('story-row')).toHaveLength(3));
+  const rows = screen.getAllByTestId('story-row');
+  // Name stripped, delivery tags kept, Shadow's voice applied.
+  expect(within(rows[0]).getByText(/^\[slow\]\[soft\] It feels strange, \[pause\]/)).toBeInTheDocument();
+  expect(within(rows[0]).getByText('sun_2')).toBeInTheDocument();
+  expect(within(rows[0]).getByText('Shadow')).toBeInTheDocument();
+  // Narration has no speaker, so it shows the narrator (the default voice).
+  expect(within(rows[1]).getByText('Narrator')).toBeInTheDocument();
+  expect(within(rows[1]).queryByText('Shadow')).not.toBeInTheDocument();
+  // Snuggle was never mapped: still the narrator, but the name is kept on the line.
+  expect(within(rows[2]).getByText('Snuggle')).toBeInTheDocument();
+  expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
+});

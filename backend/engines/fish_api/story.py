@@ -58,12 +58,14 @@ class Chunk(BaseModel):
     id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,40}$")
     text: str = Field(..., max_length=20000)
     voice: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    speaker: Optional[str] = Field(None, max_length=64)  # [Name] tag this line came from
 
 
 class Draft(BaseModel):
     title: str = Field("Untitled story", max_length=120)
     chunks: list[Chunk] = Field(default_factory=list, max_length=3000)
     voices: dict[str, str] = Field(default_factory=dict, max_length=300)  # voice id -> display name
+    cast: dict[str, str] = Field(default_factory=dict, max_length=300)  # speaker name -> voice id
     settings: StorySettings = Field(default_factory=StorySettings)
 
 
@@ -343,7 +345,7 @@ def _manifest(job, items, draft, cfg, joined) -> None:
         info = {
             "settings": {k: v for k, v in dataclasses.asdict(cfg).items() if k != "base_url"},
             "speed": draft.settings.speed, "pause_ms": draft.settings.pause_ms, "joined": joined,
-            "chunks": [{"index": i, "id": c.id, "voice": c.voice, "text": c.text,
+            "chunks": [{"index": i, "id": c.id, "speaker": c.speaker, "voice": c.voice, "text": c.text,
                         "file": job["chunks"][n]["file"], "status": job["chunks"][n]["status"]}
                        for n, (i, c) in enumerate(items)],
         }

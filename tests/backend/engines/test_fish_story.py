@@ -187,3 +187,28 @@ def test_get_balance_parses_the_wallet_response():
 def test_fish_config_dataclass_still_constructs_without_new_fields():
     base = load_config()
     assert isinstance(base, FishConfig) and base.volume == 0.0 and base.normalize_loudness is True
+
+
+def test_speaker_and_cast_survive_a_save_and_reload():
+    draft = story.Draft(
+        chunks=[story.Chunk(id="a", text="Hello", speaker="Shadow", voice="vsh")],
+        voices={"vsh": "sun_2"},
+        cast={"Shadow": "vsh"},
+    )
+    story.save_draft("cast1", draft)
+    saved = story.load_draft("cast1")
+    assert saved["chunks"][0]["speaker"] == "Shadow" and saved["cast"] == {"Shadow": "vsh"}
+
+
+def test_manifest_records_the_speaker_for_each_line(monkeypatch):
+    import json
+    import os
+
+    monkeypatch.setattr(client, "synthesize", lambda body, **_: _wav())
+    draft = story.Draft(
+        chunks=[story.Chunk(id="a", text="Hello", speaker="Shadow", voice="vsh")],
+        voices={"vsh": "sun_2"},
+    )
+    job = _wait(story.start_render(draft)["id"])
+    with open(os.path.join(job["out_dir"], "manifest.json"), encoding="utf-8") as fh:
+        assert json.load(fh)["chunks"][0]["speaker"] == "Shadow"

@@ -5,6 +5,8 @@ export interface StoryChunk {
   text: string;
   /** Fish voice (reference) id; undefined/null = use the default voice. */
   voice?: string | null;
+  /** Who speaks this line (from a `[Name]` tag); mapped to a voice through `cast`. */
+  speaker?: string | null;
 }
 
 export interface StorySettings {
@@ -32,6 +34,8 @@ export interface StoryDraft {
   chunks: StoryChunk[];
   /** voice id -> display name, so the board reads well without contacting Fish. */
   voices: Record<string, string>;
+  /** speaker name -> Fish voice id */
+  cast: Record<string, string>;
   settings: StorySettings;
 }
 

@@ -11,6 +11,8 @@ interface RowProps {
   selected: boolean;
   /** Display name of the assigned voice, or '' when the default is used. */
   voiceName: string;
+  /** Narrator / default voice, shown for lines with no voice of their own. */
+  defaultName: string;
   hue: number | null;
   last: boolean;
   onSelect: (id: string, mode: 'single' | 'range' | 'toggle') => void;
@@ -25,6 +27,7 @@ const ChunkRow = memo(function ChunkRow({
   chunk,
   selected,
   voiceName,
+  defaultName,
   hue,
   last,
   onSelect,
@@ -78,16 +81,25 @@ const ChunkRow = memo(function ChunkRow({
       <span className="mt-0.5 w-9 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">
         {index}
       </span>
-      <span
-        className="mt-0.5 w-28 shrink-0 truncate rounded-md px-2 py-0.5 text-xs"
-        style={
-          hue === null
-            ? undefined
-            : { background: `hsl(${hue} 70% 55% / 0.16)`, color: `hsl(${hue} 80% 70%)` }
-        }
-        title={voiceName || t('fishStory.default_voice_name')}
-      >
-        {voiceName || <span className="text-muted-foreground">{t('fishStory.default_voice_name')}</span>}
+      <span className="mt-0.5 flex w-28 shrink-0 flex-col gap-0.5">
+        <span
+          className="truncate rounded-md px-2 py-0.5 text-xs"
+          style={
+            hue === null
+              ? undefined
+              : { background: `hsl(${hue} 70% 55% / 0.16)`, color: `hsl(${hue} 80% 70%)` }
+          }
+          title={voiceName || defaultName || t('fishStory.default_voice_name')}
+        >
+          {voiceName || (
+            <span className="text-muted-foreground">{defaultName || t('fishStory.default_voice_name')}</span>
+          )}
+        </span>
+        {chunk.speaker && (
+          <span className="truncate px-2 text-[10px] text-muted-foreground" title={chunk.speaker}>
+            {chunk.speaker}
+          </span>
+        )}
       </span>
       <div className="min-w-0 flex-1">
         {editing ? (
@@ -148,6 +160,7 @@ export function ChunkList({
   chunks,
   selected,
   voiceNames,
+  defaultVoiceName,
   hueFor,
   onSelect,
   onEdit,
@@ -158,6 +171,7 @@ export function ChunkList({
   chunks: StoryChunk[];
   selected: ReadonlySet<string>;
   voiceNames: Record<string, string>;
+  defaultVoiceName: string;
   hueFor: (voice: string | null | undefined) => number | null;
   onSelect: RowProps['onSelect'];
   onEdit: RowProps['onEdit'];
@@ -183,6 +197,7 @@ export function ChunkList({
           chunk={chunk}
           selected={selected.has(chunk.id)}
           voiceName={chunk.voice ? (voiceNames[chunk.voice] ?? chunk.voice) : ''}
+          defaultName={defaultVoiceName}
           hue={hueFor(chunk.voice)}
           last={i === chunks.length - 1}
           onSelect={onSelect}
