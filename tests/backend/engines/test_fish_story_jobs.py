@@ -244,6 +244,17 @@ def test_mixed_sample_rates_are_resampled_into_the_joined_file_not_skipped(monke
     assert sf.info(os.path.join(job["out_dir"], odd["file"])).samplerate == 48000
 
 
+def test_same_44100_rate_join_never_resamples(monkeypatch):
+    _ok(monkeypatch, rate=44100)
+    monkeypatch.setattr(
+        story_jobs, "_resample",
+        lambda *_: (_ for _ in ()).throw(AssertionError("same-rate clips were resampled")),
+    )
+    job = _wait(story_jobs.start_render(_draft(sample_rate=44100, pause_ms=0))["id"])
+    assert job["joined"] == "story.wav"
+    assert sf.info(os.path.join(job["out_dir"], "story.wav")).samplerate == 44100
+
+
 def test_two_stories_with_the_same_title_get_separate_folders_and_runs_count_up(monkeypatch):
     _ok(monkeypatch)
     a1 = _wait(story_jobs.start_render(_draft("Same"), draft_id="aaaaaa111")["id"])

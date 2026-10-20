@@ -73,6 +73,8 @@ system trusts.
   silence, or a transcript that does not match it, makes the server emit a
   fraction of a second of near-silence.
 - Speed control is forwarded as the server's `speed_factor`.
+- VoiceStudio preserves the server's finished waveform instead of applying its
+  local-engine mastering, effects, or peak normalization a second time.
 - The GPU is whatever the GPT-SoVITS server itself uses (CUDA preferred);
   VoiceStudio's side is just an HTTP client.
 

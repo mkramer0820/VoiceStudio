@@ -47,6 +47,9 @@ class FishAudioBackend(TTSBackend):
     supports_cloning = False  # phase 1a: saved voices by reference_id only
     supports_voice_design = False
     instruct_vocabulary = "freeform"
+    # Fish returns finished, mastered audio.  The generic VoiceStudio DSP chain
+    # is tuned for raw local-model tensors and audibly changes this response.
+    is_remote_provider = True
 
     def __init__(self):
         self._cfg = load_config()

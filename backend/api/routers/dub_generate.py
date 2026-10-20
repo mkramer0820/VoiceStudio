@@ -1118,6 +1118,9 @@ async def dub_generate(job_id: str, req: DubRequest):
                     )
                     sr = backend.sample_rate
 
+                    if getattr(backend, "preserves_provider_audio", False):
+                        return audio_out
+
                     # Apply per-segment DSP effect preset (default: broadcast)
                     seg_effect_preset = effect_preset or "broadcast"
                     if seg_effect_preset == "raw":
@@ -1158,6 +1161,9 @@ async def dub_generate(job_id: str, req: DubRequest):
                             speed=spd, denoise=True, postprocess_output=_job_postprocess,
                         )
                         sr = backend.sample_rate
+
+                        if getattr(backend, "preserves_provider_audio", False):
+                            return audio_out
 
                         seg_effect_preset = effect_preset or "broadcast"
                         if seg_effect_preset == "raw":
@@ -1271,6 +1277,9 @@ async def dub_generate(job_id: str, req: DubRequest):
                         )
                     rendered = []
                     for output, prepared in zip(outputs, prepared_rows):
+                        if getattr(backend, "preserves_provider_audio", False):
+                            rendered.append(output)
+                            continue
                         preset = prepared["effect_preset"]
                         if preset == "raw":
                             rendered.append(output)
@@ -2055,9 +2064,10 @@ async def preview_segment(job_id: str, req: SegmentPreviewRequest):
             denoise=True,
             postprocess_output=True,
         )
-        if not getattr(backend, "applies_own_mastering", False):
-            audio_out = apply_mastering(audio_out, sample_rate=backend.sample_rate)
-        audio_out = normalize_audio(audio_out, target_dBFS=-2.0)
+        if not getattr(backend, "preserves_provider_audio", False):
+            if not getattr(backend, "applies_own_mastering", False):
+                audio_out = apply_mastering(audio_out, sample_rate=backend.sample_rate)
+            audio_out = normalize_audio(audio_out, target_dBFS=-2.0)
         # Invisible provenance mark before the WAV encode (#1169); pref-gated,
         # never raises, and short-preview embedding runs in this same
         # GPU-pool job.

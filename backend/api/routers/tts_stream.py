@@ -208,11 +208,13 @@ def render_stream_sentence(backend, kw: dict, sentence_text: str):
     from services.watermark import mark_synthetic
     wav = backend.generate(sentence_text, **kw)
     sr_actual = backend.sample_rate
+    preserve = getattr(backend, "preserves_provider_audio", False)
     # Like _run_tts in openai_compat: studio engines (VoxCPM2) opt out of the
     # broadcast mastering chain. Loudness normalisation still runs.
-    if not getattr(backend, "applies_own_mastering", False):
+    if not preserve and not getattr(backend, "applies_own_mastering", False):
         wav = apply_mastering(wav, sample_rate=sr_actual)
-    wav = normalize_audio(wav, target_dBFS=-2.0)
+    if not preserve:
+        wav = normalize_audio(wav, target_dBFS=-2.0)
     # Invisible provenance mark per sentence, at the tensor stage before PCM16
     # conversion (#1169) — streaming is a delivery channel, not a watermark
     # exemption. AudioSeal's 16-bit message repeats through the audio, so

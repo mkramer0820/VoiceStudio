@@ -217,6 +217,13 @@ class TTSBackend(ABC):
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+        # A remote TTS provider returns its own finished master. Preserve that
+        # waveform at every VoiceStudio route instead of applying the DSP chain
+        # intended for raw local-model output. Keep this invariant here so a
+        # newly added remote adapter cannot accidentally opt back into the
+        # destructive second mastering pass.
+        if getattr(cls, "is_remote_provider", False):
+            cls.preserves_provider_audio = True
         # Enforce lifetime at the engine boundary so every caller is covered.
         for name in ("generate", "generate_batch", "_ensure_loaded"):
             method = cls.__dict__.get(name)
@@ -429,6 +436,18 @@ class TTSBackend(ABC):
     #: 48 kHz) set this True so their clean output isn't pumped. Loudness
     #: normalisation is applied regardless — it's a benign peak scale.
     applies_own_mastering: bool = False
+
+    #: Whether synthesis runs at a separately operated provider endpoint rather
+    #: than in VoiceStudio or one of its managed local sidecars. Remote provider
+    #: audio is finished audio, so ``__init_subclass__`` automatically enables
+    #: ``preserves_provider_audio`` for every adapter that marks this True.
+    is_remote_provider: bool = False
+
+    #: Whether the backend returns finished audio whose level, dynamics, and
+    #: spectrum must be preserved. It may also be enabled explicitly by a local
+    #: studio engine. Provenance watermarking and final container encoding still
+    #: run at their normal chokepoints.
+    preserves_provider_audio: bool = False
 
     #: Whether this engine can clone an arbitrary voice from reference audio
     #: (`ref_audio=`), as opposed to only offering a fixed set of preset
@@ -3019,6 +3038,7 @@ class GPTSoVITSBackend(TTSBackend):
 
     id = "gpt-sovits"
     display_name = "GPT-SoVITS (5 langs, zero-shot, RTF 0.014, MIT)"
+    is_remote_provider = True
     supports_voice_design = False  # api_v2 needs a reference clip for every request
     # Server-side; whichever device GPT-SoVITS itself uses (CUDA preferred).
     gpu_compat = ("cuda", "cpu")

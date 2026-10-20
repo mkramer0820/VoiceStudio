@@ -43,7 +43,7 @@ def _tts_mod():
 
 
 def _make_fake_engine(engine_id="fake-engine", *, available=True, own_mastering=False,
-                      gpu_compat=("cpu",)):
+                      preserve_provider_audio=False, gpu_compat=("cpu",)):
     """Build a fresh TTSBackend stub class. Fresh per call so the per-process
     instance cache in api.routers.engines can't leak state across tests."""
 
@@ -53,6 +53,7 @@ def _make_fake_engine(engine_id="fake-engine", *, available=True, own_mastering=
         id = engine_id
         display_name = "Fake Engine (test)"
         applies_own_mastering = own_mastering
+        preserves_provider_audio = preserve_provider_audio
         gpu_compat = _compat
         calls: list = []
 
@@ -243,3 +244,25 @@ def test_generate_respects_applies_own_mastering(client, monkeypatch, no_omnivoi
     res = client.post("/generate", data={"text": "plain", "engine": "fake-plain"})
     assert res.status_code == 200, res.text
     assert mastering.call_count == 1
+
+
+def test_generate_preserves_finished_provider_audio(client, monkeypatch, no_omnivoice_model):
+    """Finished cloud audio must not enter the local-model broadcast chain."""
+    audio_dsp = importlib.import_module("services.audio_dsp")
+    mastering = MagicMock(side_effect=AssertionError("mastering changed provider audio"))
+    effects = MagicMock(side_effect=AssertionError("effects changed provider audio"))
+    normalize = MagicMock(side_effect=AssertionError("normalization changed provider audio"))
+    monkeypatch.setattr(audio_dsp, "apply_mastering", mastering)
+    monkeypatch.setattr(audio_dsp, "apply_effects_chain", effects)
+    monkeypatch.setattr(audio_dsp, "normalize_audio", normalize)
+
+    provider = _make_fake_engine(
+        "fake-provider", preserve_provider_audio=True,
+    )
+    monkeypatch.setitem(_tts_mod()._REGISTRY, "fake-provider", provider)
+
+    res = client.post("/generate", data={"text": "provider", "engine": "fake-provider"})
+    assert res.status_code == 200, res.text
+    mastering.assert_not_called()
+    effects.assert_not_called()
+    normalize.assert_not_called()

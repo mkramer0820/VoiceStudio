@@ -113,6 +113,15 @@ class FakeSubBackend(SubprocessBackend):
         return ECHO_SCRIPT
 
 
+def test_remote_provider_subclasses_always_preserve_returned_audio():
+    class RemoteProvider(HealthyInProcessBackend):
+        is_remote_provider = True
+        preserves_provider_audio = False
+
+    assert RemoteProvider.preserves_provider_audio is True
+    assert HealthyInProcessBackend.preserves_provider_audio is False
+
+
 # ── ENGINE-05 — graceful degradation ───────────────────────────────────────
 
 

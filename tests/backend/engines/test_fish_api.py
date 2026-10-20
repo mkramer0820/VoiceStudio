@@ -8,6 +8,7 @@ import httpx
 import numpy as np
 import pytest
 import soundfile as sf
+import torch
 
 from engines.fish_api import FishAudioBackend, client
 from engines.fish_api.config import load_config
@@ -146,6 +147,46 @@ def test_registered_in_registry():
     from services.tts_backend import _REGISTRY
 
     assert _REGISTRY["fish-audio"] is FishAudioBackend
+    assert FishAudioBackend.is_remote_provider is True
+    assert FishAudioBackend.preserves_provider_audio is True
+
+
+@pytest.mark.parametrize(
+    "module_name,function_name,args",
+    [
+        ("api.routers.openai_compat", "_run_tts", ("text", {})),
+        ("api.routers.tts_stream", "render_stream_sentence", ({}, "text")),
+    ],
+)
+def test_finished_provider_audio_skips_route_dsp(
+    monkeypatch, module_name, function_name, args,
+):
+    import importlib
+
+    waveform = torch.tensor([[0.125, -0.25, 0.5]], dtype=torch.float32)
+
+    class Provider:
+        sample_rate = 44100
+        preserves_provider_audio = True
+        applies_own_mastering = False
+
+        def generate(self, *_args, **_kwargs):
+            return waveform.clone()
+
+    audio_dsp = importlib.import_module("services.audio_dsp")
+    monkeypatch.setattr(
+        audio_dsp, "apply_mastering",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("mastering ran")),
+    )
+    monkeypatch.setattr(
+        audio_dsp, "normalize_audio",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("normalization ran")),
+    )
+    monkeypatch.setattr("services.watermark.mark_synthetic", lambda wav, *_a, **_k: wav)
+
+    result = getattr(importlib.import_module(module_name), function_name)(Provider(), *args)
+    returned = result[0]
+    assert torch.equal(returned, waveform)
 
 
 # ── voice listing ──

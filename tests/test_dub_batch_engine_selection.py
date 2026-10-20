@@ -40,18 +40,23 @@ def _tts_mod():
 
 
 def _make_fake_engine(engine_id, *, supports_cloning=True, available=True,
-                       own_mastering=False, gpu_compat=("cpu",)):
+                       own_mastering=False, preserve_provider_audio=False,
+                       gpu_compat=("cpu",)):
     tb = _tts_mod()
     # Class-body assignment can't read the same name from the enclosing
     # function scope (class bodies don't close over locals) — alias first,
     # matching test_generate_engine.py's _make_fake_engine convention.
-    _cloning, _mastering, _compat = supports_cloning, own_mastering, gpu_compat
+    _cloning = supports_cloning
+    _mastering = own_mastering
+    _preserve = preserve_provider_audio
+    _compat = gpu_compat
 
     class _FakeEngine(tb.TTSBackend):
         id = engine_id
         display_name = f"Fake {engine_id} (test)"
         supports_cloning = _cloning
         applies_own_mastering = _mastering
+        preserves_provider_audio = _preserve
         gpu_compat = _compat
         calls: list = []
 
@@ -299,6 +304,27 @@ def test_dub_generate_respects_applies_own_mastering(
     assert mastering_calls == []  # studio engine's own mastering is not double-applied
 
 
+def test_dub_generate_preserves_remote_provider_audio(
+    dub_job_env, fake_registry, no_omnivoice_model_manager, monkeypatch,
+):
+    dg, _job = dub_job_env
+    fake = fake_registry(
+        "fake-remote", supports_cloning=True, preserve_provider_audio=True,
+    )
+    monkeypatch.setenv("OMNIVOICE_TTS_BACKEND", "fake-remote")
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("remote provider audio was processed")
+
+    monkeypatch.setattr(dg, "apply_mastering", unexpected)
+    monkeypatch.setattr(dg, "apply_effects_chain", unexpected)
+    monkeypatch.setattr(dg, "normalize_audio", unexpected)
+
+    asyncio.run(dg.dub_generate("jobX", _one_seg_request()))
+
+    assert len(fake.calls) == 1
+
+
 # ── batch ────────────────────────────────────────────────────────────────
 
 
@@ -415,3 +441,25 @@ def test_batch_respects_applies_own_mastering(
 
     assert len(fake.calls) == 1
     assert mastering_calls == []
+
+
+def test_batch_preserves_remote_provider_audio(
+    batch_job_env, fake_registry, no_omnivoice_model_manager, monkeypatch,
+):
+    b, make_job = batch_job_env
+    fake = fake_registry(
+        "fake-batch-remote", supports_cloning=True, preserve_provider_audio=True,
+    )
+    monkeypatch.setenv("OMNIVOICE_TTS_BACKEND", "fake-batch-remote")
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("remote provider audio was processed")
+
+    import services.audio_dsp as audio_dsp
+    monkeypatch.setattr(audio_dsp, "apply_mastering", unexpected)
+    monkeypatch.setattr(audio_dsp, "normalize_audio", unexpected)
+
+    job = make_job("jobRemote", voice_id=None)
+    asyncio.run(b._run_batch_pipeline("jobRemote", job))
+
+    assert len(fake.calls) == 1

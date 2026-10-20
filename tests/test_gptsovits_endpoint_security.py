@@ -17,6 +17,13 @@ def _answer(ip: str, port: int = 9880):
     return [(family, socket.SOCK_STREAM, 6, "", (ip, port))]
 
 
+def test_gptsovits_preserves_remote_provider_audio():
+    from services.tts_backend import GPTSoVITSBackend
+
+    assert GPTSoVITSBackend.is_remote_provider is True
+    assert GPTSoVITSBackend.preserves_provider_audio is True
+
+
 @pytest.mark.parametrize(
     "url",
     [

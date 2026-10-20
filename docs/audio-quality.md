@@ -49,6 +49,8 @@ only for adapters that forward this setting:
 the app's added EQ, compression and normalization; engine postprocessing and
 the existing provenance watermark setting remain in effect. An engine that
 performs its own mastering continues to skip the app's mastering pre-stage.
+Remote TTS providers always keep the finished waveform they return; VoiceStudio
+does not run local-engine mastering, effects, or normalization over it.
 
 The final playback response uses the saved WAV itself. Streaming previews still
 use PCM16; their completed take uses the selected precision. Engines that only

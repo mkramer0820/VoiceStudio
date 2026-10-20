@@ -52,9 +52,11 @@ The environment wins.
 
 Every response is saved byte-for-byte to
 `<data dir>/outputs/fish_masters/<yyyymmdd>/<HHMMSS>_<hash>.<ext>` **before**
-VoiceStudio's own processing (provenance watermark, loudness, resampling). Edit
-those files when you want Fish's exact output. The file your project exports
-goes through the normal pipeline.
+VoiceStudio's standard-output watermark and container encoding. Edit those
+files when you want Fish's exact response bytes. The file your project exports
+keeps Fish's finished waveform: VoiceStudio does not apply its local-engine
+broadcast mastering, effect preset, or peak normalization to Fish output.
+Provenance watermarking and the selected WAV container encoding still run.
 
 ## Your voices
 

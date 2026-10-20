@@ -572,7 +572,10 @@ def _sanitize_audio(audio_out):
 
 
 @_render_timed('effects')
-def _apply_effect_chain(audio_out, sample_rate, effect_preset, *, skip_mastering=False):
+def _apply_effect_chain(
+    audio_out, sample_rate, effect_preset, *, skip_mastering=False,
+    preserve_provider_audio=False,
+):
     """Shared post-DSP for /generate: preset validation → mastering →
     effect chain → loudness normalization.
 
@@ -580,7 +583,9 @@ def _apply_effect_chain(audio_out, sample_rate, effect_preset, *, skip_mastering
     (issue #312): studio engines (e.g. VoxCPM2's native 48 kHz output)
     opt out of the broadcast highpass + Compressor pre-stage that's tuned
     for VoiceStudio's 24 kHz clone output. Loudness normalization still runs —
-    it's a benign peak scale. Mirrors ``_run_tts`` in openai_compat.py.
+    it's a benign peak scale. ``preserve_provider_audio`` is stronger: finished
+    provider audio bypasses the entire local-engine DSP chain. Mirrors
+    ``_run_tts`` in openai_compat.py.
     """
     from services.audio_dsp import (
         EFFECT_PRESETS, apply_mastering, normalize_audio,
@@ -602,8 +607,8 @@ def _apply_effect_chain(audio_out, sample_rate, effect_preset, *, skip_mastering
             f"Valid: {list(EFFECT_PRESETS.keys())}"
         )
 
-    if preset == "raw":
-        # Raw: skip all DSP — return raw model output
+    if preset == "raw" or preserve_provider_audio:
+        # Raw/provider-final: skip all DSP and preserve the returned waveform.
         return audio_out
 
     if not skip_mastering:
@@ -1308,6 +1313,7 @@ def _run_backend_inference(
         return _apply_effect_chain(
             audio_out, sr, effect_preset,
             skip_mastering=getattr(backend, "applies_own_mastering", False),
+            preserve_provider_audio=getattr(backend, "preserves_provider_audio", False),
         )
 
     except ValueError as e:
@@ -2126,6 +2132,7 @@ async def generate_speech(
                     )
                     sr = _backend.sample_rate
                     skip = getattr(_backend, "applies_own_mastering", False)
+                    preserve = getattr(_backend, "preserves_provider_audio", False)
                 else:
                     kwargs = {}
                     if t_shift is not None: kwargs["t_shift"] = t_shift
@@ -2144,7 +2151,11 @@ async def generate_speech(
                     )[0]
                     sr = _model.sampling_rate if hasattr(_model, "sampling_rate") else 24000
                     skip = False
-                preview = _apply_effect_chain(raw, sr, effect_preset, skip_mastering=skip)
+                    preserve = False
+                preview = _apply_effect_chain(
+                    raw, sr, effect_preset, skip_mastering=skip,
+                    preserve_provider_audio=preserve,
+                )
                 # The STREAMED copy is provenance-marked by the caller (#1169
                 # mark, moved off this GPU job in #1190): the preview PCM
                 # leaves the app the moment it's yielded, before
@@ -2170,7 +2181,12 @@ async def generate_speech(
                                                      sink=_dropped_sink)
                 skip = (getattr(_backend, "applies_own_mastering", False)
                         if _backend is not None else False)
-                return _apply_effect_chain(audio_out, sr, effect_preset, skip_mastering=skip)
+                preserve = (getattr(_backend, "preserves_provider_audio", False)
+                            if _backend is not None else False)
+                return _apply_effect_chain(
+                    audio_out, sr, effect_preset, skip_mastering=skip,
+                    preserve_provider_audio=preserve,
+                )
             except ValueError:
                 raise
             except Exception as e:

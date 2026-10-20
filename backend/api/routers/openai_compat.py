@@ -587,15 +587,17 @@ def _run_tts(backend, text: str, kw: dict):
     from services.watermark import mark_synthetic
     wav = backend.generate(text, **kw)
     sr = backend.sample_rate
+    preserve = getattr(backend, "preserves_provider_audio", False)
     # Engines that already emit mastered, studio-grade audio (e.g. VoxCPM2's
     # native 48 kHz) opt out of apply_mastering via `applies_own_mastering`.
     # That chain's highpass + Compressor is tuned for VoiceStudio's 24 kHz clone
     # output; applied to a studio engine it adds an audible level pump that
     # degrades the very output we want clean. Loudness normalisation still
     # runs — it's a benign peak scale, not dynamics.
-    if not getattr(backend, "applies_own_mastering", False):
+    if not preserve and not getattr(backend, "applies_own_mastering", False):
         wav = apply_mastering(wav, sample_rate=sr)
-    wav = normalize_audio(wav, target_dBFS=-2.0)
+    if not preserve:
+        wav = normalize_audio(wav, target_dBFS=-2.0)
     # Invisible AudioSeal provenance mark at the tensor stage, before any
     # container encoding (#1169 — this route used to return unmarked audio
     # while /generate marked the same text). Same failure semantics as

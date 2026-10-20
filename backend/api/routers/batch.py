@@ -552,6 +552,9 @@ async def _run_batch_pipeline_leased(job_id: str, job: dict, lease: voice_leases
                         )
                     rendered = []
                     for audio_out in generated:
+                        if getattr(backend, "preserves_provider_audio", False):
+                            rendered.append(audio_out)
+                            continue
                         if not getattr(backend, "applies_own_mastering", False):
                             audio_out = apply_mastering(audio_out, sample_rate=sr)
                         rendered.append(normalize_audio(audio_out, target_dBFS=-2.0))
@@ -617,6 +620,8 @@ async def _run_batch_pipeline_leased(job_id: str, job: dict, lease: voice_leases
                         guidance_scale=2.0, speed=1.0,
                         denoise=True, postprocess_output=_batch_postprocess,
                     )
+                    if getattr(backend, "preserves_provider_audio", False):
+                        return audio_out
                     if not getattr(backend, "applies_own_mastering", False):
                         audio_out = apply_mastering(audio_out, sample_rate=sr)
                     return normalize_audio(audio_out, target_dBFS=-2.0)
