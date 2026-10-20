@@ -190,7 +190,7 @@ export function useFishStory() {
     setCanUndo(false);
     dirty.current = false;
     setSaveState('idle');
-    setDraft((d) => ({ ...EMPTY, settings: d.settings }));
+    setDraft((d) => ({ ...EMPTY, settings: { ...d.settings, request_mode: null } }));
   }, []);
 
   /** Saves render defaults (and the output folder) to Settings; local only. */

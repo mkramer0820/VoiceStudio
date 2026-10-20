@@ -106,7 +106,7 @@ def save_settings(body: dict):
         raise HTTPException(status_code=422, detail=exc.errors(
             include_url=False, include_context=False, include_input=False))
     names = {"default_voice": "reference_id"}
-    skip = {"speed", "pause_ms", "join"}  # story-only options with no saved default
+    skip = {"speed", "request_mode", "pause_ms", "join"}  # story-only options
     for field in parsed.model_fields_set - skip:
         value = getattr(parsed, field)
         if field == "output_dir" and value:
@@ -172,8 +172,11 @@ class _PreviewBody(BaseModel):
 @router.post("/story/preview")
 def preview(body: _PreviewBody):
     """Dry run: the exact requests a render would send, schema-checked. No network, no files."""
-    return _jobs().preview(_draft(body.draft), chunk_ids=body.chunk_ids, limit=body.limit,
-                           draft_id=body.draft_id)
+    try:
+        return _jobs().preview(_draft(body.draft), chunk_ids=body.chunk_ids, limit=body.limit,
+                               draft_id=body.draft_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/story/render")

@@ -143,7 +143,19 @@ export function SettingsPanel({
             )}
           </Field>
         )}
-        <Field label={t('fishStory.join')} hint={lossless ? t('fishStory.join_hint') : t('fishStory.join_unavailable')} inline>
+        <Field
+          label={t('fishStory.join')}
+          hint={
+            lossless
+              ? t(
+                  settings.request_mode === 'multi'
+                    ? 'fishStory.join_hint_multi'
+                    : 'fishStory.join_hint',
+                )
+              : t('fishStory.join_unavailable')
+          }
+          inline
+        >
           {(id) => (
             <Switch
               id={id}
@@ -153,7 +165,14 @@ export function SettingsPanel({
             />
           )}
         </Field>
-        <Field label={t('fishStory.pause')} hint={t('fishStory.pause_hint')}>
+        <Field
+          label={t('fishStory.pause')}
+          hint={t(
+            settings.request_mode === 'multi'
+              ? 'fishStory.pause_hint_multi'
+              : 'fishStory.pause_hint',
+          )}
+        >
           {(id) => (
             <Input
               id={id}
@@ -513,6 +532,38 @@ export function SettingsPanel({
       </Group>
 
       <Group title={t('fishStory.group_requests')}>
+        <Field
+          label={t('fishStory.request_mode')}
+          hint={t(
+            settings.request_mode === 'multi'
+              ? 'fishStory.request_mode_multi_hint'
+              : settings.request_mode === 'single'
+                ? 'fishStory.request_mode_single_hint'
+                : 'fishStory.request_mode_required',
+          )}
+        >
+          {(id) => (
+            <div
+              id={id}
+              role="group"
+              aria-label={t('fishStory.request_mode')}
+              className="grid grid-cols-2 gap-1"
+            >
+              {(['single', 'multi'] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  type="button"
+                  size="sm"
+                  variant={settings.request_mode === mode ? 'secondary' : 'outline'}
+                  aria-pressed={settings.request_mode === mode}
+                  onClick={() => onChange({ request_mode: mode })}
+                >
+                  {t(`fishStory.request_mode_${mode}`)}
+                </Button>
+              ))}
+            </div>
+          )}
+        </Field>
         <Field label={t('fishStory.concurrency')} hint={t('fishStory.concurrency_hint')}>
           {(id) => (
             <Input

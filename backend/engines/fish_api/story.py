@@ -12,7 +12,7 @@ import os
 import re
 import time
 import uuid
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -46,6 +46,7 @@ class StorySettings(BaseModel):
     language: Optional[str] = Field(None, max_length=35, pattern=r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
     max_concurrency: Optional[int] = Field(None, ge=1, le=8)
     default_voice: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    request_mode: Optional[Literal["single", "multi"]] = None
     pause_ms: int = Field(350, ge=0, le=5000)  # silence between chunks in the joined file
     join: bool = True
 
@@ -83,7 +84,10 @@ class TTSRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     text: str = Field(..., min_length=1, max_length=20000)
-    reference_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    reference_id: Optional[
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]
+        | list[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]]
+    ] = None
     format: Literal["wav", "pcm", "mp3", "opus"]
     sample_rate: Optional[int] = Field(None, ge=8000, le=96000)
     mp3_bitrate: Optional[Literal[64, 128, 192]] = None
@@ -194,8 +198,9 @@ def plan(draft: Draft) -> dict:
             continue
         chars += len(text)
         nbytes += len(text.encode("utf-8"))
-        voice = c.voice or default
-        if not c.voice:
+        mapped = draft.cast.get(c.speaker) if c.speaker else None
+        voice = c.voice or mapped or default
+        if not c.voice and not mapped:
             unassigned += 1
         key = voice or "(Fish default)"
         slot = per_voice.setdefault(key, {"chunks": 0, "chars": 0})
@@ -210,7 +215,7 @@ def plan(draft: Draft) -> dict:
         "chunks": len(draft.chunks) - empty, "empty": empty, "chars": chars, "bytes": nbytes,
         "unassigned": unassigned, "voices": per_voice, "warnings": warnings,
         "model": cfg.model, "format": cfg.format, "sample_rate": cfg.sample_rate,
-        "max_concurrency": cfg.max_concurrency,
+        "max_concurrency": cfg.max_concurrency, "request_mode": draft.settings.request_mode,
     }
 
 

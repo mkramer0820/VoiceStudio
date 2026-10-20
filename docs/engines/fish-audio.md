@@ -90,7 +90,11 @@ Submit and confirm** in the review dialog.
    - **Characters:** a capitalised tag that starts a line (`[Shadow]`, `[Snuggle]`) is a character. Map each to a voice and press **Apply characters and voices**; the name is removed from the text and recorded on the line. A tag in the middle of a line starts a new line. Untagged lines stay narration unless you tick *keep the previous character*. Delivery words such as `[Pause]` are never treated as characters, and each tag can be flipped with *Not a character* / *Is a character*.
    - **Delivery tags** (`[slow]`, `[soft]`, `[pause]`, `[emphasis]`…) are kept for Fish by default; remove them or replace them with other tags.
    - **Find and replace** works on plain text across the whole story (include the brackets to change a tag).
-5. **Render settings** (left panel): format (WAV/PCM/MP3/Opus), sample rate, MP3 bitrate, speed, volume, language, model, latency mode, text and loudness normalization, temperature, top-p, chunk length, default voice, simultaneous requests, and the pause used in the joined file. Empty fields follow Settings/env.
+5. **Render settings** (left panel): first choose a request mode; there is no automatic or preselected mode.
+   - **Small single-speaker calls:** sends one ordinary request per story line with a string `reference_id`. VoiceStudio keeps every response and stitches the joined WAV locally with the configured pause. This is the resumable, line-by-line workflow.
+   - **Large multi-speaker calls:** combines as much of the story as Fish's 20,000-character request limit permits. Character IDs are mapped in first-appearance order to `<|speaker:N|>` tags and the corresponding voice IDs are sent as a `reference_id` array. Fish performs the speaker transitions and stitching inside each response. If only one mapped speaker is present, the same large-call mode uses Fish's single-speaker schema (one string ID and no speaker tags). A one-response WAV is copied unchanged to `story.wav`; VoiceStudio only stitches locally when the story needs multiple large calls.
+   - Multi-speaker calls require every character and narrator in a mixed-speaker request to resolve to a voice. Resolution order is a line's explicit voice, its saved character mapping, then the default narrator voice. Preview and render stop before contacting Fish if a voice is missing.
+   Other settings include format (WAV/PCM/MP3/Opus), sample rate, MP3 bitrate, speed, volume, language, model, latency mode, text and loudness normalization, temperature, top-p, chunk length, default voice, simultaneous requests, and the pause used when VoiceStudio joins responses. Empty fields follow Settings/env.
 6. **Preview requests** is a dry run: it shows the exact JSON bodies a render would send (with the endpoint, the `model` header, the planned file name and the output folder), checks each one against the request schema, and offers the first request as a `curl` command. It sends nothing, creates no files and never shows your key. A render also runs the same check and refuses to start if a line would be rejected.
 7. **Review & submit to Fish** shows lines, characters, model, format and per-voice counts. **Check balance** shows your remaining credit (explicit request).
 
@@ -100,19 +104,20 @@ Each render gets its own folder, so nothing is ever overwritten:
 
 ```text
 <output folder>/<story title>/run-<NNN>_<YYYYMMDD-HHMMSS>_<job id>/
-  001_Shadow_sun_2.wav …   one untouched Fish response per line (speaker + voice in the name)
-  story.wav                joined file (WAV/PCM; mixed sample rates are resampled to the most common one)
+  001_Shadow_sun_2.wav …   one untouched Fish response per API call
+  001-020_multi_3-speakers.wav  example large multi-speaker response
+  story.wav                one Fish WAV copied unchanged, or multiple responses joined locally
   job.json                 live state; survives closing the app
   story.json               the submitted story (used by Resume)
   settings.json            the options used (never the key)
-  requests.jsonl           one record per line: exact request, HTTP status, attempts, timing, size, SHA-256, audio duration and sample rate
-  run.log                  readable event log (started, each line, retries, warnings, finish)
+  requests.jsonl           one record per API call: covered lines, mode, exact request, HTTP status, attempts, timing, size, SHA-256 and audio details
+  run.log                  readable event log (started, each request, retries, warnings, finish)
   manifest.json            final summary with the text, speaker and voice for every line
 ```
 
 - **Output folder:** the default is `<data dir>/fish_stories/renders`. Set another absolute path in the board's **Output folder** field (or `FISH_STORY_OUTPUT_DIR`). The folder is created and checked for write access when you save it. Each story gets a readable folder named after its title (`the-long-night`; a second story with the same title becomes `the-long-night-2`) and runs are numbered `run-001`, `run-002`… A renamed story keeps using its own folder.
 - **Render jobs:** the **Render jobs** button lists every run, newest first, with status, progress, model and format, minutes of audio, folder, and the log. A render cut off by closing the app shows as *Interrupted*.
-- **Resume:** *Resume N unfinished* (after a confirmation) re-sends only the lines that did not finish, into the same folder, and rebuilds the joined file. Running out of credits stops the job and keeps what finished, so top up and resume.
+- **Resume:** *Resume N unfinished* (after a confirmation) re-sends only unfinished lines, grouping them again according to the explicitly selected request mode, and rebuilds the joined file. Running out of credits stops the job and keeps what finished, so top up and resume.
 - **Warnings:** if Fish returns a different sample rate than requested, the job and log say so.
 - **Defaults:** **Save these as my defaults** stores the render options in Settings for every new story. Environment variables still win.
 

@@ -44,7 +44,7 @@ def _draft(title="The Long Night", **settings) -> story.Draft:
             story.Chunk(id="c", text="Run!", speaker="Snuggle", voice="vsn"),
         ],
         voices={"vsh": "sun_2", "vsn": "sniggle", "vnar": "Narrator"},
-        settings=story.StorySettings(default_voice="vnar", **settings),
+        settings=story.StorySettings(**{"request_mode": "single", "default_voice": "vnar", **settings}),
     )
 
 

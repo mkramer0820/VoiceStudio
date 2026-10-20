@@ -62,6 +62,7 @@ const PLAN = {
   format: 'wav',
   sample_rate: 44100,
   max_concurrency: 2,
+  request_mode: 'single',
 };
 
 const calls = () => mock.api.mock.calls.map(([path, init]) => [path, init?.method ?? 'GET']);
@@ -81,6 +82,7 @@ beforeEach(() => {
       return Promise.resolve({
         ok: true,
         total: 20,
+        total_requests: 20,
         invalid: 0,
         shown: 1,
         endpoint: 'https://api.fish.audio/v1/tts',
@@ -90,8 +92,20 @@ beforeEach(() => {
         first_invalid: null,
         requests: [
           {
-            index: 1, id: 'x', speaker: null, voice: 'pub1', voice_name: 'Deep Narrator', file: '001_narration_Deep.wav',
-            chars: 14, body: { text: 'Line number 1.', format: 'wav' }, issues: [], notes: [],
+            index: 1,
+            indices: [1],
+            id: 'x',
+            ids: ['x'],
+            mode: 'single',
+            speaker: null,
+            speakers: ['narrator'],
+            voice: 'pub1',
+            voice_name: 'Deep Narrator',
+            file: '001_narration_Deep.wav',
+            chars: 14,
+            body: { text: 'Line number 1.', format: 'wav' },
+            issues: [],
+            notes: [],
           },
         ],
       });
@@ -175,14 +189,22 @@ it('shift-click selects a range between two rows', async () => {
 
 it('submits only after the review dialog is confirmed, with confirm:true', async () => {
   await loadStory();
-  fireEvent.click(screen.getByRole('button', { name: 'fishStory.review_submit' }));
+  const review = screen.getByRole('button', { name: 'fishStory.review_submit' });
+  expect(review).toBeDisabled();
+  expect(screen.getByRole('alert')).toHaveTextContent('fishStory.request_mode_required');
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.request_mode_single' }));
+  expect(review).toBeEnabled();
+  fireEvent.click(review);
   await waitFor(() => expect(calls()).toContainEqual(['/api/fish/story/plan', 'POST']));
   expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 
   fireEvent.click(await screen.findByRole('button', { name: 'fishStory.submit_to_fish' }));
   await waitFor(() => expect(calls()).toContainEqual(['/api/fish/story/render', 'POST']));
   const [, init] = mock.api.mock.calls.find(([p]) => p === '/api/fish/story/render')!;
-  expect(JSON.parse(init.body)).toMatchObject({ confirm: true });
+  expect(JSON.parse(init.body)).toMatchObject({
+    confirm: true,
+    draft: { settings: { request_mode: 'single' } },
+  });
   expect(await screen.findByRole('progressbar')).toBeInTheDocument();
 });
 
@@ -344,11 +366,13 @@ it('adds a voice by id or link, and from a public library search, without a rend
 
 it('previews the raw requests with a schema verdict and sends nothing to Fish', async () => {
   await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.request_mode_multi' }));
   fireEvent.click(screen.getByRole('button', { name: /fishStory\.preview_button/ }));
   await screen.findByText(/fishStory\.preview_ok/);
   expect(screen.getByLabelText(/fishStory\.preview_body/)).toHaveTextContent('"format": "wav"');
   expect(screen.getAllByText(/POST https:\/\/api\.fish\.audio\/v1\/tts/).length).toBeGreaterThan(0);
   const [, init] = mock.api.mock.calls.find(([p]) => p === '/api/fish/story/preview')!;
   expect(JSON.parse(init.body).draft.chunks).toHaveLength(20);
+  expect(JSON.parse(init.body).draft.settings.request_mode).toBe('multi');
   expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 });

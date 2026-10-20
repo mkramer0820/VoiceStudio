@@ -35,7 +35,7 @@ def _draft(n=4, **settings) -> story.Draft:
         title="t",
         chunks=[story.Chunk(id=f"c{i}", text=f"line {i}", voice="vsun" if i < 2 else None) for i in range(n)],
         voices={"vsun": "sun_2"},
-        settings=story.StorySettings(**settings),
+        settings=story.StorySettings(**{"request_mode": "single", **settings}),
     )
 
 
@@ -110,6 +110,127 @@ def test_render_uses_each_chunks_voice_and_writes_masters_and_join(monkeypatch):
     assert os.path.exists(os.path.join(job["out_dir"], "manifest.json"))
 
 
+def test_multi_mode_maps_speaker_ids_and_lets_fish_stitch_the_story(monkeypatch):
+    seen = []
+    response = _wav(seconds=0.3)
+
+    def fake(body, **_):
+        seen.append(body)
+        return response
+
+    monkeypatch.setattr(client, "synthesize", fake)
+    draft = story.Draft(
+        title="Dialogue",
+        chunks=[
+            story.Chunk(id="a", text="Hello.", speaker="Alice"),
+            story.Chunk(id="b", text="Hi.", speaker="Bob"),
+            story.Chunk(id="c", text="Ready?", speaker="Alice"),
+        ],
+        voices={"va": "Alice voice", "vb": "Bob voice"},
+        cast={"Alice": "va", "Bob": "vb"},
+        settings=story.StorySettings(request_mode="multi"),
+    )
+
+    preview = story_jobs.preview(draft)
+    assert preview["total"] == 3 and preview["total_requests"] == 1
+    assert preview["multi_requests"] == 1 and preview["single_requests"] == 0
+    assert preview["requests"][0]["body"]["reference_id"] == ["va", "vb"]
+
+    job = _wait(story_jobs.start_render(draft)["id"])
+
+    assert len(seen) == 1
+    assert seen[0]["reference_id"] == ["va", "vb"]
+    assert seen[0]["text"] == (
+        "<|speaker:0|>Hello.\n<|speaker:1|>Hi.\n<|speaker:0|>Ready?"
+    )
+    assert job["done"] == 3 and {row["request_mode"] for row in job["chunks"]} == {"multi"}
+    assert len({row["file"] for row in job["chunks"]}) == 1
+    import os
+
+    assert open(os.path.join(job["out_dir"], "story.wav"), "rb").read() == response
+
+
+def test_multi_mode_uses_large_single_speaker_schema_for_one_mapped_speaker(monkeypatch):
+    seen = []
+    monkeypatch.setattr(client, "synthesize", lambda body, **_: seen.append(body) or _wav())
+    draft = story.Draft(
+        chunks=[
+            story.Chunk(id="a", text="First.", speaker="Alice"),
+            story.Chunk(id="b", text="Second.", speaker="Alice"),
+        ],
+        cast={"Alice": "va"},
+        settings=story.StorySettings(request_mode="multi"),
+    )
+
+    job = _wait(story_jobs.start_render(draft)["id"])
+
+    assert job["done"] == 2 and len(seen) == 1
+    assert seen[0]["reference_id"] == "va"
+    assert seen[0]["text"] == "First.\nSecond."
+    assert "<|speaker:" not in seen[0]["text"]
+
+
+def test_multi_mode_splits_only_at_the_api_limit_then_joins_large_responses(monkeypatch):
+    seen = []
+    monkeypatch.setattr(client, "synthesize", lambda body, **_: seen.append(body) or _wav())
+    draft = story.Draft(
+        chunks=[
+            story.Chunk(id="a", text="A" * 9000, speaker="Alice"),
+            story.Chunk(id="b", text="B" * 9000, speaker="Bob"),
+            story.Chunk(id="c", text="C" * 9000, speaker="Alice"),
+        ],
+        cast={"Alice": "va", "Bob": "vb"},
+        settings=story.StorySettings(request_mode="multi", pause_ms=0, max_concurrency=1),
+    )
+
+    job = _wait(story_jobs.start_render(draft)["id"])
+
+    assert len(seen) == 2
+    assert seen[0]["reference_id"] == ["va", "vb"]
+    assert seen[1]["reference_id"] == "va"
+    assert len({row["file"] for row in job["chunks"]}) == 2
+    import os
+
+    data, rate = sf.read(os.path.join(job["out_dir"], "story.wav"))
+    assert rate == 44100 and len(data) == pytest.approx(2 * 0.1 * rate, rel=0.02)
+
+
+def test_multi_mode_requires_every_speaker_to_resolve_to_a_voice(monkeypatch):
+    monkeypatch.setattr(
+        client, "synthesize",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("request was sent")),
+    )
+    draft = story.Draft(
+        chunks=[
+            story.Chunk(id="a", text="Hello.", speaker="Alice"),
+            story.Chunk(id="b", text="Hi.", speaker="Bob"),
+        ],
+        cast={"Alice": "va"},
+        settings=story.StorySettings(request_mode="multi"),
+    )
+
+    with pytest.raises(ValueError, match="Line 2 needs a voice"):
+        story_jobs.start_render(draft)
+
+
+def test_single_mode_keeps_one_api_call_per_line(monkeypatch):
+    seen = []
+    monkeypatch.setattr(client, "synthesize", lambda body, **_: seen.append(body) or _wav())
+    draft = story.Draft(
+        chunks=[
+            story.Chunk(id="a", text="Hello.", speaker="Alice"),
+            story.Chunk(id="b", text="Hi.", speaker="Bob"),
+        ],
+        cast={"Alice": "va", "Bob": "vb"},
+        settings=story.StorySettings(request_mode="single", max_concurrency=1),
+    )
+
+    job = _wait(story_jobs.start_render(draft)["id"])
+
+    assert job["done"] == 2 and [body["reference_id"] for body in seen] == ["va", "vb"]
+    assert all("<|speaker:" not in body["text"] for body in seen)
+
+
 def test_render_never_exceeds_the_concurrency_cap(monkeypatch):
     live = peak = 0
     lock = threading.Lock()
@@ -173,6 +294,16 @@ def test_render_needs_a_key_and_something_to_render(monkeypatch):
         story_jobs.start_render(_draft(1))
 
 
+def test_render_requires_an_explicit_request_mode(monkeypatch):
+    monkeypatch.setattr(
+        client, "synthesize",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("request was sent")),
+    )
+    draft = story.Draft(chunks=[story.Chunk(id="a", text="Hello", voice="v")])
+    with pytest.raises(ValueError, match="Choose Single-speaker calls or Multi-speaker calls"):
+        story_jobs.start_render(draft)
+
+
 def test_get_balance_parses_the_wallet_response():
     import httpx
 
@@ -208,6 +339,7 @@ def test_manifest_records_the_speaker_for_each_line(monkeypatch):
     draft = story.Draft(
         chunks=[story.Chunk(id="a", text="Hello", speaker="Shadow", voice="vsh")],
         voices={"vsh": "sun_2"},
+        settings=story.StorySettings(request_mode="single"),
     )
     job = _wait(story_jobs.start_render(draft)["id"])
     with open(os.path.join(job["out_dir"], "manifest.json"), encoding="utf-8") as fh:

@@ -75,7 +75,7 @@ def _acquire_gate(size: int) -> threading.BoundedSemaphore:
         return _gate
 
 
-def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str] = None,
+def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str | list[str]] = None,
                speed: float = 1.0, language: Optional[str] = None) -> dict:
     body: dict = {
         "text": text,
@@ -87,7 +87,7 @@ def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str] = None
         body["sample_rate"] = cfg.sample_rate
     if cfg.format == "mp3":
         body["mp3_bitrate"] = cfg.mp3_bitrate
-    rid = reference_id or cfg.reference_id
+    rid = reference_id if reference_id is not None else cfg.reference_id
     if rid:
         body["reference_id"] = rid
     if cfg.temperature is not None:

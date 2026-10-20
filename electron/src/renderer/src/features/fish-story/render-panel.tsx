@@ -28,6 +28,7 @@ interface PlanResult {
   format: string;
   sample_rate: number;
   max_concurrency: number;
+  request_mode: 'single' | 'multi' | null;
 }
 
 interface JobChunk {
@@ -151,7 +152,7 @@ export function RenderPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button
-          disabled={disabled || running}
+          disabled={disabled || running || !draft.settings.request_mode}
           onClick={() => {
             setRetryIds(null);
             setOpen(true);
@@ -160,7 +161,11 @@ export function RenderPanel({
           <SendIcon />
           {t('fishStory.review_submit')}
         </Button>
-        <Button variant="outline" disabled={disabled} onClick={() => setPreviewOpen(true)}>
+        <Button
+          variant="outline"
+          disabled={disabled || !draft.settings.request_mode}
+          onClick={() => setPreviewOpen(true)}
+        >
           <EyeIcon />
           {t('fishStory.preview_button')}
         </Button>
@@ -170,6 +175,12 @@ export function RenderPanel({
           </span>
         )}
       </div>
+
+      {!draft.settings.request_mode && (
+        <p role="alert" className="text-xs text-amber-500">
+          {t('fishStory.request_mode_required')}
+        </p>
+      )}
 
       {job && (
         <section
@@ -270,6 +281,10 @@ export function RenderPanel({
                 </dd>
                 <dt className="text-muted-foreground">{t('fishStory.plan_concurrency')}</dt>
                 <dd className="tabular-nums">{plan.max_concurrency}</dd>
+                <dt className="text-muted-foreground">{t('fishStory.request_mode')}</dt>
+                <dd>
+                  {plan.request_mode ? t(`fishStory.request_mode_${plan.request_mode}`) : '—'}
+                </dd>
               </dl>
               <ul className="space-y-0.5 text-xs">
                 {Object.entries(plan.voices).map(([voice, v]) => (

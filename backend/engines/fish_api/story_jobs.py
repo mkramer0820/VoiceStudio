@@ -3,12 +3,12 @@
 Each render gets its own run folder::
 
     <output root>/<story title>/run-<NNN>_<YYYYMMDD-HHMMSS>_<job id>/
-        001_Shadow_sun_2.wav ...   one untouched Fish response per line
+        001_Shadow_sun_2.wav ...   one untouched Fish response per request
         story.wav                  joined file (WAV/PCM only)
         job.json                   live state: survives restarts, drives the Jobs list
         story.json                 the submitted draft (so a run can be resumed)
         settings.json              the effective options used (never the key)
-        requests.jsonl             one record per line: exact request, timing, hash
+        requests.jsonl             one record per API call: exact request, timing, hash
         run.log                    human-readable event log
         manifest.json              final summary
 
@@ -349,6 +349,115 @@ def _items(draft: Draft, chunk_ids: Optional[list[str]]) -> list[tuple[int, Chun
             if c.text.strip() and (wanted is None or c.id in wanted)]
 
 
+@dataclasses.dataclass(frozen=True)
+class _RenderRequest:
+    """One Fish call and the story lines whose audio it returns."""
+
+    items: tuple[tuple[int, Chunk], ...]
+    body: dict
+    mode: str
+    voices: tuple[Optional[str], ...]
+    speakers: tuple[str, ...]
+
+
+def _voice_for(chunk: Chunk, draft: Draft, default: Optional[str]) -> Optional[str]:
+    """Explicit line voice, then saved cast mapping, then narrator/default."""
+    return chunk.voice or (draft.cast.get(chunk.speaker) if chunk.speaker else None) or default
+
+
+def _speaker_key(chunk: Chunk, voice: Optional[str]) -> str:
+    # Tagged character names are the stable speaker ids. Untagged lines are
+    # narration unless they carry a deliberate per-line voice override.
+    return chunk.speaker or (f"voice:{voice}" if chunk.voice and voice else "narrator")
+
+
+def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishConfig,
+                       default: Optional[str]) -> _RenderRequest:
+    voices = tuple(_voice_for(chunk, draft, default) for _, chunk in items)
+    speakers = tuple(_speaker_key(chunk, voice) for (_, chunk), voice in zip(items, voices))
+    identities: list[tuple[str, Optional[str]]] = []
+    for speaker, voice in zip(speakers, voices):
+        identity = (speaker, voice)
+        if identity not in identities:
+            identities.append(identity)
+
+    if len(identities) == 1:
+        text = "\n".join(chunk.text.strip() for _, chunk in items)
+        body = client.build_body(text, cfg, reference_id=voices[0], speed=draft.settings.speed)
+        return _RenderRequest(tuple(items), body, "single", voices, speakers)
+
+    missing = next((index for (index, _), voice in zip(items, voices) if not voice), None)
+    if missing is not None:
+        raise ValueError(
+            f"Line {missing} needs a voice before it can be included in a multi-speaker call. "
+            "Assign a character voice or a default narrator voice."
+        )
+    speaker_index = {identity: i for i, identity in enumerate(identities)}
+    tagged = "\n".join(
+        f"<|speaker:{speaker_index[(speaker, voice)]}|>{chunk.text.strip()}"
+        for (_, chunk), speaker, voice in zip(items, speakers, voices)
+    )
+    reference_ids = [voice for _, voice in identities if voice is not None]
+    body = client.build_body(tagged, cfg, reference_id=reference_ids, speed=draft.settings.speed)
+    return _RenderRequest(tuple(items), body, "multi", voices, speakers)
+
+
+def _render_requests(draft: Draft, cfg: FishConfig,
+                     items: list[tuple[int, Chunk]], default: Optional[str]) -> list[_RenderRequest]:
+    """Compile small local-stitch calls or large provider-stitched calls."""
+    if draft.settings.request_mode is None:
+        raise ValueError(
+            "Choose Single-speaker calls or Multi-speaker calls before previewing or rendering."
+        )
+    if draft.settings.request_mode == "single":
+        return [_request_for_group([item], draft, cfg, default) for item in items]
+
+    requests: list[_RenderRequest] = []
+    pending: list[tuple[int, Chunk]] = []
+    for item in items:
+        combined = [*pending, item]
+        # Reserve enough room for one speaker tag and newline per line before
+        # compiling the group. This can split slightly early, but never creates
+        # a body over Fish's 20,000-character text limit.
+        tagged_length = sum(len(chunk.text.strip()) + 20 for _, chunk in combined)
+        if pending and tagged_length > 20000:
+            requests.append(_request_for_group(pending, draft, cfg, default))
+            pending = []
+            combined = [item]
+        candidate = _request_for_group(combined, draft, cfg, default)
+        if len(candidate.body["text"]) <= 20000:
+            pending.append(item)
+            continue
+        one = _request_for_group([item], draft, cfg, default)
+        if len(one.body["text"]) > 20000:
+            raise ValueError(f"Line {item[0]} exceeds Fish Audio's 20,000-character request limit.")
+        pending.append(item)
+    if pending:
+        requests.append(_request_for_group(pending, draft, cfg, default))
+    return requests
+
+
+def _request_id(request: _RenderRequest) -> str:
+    first = request.items[0][1].id
+    last = request.items[-1][1].id
+    return first if len(request.items) == 1 else f"{first}..{last}"
+
+
+def _request_audio_name(request: _RenderRequest, draft: Draft, ext: str) -> str:
+    first, last = request.items[0][0], request.items[-1][0]
+    if len(request.items) == 1:
+        chunk = request.items[0][1]
+        voice = request.voices[0]
+        return _audio_name(first, chunk.speaker, draft.voices.get(voice or "", voice), ext)
+    span = f"{first:03d}-{last:03d}"
+    if request.mode == "multi":
+        count = len(dict.fromkeys(zip(request.speakers, request.voices)))
+        return f"{span}_multi_{count}-speakers.{ext}"
+    voice = request.voices[0]
+    label = request.speakers[0] if request.speakers[0] != "narrator" else "narration"
+    return f"{span}_{_safe(label, 'narration')}_{_safe(draft.voices.get(voice or '', voice) or 'default', 'default')}.{ext}"
+
+
 def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int = 5,
             draft_id: Optional[str] = None) -> dict:
     """Dry run: the exact requests a render would send, checked against the schema.
@@ -360,15 +469,23 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
     default = draft.settings.default_voice or cfg.reference_id
     ext = _EXT.get(cfg.format, "bin")
     rows, problems = [], 0
-    for index, chunk in _items(draft, chunk_ids):
-        voice = chunk.voice or default
-        body = client.build_body(chunk.text.strip(), cfg, reference_id=voice, speed=draft.settings.speed)
+    requests = _render_requests(draft, cfg, _items(draft, chunk_ids), default)
+    for request in requests:
+        index, chunk = request.items[0]
+        body = request.body
         issues = story_check(body)
-        notes = [] if voice else ["No voice set: Fish will use its default voice."]
-        problems += bool(issues)
-        rows.append({"index": index, "id": chunk.id, "speaker": chunk.speaker, "voice": voice,
-                     "voice_name": draft.voices.get(voice or "", voice),
-                     "file": _audio_name(index, chunk.speaker, draft.voices.get(voice or "", voice), ext),
+        notes = []
+        if not any(request.voices):
+            notes.append("No voice set: Fish will use its default voice.")
+        problems += len(request.items) if issues else 0
+        rows.append({"index": index, "indices": [i for i, _ in request.items],
+                     "id": _request_id(request), "ids": [c.id for _, c in request.items],
+                     "mode": request.mode,
+                     "speaker": chunk.speaker, "speakers": list(request.speakers),
+                     "voice": request.voices[0] if request.mode == "single" else list(request.voices),
+                     "voice_name": (draft.voices.get(request.voices[0] or "", request.voices[0])
+                                    if request.mode == "single" else None),
+                     "file": _request_audio_name(request, draft, ext),
                      "chars": len(body["text"]), "body": body, "issues": issues, "notes": notes})
     try:
         root = default_output_root() if not cfg.output_dir else os.path.normpath(cfg.output_dir)
@@ -389,12 +506,17 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
             "-d '" + json.dumps(first["body"], ensure_ascii=False).replace("'", "'\\''") + "'",
             "--output line.wav",
         ])
-    return {"ok": bool(rows) and problems == 0, "total": len(rows), "invalid": problems,
+    line_count = sum(len(request.items) for request in requests)
+    return {"ok": bool(rows) and problems == 0, "total": line_count,
+            "total_requests": len(rows), "invalid": problems,
             "shown": len(shown), "endpoint": cfg.base_url + "/v1/tts",
             "headers": {"Authorization": "Bearer <hidden>", "model": cfg.model,
                         "Content-Type": "application/json"},
             "folder": folder, "requests": shown, "curl": curl,
-            "first_invalid": next((r["index"] for r in rows if r["issues"]), None)}
+            "first_invalid": next((r["index"] for r in rows if r["issues"]), None),
+            "lines": line_count,
+            "single_requests": sum(request.mode == "single" for request in requests),
+            "multi_requests": sum(request.mode == "multi" for request in requests)}
 
 
 def _register(job: dict) -> None:
@@ -415,11 +537,11 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
     items = _items(draft, chunk_ids)
     if not items:
         raise ValueError("Nothing to render: every chunk is empty or unselected.")
-    for index, chunk in items:  # the same schema check the preview shows, before anything is sent
-        bad = story_check(client.build_body(chunk.text.strip(), cfg, reference_id=chunk.voice or default,
-                                            speed=draft.settings.speed))
+    requests = _render_requests(draft, cfg, items, default)
+    for request in requests:  # the same schema check the preview shows, before anything is sent
+        bad = story_check(request.body)
         if bad:
-            raise ValueError(f"Line {index} would be rejected: {bad[0]}")
+            raise ValueError(f"Line {request.items[0][0]} would be rejected: {bad[0]}")
 
     root = output_root(cfg)
     job_id = uuid.uuid4().hex[:12]
@@ -427,22 +549,31 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
     _claim_story_dir(story_dir, draft_id)
     run_dir = os.path.join(story_dir, _next_run_name(story_dir, job_id))
     os.makedirs(run_dir, exist_ok=True)
-    job = _new_job(run_dir, draft, draft_id, cfg,
-                   [_chunk_entry(i, c, default, draft.voices) for i, c in items], job_id, time.time())
+    entries = [_chunk_entry(i, c, _voice_for(c, draft, default), draft.voices) for i, c in items]
+    by_id = {entry["id"]: entry for entry in entries}
+    for request in requests:
+        request_id = _request_id(request)
+        indices = [index for index, _ in request.items]
+        for _, chunk in request.items:
+            by_id[chunk.id].update(request_id=request_id, request_mode=request.mode,
+                                   request_indices=indices)
+    job = _new_job(run_dir, draft, draft_id, cfg, entries, job_id, time.time())
     try:
         _write_json(os.path.join(run_dir, STORY_FILE), {"draft_id": draft_id, "draft": draft.model_dump()})
         _write_json(os.path.join(run_dir, SETTINGS_FILE), {
             **{k: v for k, v in dataclasses.asdict(cfg).items() if k != "base_url"},
             "speed": draft.settings.speed, "pause_ms": draft.settings.pause_ms,
-            "join": draft.settings.join, "default_voice": default,
+            "join": draft.settings.join, "request_mode": draft.settings.request_mode,
+            "default_voice": default,
         })
     except OSError as exc:
         raise ValueError(f"Cannot write to the output folder ({type(exc).__name__}).") from exc
     _register(job)
-    _log(job, "INFO", f"Started: {len(items)} lines, model {cfg.model}, {cfg.format} "
+    _log(job, "INFO", f"Started: {len(items)} lines in {len(requests)} {draft.settings.request_mode} "
+                      f"request(s), model {cfg.model}, {cfg.format} "
                       f"{cfg.sample_rate} Hz, {cfg.max_concurrency} at a time.")
     _persist(job)
-    threading.Thread(target=_run, args=(job, items, draft, cfg, api_key, default),
+    threading.Thread(target=_run, args=(job, requests, draft, cfg, api_key),
                      name=f"fish-story-{job_id}", daemon=True).start()
     return _view(job)
 
@@ -476,47 +607,68 @@ def resume_render(job_id: str) -> dict:
     job["audio_seconds"] = float(data.get("audio_seconds") or 0.0)
     _register(job)
     items = [(c["index"], by_id[c["id"]]) for c in pending]
-    _log(job, "INFO", f"Resumed: {len(items)} lines left.")
+    requests = _render_requests(draft, cfg, items, default)
+    pending_by_id = {entry["id"]: entry for entry in pending}
+    for request in requests:
+        request_id = _request_id(request)
+        indices = [index for index, _ in request.items]
+        for _, chunk in request.items:
+            pending_by_id[chunk.id].update(request_id=request_id, request_mode=request.mode,
+                                           request_indices=indices)
+    _log(job, "INFO", f"Resumed: {len(items)} lines left in {len(requests)} request(s).")
     _persist(job)
-    threading.Thread(target=_run, args=(job, items, draft, cfg, api_key, default),
+    threading.Thread(target=_run, args=(job, requests, draft, cfg, api_key),
                      name=f"fish-story-{job_id}", daemon=True).start()
     return _view(job)
 
 
-def _run(job: dict, items: list, draft: Draft, cfg: FishConfig, api_key: str,
-         default: Optional[str]) -> None:
+def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfig,
+         api_key: str) -> None:
     fatal: dict = {}
     slots = {entry["id"]: n for n, entry in enumerate(job["chunks"])}
     ext = _EXT.get(cfg.format, "bin")
 
-    def one(index: int, chunk: Chunk) -> None:
-        slot = slots[chunk.id]
-        entry = job["chunks"][slot]
+    def one(request: _RenderRequest) -> None:
+        entries = [job["chunks"][slots[chunk.id]] for _, chunk in request.items]
+        indices = [index for index, _ in request.items]
+        chunks = [chunk for _, chunk in request.items]
+        label = f"#{indices[0]}" if len(indices) == 1 else f"#{indices[0]}-{indices[-1]}"
         if job["cancel"].is_set() or fatal:
             with job["lock"]:
-                entry["status"] = "skipped"
-            _log(job, "INFO", f"#{index} skipped.")
+                for entry in entries:
+                    entry["status"] = "skipped"
+            _log(job, "INFO", f"{label} skipped.")
             return
-        voice = chunk.voice or default
         with job["lock"]:
-            entry["status"] = "running"
+            for entry in entries:
+                entry.update(status="running", request_id=_request_id(request),
+                             request_mode=request.mode, request_indices=indices)
         meta: dict = {}
-        body = client.build_body(chunk.text.strip(), cfg, reference_id=voice, speed=draft.settings.speed)
-        record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "index": index, "id": chunk.id,
-                  "speaker": chunk.speaker, "voice": voice, "request": body}
+        body = request.body
+        record = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "index": indices[0], "indices": indices,
+            "id": _request_id(request), "ids": [chunk.id for chunk in chunks],
+            "mode": request.mode,
+            "speaker": chunks[0].speaker if len(chunks) == 1 else None,
+            "speakers": list(request.speakers),
+            "voice": request.voices[0] if request.mode == "single" else list(request.voices),
+            "request": body,
+        }
         try:
             raw = client.synthesize(body, api_key=api_key, cfg=cfg, meta=meta)
-            name = _audio_name(index, chunk.speaker, entry["voice_name"], ext)
+            name = _request_audio_name(request, draft, ext)
             with open(os.path.join(job["out_dir"], name), "wb") as fh:
                 fh.write(raw)
             audio = _audio_info(raw, cfg.format, cfg)
             digest = hashlib.sha256(raw).hexdigest()
             with job["lock"]:
-                entry.update(status="done", file=name, bytes=len(raw), sha256=digest, error=None,
-                             attempts=meta.get("attempts", 1), elapsed_ms=meta.get("elapsed_ms", 0),
-                             duration_s=audio["duration_s"] if audio else None,
-                             sample_rate=audio["sample_rate"] if audio else None)
-                job["done"] += 1
+                for entry in entries:
+                    entry.update(status="done", file=name, bytes=len(raw), sha256=digest, error=None,
+                                 attempts=meta.get("attempts", 1), elapsed_ms=meta.get("elapsed_ms", 0),
+                                 duration_s=audio["duration_s"] if audio else None,
+                                 sample_rate=audio["sample_rate"] if audio else None)
+                job["done"] += len(entries)
                 if audio:
                     job["audio_seconds"] = round(job["audio_seconds"] + audio["duration_s"], 3)
                     if cfg.format in ("wav", "pcm") and audio["sample_rate"] != cfg.sample_rate:
@@ -528,31 +680,34 @@ def _run(job: dict, items: list, draft: Draft, cfg: FishConfig, api_key: str,
             record.update(status=meta.get("status", 200), attempts=meta.get("attempts", 1),
                           elapsed_ms=meta.get("elapsed_ms", 0), bytes=len(raw), file=name,
                           sha256=digest, audio=audio, content_type=meta.get("content_type"))
-            _log(job, "INFO", f"#{index} ok: {name} ({len(raw)} bytes, {meta.get('elapsed_ms', 0)} ms, "
+            _log(job, "INFO", f"{label} ok: {name} [{request.mode}] "
+                              f"({len(raw)} bytes, {meta.get('elapsed_ms', 0)} ms, "
                               f"{meta.get('attempts', 1)} attempt(s))")
         except client.FishAPIError as exc:
             if exc.status in _FATAL:
                 fatal.update(status=exc.status, message=exc.message)
             with job["lock"]:
-                entry.update(status="failed", error=exc.message, attempts=meta.get("attempts", 0),
-                             elapsed_ms=meta.get("elapsed_ms", 0))
-                job["failed"] += 1
+                for entry in entries:
+                    entry.update(status="failed", error=exc.message, attempts=meta.get("attempts", 0),
+                                 elapsed_ms=meta.get("elapsed_ms", 0))
+                job["failed"] += len(entries)
             record.update(status=exc.status, attempts=meta.get("attempts", 0),
                           elapsed_ms=meta.get("elapsed_ms", 0), error=exc.message)
-            _log(job, "ERROR", f"#{index} failed (HTTP {exc.status}): {exc.message}")
-        except Exception as exc:  # noqa: BLE001 — one line must not kill the batch
+            _log(job, "ERROR", f"{label} failed (HTTP {exc.status}): {exc.message}")
+        except Exception as exc:  # noqa: BLE001 — one request must not kill the batch
             with job["lock"]:
-                entry.update(status="failed", error=type(exc).__name__)
-                job["failed"] += 1
+                for entry in entries:
+                    entry.update(status="failed", error=type(exc).__name__)
+                job["failed"] += len(entries)
             record.update(status=0, error=type(exc).__name__)
-            _log(job, "ERROR", f"#{index} failed: {type(exc).__name__}")
+            _log(job, "ERROR", f"{label} failed: {type(exc).__name__}")
         _record(job, record)
         _persist(job)
 
     try:
         with ThreadPoolExecutor(max_workers=cfg.max_concurrency) as pool:
-            for index, chunk in items:
-                pool.submit(one, index, chunk)
+            for request in requests:
+                pool.submit(one, request)
         joined = None
         if draft.settings.join and job["done"] and not job["cancel"].is_set():
             joined = _join(job, draft, cfg)
@@ -614,9 +769,13 @@ def _join(job: dict, draft: Draft, cfg: FishConfig) -> Optional[str]:
         from collections import Counter
 
         clips = []
+        seen_files: set[str] = set()
         for entry in sorted(job["chunks"], key=lambda c: c["index"]):
             if entry["status"] != "done":
                 continue
+            if not entry.get("file") or entry["file"] in seen_files:
+                continue
+            seen_files.add(entry["file"])
             path = os.path.join(job["out_dir"], entry["file"])
             if cfg.format == "pcm":
                 with open(path, "rb") as fh:
@@ -628,6 +787,14 @@ def _join(job: dict, draft: Draft, cfg: FishConfig) -> Optional[str]:
                 clips.append((data, sr))
         if not clips:
             return None
+        out = os.path.join(job["out_dir"], "story.wav")
+        if len(clips) == 1 and cfg.format == "wav":
+            # One large Fish request is already the stitched story. Keep its
+            # container bytes exact in the convenience output too.
+            import shutil
+
+            shutil.copyfile(os.path.join(job["out_dir"], next(iter(seen_files))), out)
+            return os.path.basename(out)
         rate = Counter(sr for _, sr in clips).most_common(1)[0][0]
         channels = max(d.shape[1] for d, _ in clips)
         mismatched = sum(1 for _, sr in clips if sr != rate)
@@ -643,7 +810,6 @@ def _join(job: dict, draft: Draft, cfg: FishConfig) -> Optional[str]:
             if parts and len(gap):
                 parts.append(gap)
             parts.append(data)
-        out = os.path.join(job["out_dir"], "story.wav")
         sf.write(out, np.concatenate(parts), rate, subtype="PCM_24")
         return os.path.basename(out)
     except Exception as exc:  # noqa: BLE001
@@ -659,7 +825,8 @@ def _manifest(job: dict, draft: Draft, cfg: FishConfig, status: str, message: st
         **_summary(view),
         "status": status, "message": message,
         "settings": {k: v for k, v in dataclasses.asdict(cfg).items() if k != "base_url"},
-        "speed": draft.settings.speed, "pause_ms": draft.settings.pause_ms,
+        "speed": draft.settings.speed, "request_mode": draft.settings.request_mode,
+        "pause_ms": draft.settings.pause_ms,
         "chunks": [{**c, "text": text.get(c["id"], "")} for c in sorted(view["chunks"], key=lambda c: c["index"])],
     }
     try:

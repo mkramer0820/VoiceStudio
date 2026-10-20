@@ -16,9 +16,13 @@ import type { StoryDraft } from './story-model';
 
 interface PreviewRequest {
   index: number;
+  indices: number[];
   id: string;
+  ids: string[];
+  mode: 'single' | 'multi';
   speaker: string | null;
-  voice: string | null;
+  speakers: string[];
+  voice: string | string[] | null;
   voice_name: string | null;
   file: string;
   chars: number;
@@ -30,6 +34,7 @@ interface PreviewRequest {
 interface PreviewResult {
   ok: boolean;
   total: number;
+  total_requests: number;
   invalid: number;
   shown: number;
   endpoint: string;
@@ -38,6 +43,9 @@ interface PreviewResult {
   requests: PreviewRequest[];
   curl: string | null;
   first_invalid: number | null;
+  lines: number;
+  single_requests: number;
+  multi_requests: number;
 }
 
 const LIMITS = [3, 10, 50];
@@ -139,7 +147,7 @@ export function PreviewDialog({
                 ))}
               </select>
               <span className="text-muted-foreground">
-                {t('fishStory.preview_of', { shown: result.shown, total: result.total })}
+                {result.shown} / {result.total_requests} {t('fishStory.group_requests')}
               </span>
             </label>
 
@@ -147,8 +155,17 @@ export function PreviewDialog({
               {result.requests.map((r) => (
                 <li key={r.id} className="space-y-1 rounded-lg border border-border/50 p-2">
                   <p className="text-xs">
-                    <span className="font-medium">#{r.index}</span> {r.speaker ? `${r.speaker} · ` : ''}
-                    {r.voice_name ?? t('fishStory.fish_default')} · {r.chars} {t('fishStory.preview_chars')}
+                    <span className="font-medium">
+                      #{r.index}
+                      {r.indices.length > 1 ? `–${r.indices[r.indices.length - 1]}` : ''}
+                    </span>{' '}
+                    {t(`fishStory.request_mode_${r.mode}`)} ·{' '}
+                    {r.voice_name ??
+                      (Array.isArray(r.voice)
+                        ? `${new Set(r.speakers).size} ${t('fishStory.speakers')}`
+                        : t('fishStory.fish_default'))}
+                    {' · '}
+                    {r.chars} {t('fishStory.preview_chars')}
                     {' → '}
                     <span className="font-mono">{r.file}</span>
                   </p>

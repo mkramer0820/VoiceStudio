@@ -26,7 +26,12 @@ def api(monkeypatch, tmp_path):
     return TestClient(app)
 
 
-DRAFT = {"title": "s", "chunks": [{"id": "a", "text": "hello", "voice": "v1"}], "voices": {"v1": "sun_2"}}
+DRAFT = {
+    "title": "s",
+    "chunks": [{"id": "a", "text": "hello", "voice": "v1"}],
+    "voices": {"v1": "sun_2"},
+    "settings": {"request_mode": "single"},
+}
 
 
 def test_draft_crud_is_local(api):
@@ -127,4 +132,6 @@ def test_preview_returns_checked_requests_and_needs_no_key_or_network(api, monke
     out = r.json()
     assert out["ok"] and out["total"] == 1 and out["requests"][0]["body"]["reference_id"] == "v1"
     assert out["headers"]["Authorization"] == "Bearer <hidden>"
+    no_mode = {**DRAFT, "settings": {}}
+    assert api.post("/api/fish/story/preview", json={"draft": no_mode}).status_code == 422
     assert api.post("/api/fish/story/preview", json={"draft": {"chunks": [{"id": "!", "text": "x"}]}}).status_code == 422
