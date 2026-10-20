@@ -81,6 +81,7 @@ Submit and confirm** in the review dialog.
 
 1. **Add text**: paste a story and split it into lines, paragraphs or sentences (optional max characters per line).
 2. **Load my voices** (contacts Fish) lists your saved voices. **More voices** adds any other voice: paste a voice id (or a `fish.audio/m/<id>` link) with an optional name, or search the public voice library by title and language (searching contacts Fish; adding is local). Added voices show up everywhere a voice can be chosen, including the character mapping.
+   - **Collections and bookmarks:** Fish's public API cannot list voices you bookmarked or collected on fish.audio (`GET /model` only filters by ownership, title, tag, language, author and sort order). Open the voice on fish.audio and paste its link into *By voice id*; voices you created are already under *Load my voices*.
 3. **Select lines** by shift/ctrl-click, by checkbox, or by number (*Lines 1 to 15* → **Select**), then choose a voice and **Apply**. **Apply & select next block** moves on to the following lines with the same count, so a long story goes quickly. Used voices appear as colored chips: click one to apply it to the current selection.
 4. **Tags & cast** handles AI-directed scripts such as `[Shadow] [slow][soft] It feels strange, [pause] to become a [emphasis] human.` It opens by itself when pasted text has `[Name]` tags at the start of lines.
    - **Narrator (default voice):** used for narration and every line with no speaker tag, so characters only need their own lines tagged.
