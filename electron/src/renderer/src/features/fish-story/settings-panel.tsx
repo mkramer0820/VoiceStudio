@@ -362,6 +362,24 @@ export function SettingsPanel({
 
       <Group title={t('fishStory.group_advanced')}>
         <p className="text-[11px] leading-snug text-muted-foreground">{t('fishStory.advanced_note')}</p>
+        <div className="space-y-1">
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              const cleared = {
+                temperature: null, top_p: null, chunk_length: null, repetition_penalty: null,
+                max_new_tokens: null, min_chunk_length: null, condition_on_previous_chunks: null,
+                early_stop_threshold: null, opus_bitrate: null,
+              };
+              onChange(cleared);
+              void onSaveDefaults(cleared).then((ok) => ok && setNote(t('fishStory.fish_defaults_done')));
+            }}
+          >
+            {t('fishStory.fish_defaults')}
+          </Button>
+          <p className="text-[11px] leading-snug text-muted-foreground">{t('fishStory.fish_defaults_hint')}</p>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <Field label={t('fishStory.repetition_penalty')} hint={t('fishStory.repetition_penalty_hint')}>
             {(id) => (
@@ -510,13 +528,21 @@ export function SettingsPanel({
             variant="outline"
             onClick={() => {
               const keys = [
-                'model', 'format', 'sample_rate', 'mp3_bitrate', 'latency', 'normalize', 'temperature',
-                'top_p', 'chunk_length', 'volume', 'normalize_loudness', 'language', 'max_concurrency',
-                'default_voice',
+                'model', 'format', 'sample_rate', 'mp3_bitrate', 'latency', 'normalize',
+                'normalize_loudness', 'max_concurrency', 'default_voice',
               ] as const;
-              const patch = Object.fromEntries(
-                keys.flatMap((k) => (settings[k] === null || settings[k] === undefined ? [] : [[k, settings[k]]])),
-              );
+              // A blank tuning field means "send nothing", so saving it clears any stored value.
+              const tuning = [
+                'temperature', 'top_p', 'chunk_length', 'volume', 'language', 'repetition_penalty',
+                'max_new_tokens', 'min_chunk_length', 'condition_on_previous_chunks',
+                'early_stop_threshold', 'opus_bitrate',
+              ] as const;
+              const patch = {
+                ...Object.fromEntries(
+                  keys.flatMap((k) => (settings[k] === null || settings[k] === undefined ? [] : [[k, settings[k]]])),
+                ),
+                ...Object.fromEntries(tuning.map((k) => [k, settings[k] ?? null])),
+              };
               void onSaveDefaults(patch).then((ok) => ok && setNote(t('fishStory.defaults_saved')));
             }}
           >
@@ -533,35 +559,25 @@ export function SettingsPanel({
 
       <Group title={t('fishStory.group_requests')}>
         <Field
-          label={t('fishStory.request_mode')}
-          hint={t(
-            settings.request_mode === 'multi'
-              ? 'fishStory.request_mode_multi_hint'
-              : settings.request_mode === 'single'
-                ? 'fishStory.request_mode_single_hint'
-                : 'fishStory.request_mode_required',
-          )}
+          label={t('fishStory.multi_speaker')}
+          hint={t(settings.request_mode === 'multi' ? 'fishStory.multi_speaker_on' : 'fishStory.multi_speaker_off')}
+          inline
         >
           {(id) => (
-            <div
+            <Switch
               id={id}
-              role="group"
-              aria-label={t('fishStory.request_mode')}
-              className="grid grid-cols-2 gap-1"
-            >
-              {(['single', 'multi'] as const).map((mode) => (
-                <Button
-                  key={mode}
-                  type="button"
-                  size="sm"
-                  variant={settings.request_mode === mode ? 'secondary' : 'outline'}
-                  aria-pressed={settings.request_mode === mode}
-                  onClick={() => onChange({ request_mode: mode })}
-                >
-                  {t(`fishStory.request_mode_${mode}`)}
-                </Button>
-              ))}
-            </div>
+              checked={settings.request_mode === 'multi'}
+              onCheckedChange={(on) => onChange({ request_mode: on ? 'multi' : 'single' })}
+            />
+          )}
+        </Field>
+        <Field label={t('fishStory.minimal_request')} hint={t('fishStory.minimal_request_hint')} inline>
+          {(id) => (
+            <Switch
+              id={id}
+              checked={settings.minimal_request === true}
+              onCheckedChange={(minimal_request) => onChange({ minimal_request })}
+            />
           )}
         </Field>
         <Field label={t('fishStory.concurrency')} hint={t('fishStory.concurrency_hint')}>

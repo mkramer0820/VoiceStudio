@@ -118,6 +118,8 @@ class FishConfig:
     min_chunk_length: Optional[int] = None
     condition_on_previous_chunks: Optional[bool] = None
     early_stop_threshold: Optional[float] = None
+    # Story option, not a saved default: send only text, format, rate and voice (like the web page).
+    minimal_request: bool = False
 
 
 def load_config() -> FishConfig:

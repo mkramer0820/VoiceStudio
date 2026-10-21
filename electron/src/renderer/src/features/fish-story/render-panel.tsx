@@ -152,7 +152,7 @@ export function RenderPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button
-          disabled={disabled || running || !draft.settings.request_mode}
+          disabled={disabled || running}
           onClick={() => {
             setRetryIds(null);
             setOpen(true);
@@ -163,7 +163,7 @@ export function RenderPanel({
         </Button>
         <Button
           variant="outline"
-          disabled={disabled || !draft.settings.request_mode}
+          disabled={disabled}
           onClick={() => setPreviewOpen(true)}
         >
           <EyeIcon />
@@ -175,12 +175,6 @@ export function RenderPanel({
           </span>
         )}
       </div>
-
-      {!draft.settings.request_mode && (
-        <p role="alert" className="text-xs text-amber-500">
-          {t('fishStory.request_mode_required')}
-        </p>
-      )}
 
       {job && (
         <section
@@ -296,6 +290,11 @@ export function RenderPanel({
                   </li>
                 ))}
               </ul>
+              {plan.warnings.includes('multi_speaker_model') && (
+                <p role="alert" className="text-xs text-amber-500">
+                  {t('fishStory.warn_multi_model', { model: plan.model })}
+                </p>
+              )}
               {plan.warnings.includes('unassigned_no_default') && (
                 <p role="alert" className="text-xs text-amber-500">
                   {t('fishStory.warn_unassigned', { count: plan.unassigned })}

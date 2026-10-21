@@ -106,7 +106,7 @@ def save_settings(body: dict):
         raise HTTPException(status_code=422, detail=exc.errors(
             include_url=False, include_context=False, include_input=False))
     names = {"default_voice": "reference_id"}
-    skip = {"speed", "request_mode", "pause_ms", "join"}  # story-only options
+    skip = {"speed", "request_mode", "minimal_request", "pause_ms", "join"}  # story-only options
     for field in parsed.model_fields_set - skip:
         value = getattr(parsed, field)
         if field == "output_dir" and value:

@@ -294,14 +294,29 @@ def test_render_needs_a_key_and_something_to_render(monkeypatch):
         story_jobs.start_render(_draft(1))
 
 
-def test_render_requires_an_explicit_request_mode(monkeypatch):
-    monkeypatch.setattr(
-        client, "synthesize",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("request was sent")),
-    )
-    draft = story.Draft(chunks=[story.Chunk(id="a", text="Hello", voice="v")])
-    with pytest.raises(ValueError, match="Choose Single-speaker calls or Multi-speaker calls"):
-        story_jobs.start_render(draft)
+def test_an_unset_request_mode_means_one_call_per_line(monkeypatch):
+    draft = story.Draft(chunks=[story.Chunk(id="a", text="Hello", voice="v"),
+                                story.Chunk(id="b", text="There", voice="w")])
+    out = story_jobs.preview(draft)
+    assert out["single_requests"] == 2 and out["multi_requests"] == 0 and out["ok"]
+
+
+def test_minimal_request_sends_only_the_basics_and_preview_lists_extras(monkeypatch):
+    monkeypatch.setattr("services.settings_store.get_text", lambda k: "1.0" if k == "tts.fish.top_p" else None)
+    draft = story.Draft(chunks=[story.Chunk(id="a", text="Hello", voice="vvv")],
+                        settings=story.StorySettings(top_p=0.9))
+    full = story_jobs.preview(draft)
+    assert "top_p" in full["extra_fields"] and "latency" in full["extra_fields"]
+    mini = story_jobs.preview(draft.model_copy(update={
+        "settings": story.StorySettings(top_p=0.9, minimal_request=True, repetition_penalty=1.1)}))
+    body = mini["requests"][0]["body"]
+    assert set(body) == {"text", "format", "sample_rate", "reference_id"} and mini["extra_fields"] == []
+
+
+def test_multi_speaker_on_a_model_without_support_is_flagged():
+    draft = story.Draft(chunks=[story.Chunk(id="a", text="Hi", voice="v")],
+                        settings=story.StorySettings(request_mode="multi", model="drama-3"))
+    assert "multi_speaker_model" in story.plan(draft)["warnings"]
 
 
 def test_get_balance_parses_the_wallet_response():

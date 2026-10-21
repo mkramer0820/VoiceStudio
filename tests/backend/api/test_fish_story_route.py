@@ -132,6 +132,6 @@ def test_preview_returns_checked_requests_and_needs_no_key_or_network(api, monke
     out = r.json()
     assert out["ok"] and out["total"] == 1 and out["requests"][0]["body"]["reference_id"] == "v1"
     assert out["headers"]["Authorization"] == "Bearer <hidden>"
-    no_mode = {**DRAFT, "settings": {}}
-    assert api.post("/api/fish/story/preview", json={"draft": no_mode}).status_code == 422
+    no_mode = {**DRAFT, "settings": {}}  # no mode chosen = one call per line, still valid
+    assert api.post("/api/fish/story/preview", json={"draft": no_mode}).status_code == 200
     assert api.post("/api/fish/story/preview", json={"draft": {"chunks": [{"id": "!", "text": "x"}]}}).status_code == 422

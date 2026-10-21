@@ -46,7 +46,10 @@ class StorySettings(BaseModel):
     language: Optional[str] = Field(None, max_length=35, pattern=r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
     max_concurrency: Optional[int] = Field(None, ge=1, le=8)
     default_voice: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    # Off (single or unset): one Fish call per line. On (multi): lines are grouped into
+    # speaker-tagged calls so Fish handles the speaker changes (S2 models).
     request_mode: Optional[Literal["single", "multi"]] = None
+    minimal_request: bool = False
     pause_ms: int = Field(350, ge=0, le=5000)  # silence between chunks in the joined file
     join: bool = True
 
@@ -207,6 +210,8 @@ def plan(draft: Draft) -> dict:
         slot["chunks"] += 1
         slot["chars"] += len(text)
     warnings = []
+    if draft.settings.request_mode == "multi" and cfg.model in ("drama-3", "s1"):
+        warnings.append("multi_speaker_model")
     if unassigned and not default:
         warnings.append("unassigned_no_default")
     if empty:

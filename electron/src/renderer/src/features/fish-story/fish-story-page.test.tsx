@@ -90,6 +90,8 @@ beforeEach(() => {
         folder: 'C:/out/story/run-NNN',
         curl: 'curl -X POST https://api.fish.audio/v1/tts',
         first_invalid: null,
+        extra_fields: ['latency', 'normalize'],
+        minimal: false,
         requests: [
           {
             index: 1,
@@ -190,9 +192,6 @@ it('shift-click selects a range between two rows', async () => {
 it('submits only after the review dialog is confirmed, with confirm:true', async () => {
   await loadStory();
   const review = screen.getByRole('button', { name: 'fishStory.review_submit' });
-  expect(review).toBeDisabled();
-  expect(screen.getByRole('alert')).toHaveTextContent('fishStory.request_mode_required');
-  fireEvent.click(screen.getByRole('button', { name: 'fishStory.request_mode_single' }));
   expect(review).toBeEnabled();
   fireEvent.click(review);
   await waitFor(() => expect(calls()).toContainEqual(['/api/fish/story/plan', 'POST']));
@@ -338,7 +337,15 @@ it('saves the output folder and render defaults to Settings (local calls only)',
   await waitFor(() => {
     const saved = mock.api.mock.calls.filter(([p, i]) => p === '/api/fish/settings' && i?.method === 'PUT');
     expect(saved).toHaveLength(2);
-    expect(JSON.parse(saved[1][1].body)).toEqual({ format: 'mp3', mp3_bitrate: 192 });
+    // Blank tuning fields are sent as null so a stored value (e.g. top_p 1.0) is cleared, not inherited.
+    expect(JSON.parse(saved[1][1].body)).toMatchObject({
+      format: 'mp3',
+      mp3_bitrate: 192,
+      top_p: null,
+      temperature: null,
+      repetition_penalty: null,
+      condition_on_previous_chunks: null,
+    });
   });
   expect(calls().some(([p]) => p === '/api/fish/story/render' || p === '/api/fish/balance')).toBe(false);
 });
@@ -366,7 +373,7 @@ it('adds a voice by id or link, and from a public library search, without a rend
 
 it('previews the raw requests with a schema verdict and sends nothing to Fish', async () => {
   await loadStory();
-  fireEvent.click(screen.getByRole('button', { name: 'fishStory.request_mode_multi' }));
+  fireEvent.click(screen.getByRole('switch', { name: 'fishStory.multi_speaker' }));
   fireEvent.click(screen.getByRole('button', { name: /fishStory\.preview_button/ }));
   await screen.findByText(/fishStory\.preview_ok/);
   expect(screen.getByLabelText(/fishStory\.preview_body/)).toHaveTextContent('"format": "wav"');

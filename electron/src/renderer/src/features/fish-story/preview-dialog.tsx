@@ -46,6 +46,8 @@ interface PreviewResult {
   lines: number;
   single_requests: number;
   multi_requests: number;
+  extra_fields: string[];
+  minimal: boolean;
 }
 
 const LIMITS = [3, 10, 50];
@@ -132,6 +134,12 @@ export function PreviewDialog({
                 </div>
               )}
             </dl>
+
+            <p className="text-xs text-muted-foreground">
+              {result.extra_fields.length === 0
+                ? t('fishStory.preview_extras_none')
+                : t('fishStory.preview_extras', { fields: result.extra_fields.join(', ') })}
+            </p>
 
             <label className="flex items-center gap-2 text-xs">
               {t('fishStory.preview_show')}

@@ -18,7 +18,7 @@ metadata and the backend fallback mirror it.
 - Fish story board: stage a multi-voice story, assign a Fish voice to selected lines, set output options, and submit only when you confirm — thanks @mkramer0820!
 - Fish story board: add voices by id or from the public library, preview the exact schema-checked requests before sending, advanced generation settings, the free `s2.1-pro-free` test model, and readable story and run folders — thanks @mkramer0820!
 - Fish story board: character tags mapped to voices with a narrator default, render job history with request logs, resume, and a configurable output folder — thanks @mkramer0820!
-- Fish story board: explicitly choose small per-line single-speaker calls with local stitching or large tagged multi-speaker calls stitched by Fish — thanks @mkramer0820!
+- Fish story board: multi-speaker calls are an on/off switch (off = one call per line), plus a send-only-the-basics option, a Use Fish defaults reset, and blank tuning fields that no longer inherit stored values — thanks @mkramer0820!
 - GitHub Sponsors is now the lead way to support VoiceStudio — on the Support page, the footer support menu, the repository Sponsor button, and SPONSORS.md (#2918)
 
 ### Changed

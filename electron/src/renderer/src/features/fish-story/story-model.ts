@@ -32,6 +32,7 @@ export interface StorySettings {
   max_concurrency?: number | null;
   default_voice?: string | null;
   request_mode?: 'single' | 'multi' | null;
+  minimal_request?: boolean;
   pause_ms: number;
   join: boolean;
 }
@@ -48,7 +49,7 @@ export interface StoryDraft {
 
 export type SplitMode = 'lines' | 'paragraphs' | 'sentences';
 
-export const DEFAULT_SETTINGS: StorySettings = { speed: 1, request_mode: null, pause_ms: 350, join: true };
+export const DEFAULT_SETTINGS: StorySettings = { speed: 1, request_mode: 'single', minimal_request: false, pause_ms: 350, join: true };
 
 let counter = 0;
 export function newChunkId(): string {

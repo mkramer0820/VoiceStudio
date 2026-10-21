@@ -3710,6 +3710,17 @@
     "condition_previous": "Condition on previous chunks",
     "condition_previous_hint": "Keeps the voice consistent across chunks of one line.",
     "opus_bitrate": "Opus bitrate",
-    "opus_bitrate_hint": "-1000 lets Fish choose."
+    "opus_bitrate_hint": "-1000 lets Fish choose.",
+    "multi_speaker": "Multi-speaker calls",
+    "multi_speaker_on": "Several lines go to Fish in one call, tagged by speaker, and Fish handles the speaker changes. You get one audio file per call instead of one per line. Needs an S2 model.",
+    "multi_speaker_off": "One Fish call per line, so every line is its own file.",
+    "minimal_request": "Send only the basics",
+    "minimal_request_hint": "Sends just the text, voice, format and sample rate, like the Fish web page. Everything else is left to Fish's defaults.",
+    "fish_defaults": "Use Fish defaults",
+    "fish_defaults_hint": "Clears the tuning fields here and any saved tuning defaults, so nothing extra is sent.",
+    "fish_defaults_done": "Tuning defaults cleared.",
+    "warn_multi_model": "{{model}} may not support multi-speaker calls. Use s2-pro or s2.1-pro.",
+    "preview_extras": "Beyond a minimal request this also sends: {{fields}}.",
+    "preview_extras_none": "This is a minimal request: only text, voice, format and sample rate."
   }
 }

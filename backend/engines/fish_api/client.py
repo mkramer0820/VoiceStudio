@@ -90,6 +90,12 @@ def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str | list[
     rid = reference_id if reference_id is not None else cfg.reference_id
     if rid:
         body["reference_id"] = rid
+    if cfg.minimal_request:  # nothing but the basics: Fish's own defaults decide the rest
+        for key in ("latency", "normalize"):
+            body.pop(key)
+        if speed and abs(speed - 1.0) > 1e-6:
+            body["prosody"] = {"speed": max(0.5, min(2.0, float(speed)))}
+        return body
     if cfg.temperature is not None:
         body["temperature"] = cfg.temperature
     if cfg.top_p is not None:

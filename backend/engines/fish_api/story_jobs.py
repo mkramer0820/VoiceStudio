@@ -349,6 +349,10 @@ def _items(draft: Draft, chunk_ids: Optional[list[str]]) -> list[tuple[int, Chun
             if c.text.strip() and (wanted is None or c.id in wanted)]
 
 
+#: What a bare web-page request contains; anything else in a body is an explicit extra.
+MINIMAL_FIELDS = frozenset({"text", "format", "sample_rate", "reference_id"})
+
+
 @dataclasses.dataclass(frozen=True)
 class _RenderRequest:
     """One Fish call and the story lines whose audio it returns."""
@@ -405,11 +409,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
 def _render_requests(draft: Draft, cfg: FishConfig,
                      items: list[tuple[int, Chunk]], default: Optional[str]) -> list[_RenderRequest]:
     """Compile small local-stitch calls or large provider-stitched calls."""
-    if draft.settings.request_mode is None:
-        raise ValueError(
-            "Choose Single-speaker calls or Multi-speaker calls before previewing or rendering."
-        )
-    if draft.settings.request_mode == "single":
+    if draft.settings.request_mode != "multi":  # off (single or unset): one call per line
         return [_request_for_group([item], draft, cfg, default) for item in items]
 
     requests: list[_RenderRequest] = []
@@ -478,7 +478,8 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
         if not any(request.voices):
             notes.append("No voice set: Fish will use its default voice.")
         problems += len(request.items) if issues else 0
-        rows.append({"index": index, "indices": [i for i, _ in request.items],
+        rows.append({"extras": sorted(set(body) - MINIMAL_FIELDS),
+                     "index": index, "indices": [i for i, _ in request.items],
                      "id": _request_id(request), "ids": [c.id for _, c in request.items],
                      "mode": request.mode,
                      "speaker": chunk.speaker, "speakers": list(request.speakers),
@@ -507,7 +508,8 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
             "--output line.wav",
         ])
     line_count = sum(len(request.items) for request in requests)
-    return {"ok": bool(rows) and problems == 0, "total": line_count,
+    return {"extra_fields": sorted({k for r in rows for k in r["extras"]}),
+            "minimal": cfg.minimal_request, "ok": bool(rows) and problems == 0, "total": line_count,
             "total_requests": len(rows), "invalid": problems,
             "shown": len(shown), "endpoint": cfg.base_url + "/v1/tts",
             "headers": {"Authorization": "Bearer <hidden>", "model": cfg.model,

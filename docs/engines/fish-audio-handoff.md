@@ -12,7 +12,7 @@ This document records the integration decisions on `ext/fish-api` so future work
 
 ## Story Studio request modes
 
-Story Studio requires an explicit user choice. There is no default and no automatic mode selection. New stories reset the choice to unselected; saved drafts may retain an explicit selection.
+Multi-speaker calls are a simple on/off switch. Off (the default; also a draft with no mode saved) means one call per line. On groups lines into speaker-tagged calls. The choice is saved with the draft and kept for new stories.
 
 - **Small single-speaker calls (`single`)**: one Fish request per story line. VoiceStudio joins the returned files locally when Join is enabled.
 - **Large multi-speaker calls (`multi`)**: Story Studio groups lines into requests below Fish's 20,000-character text limit. It sends speaker-tagged text (`<|speaker:N|>`) and an ordered `reference_id` array. Fish performs the speaker transitions.
@@ -38,6 +38,6 @@ A mixed-speaker request is rejected locally if any speaker lacks a resolved voic
 
 ## Regression coverage
 
-The backend tests cover exact WAV preservation, one-call multi-speaker rendering, one-speaker large calls, missing voice rejection, 20,000-character splitting, local joining, and required mode selection. The renderer test covers the initially disabled actions and both explicit selections. Keep all 21 renderer locales in sync when changing labels.
+The backend tests cover exact WAV preservation, one-call multi-speaker rendering, one-speaker large calls, missing voice rejection, 20,000-character splitting, local joining, an unset mode meaning single, minimal requests, and the multi-speaker model warning. The renderer test covers the on/off switch. Keep all 21 renderer locales in sync when changing labels.
 
 No live Fish call is required for these tests, and no API key belongs in fixtures, logs, commits, or documentation.
