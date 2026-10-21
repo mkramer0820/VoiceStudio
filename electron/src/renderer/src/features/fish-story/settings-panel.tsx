@@ -38,12 +38,27 @@ function Field({
   );
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+function Group({
+  title,
+  children,
+  disabled = false,
+  note,
+}: {
+  title: string;
+  children: ReactNode;
+  /** Greys out every control in the group (a native disabled fieldset). */
+  disabled?: boolean;
+  note?: string;
+}) {
   return (
-    <fieldset className="space-y-3 border-t border-border/50 pt-3 first:border-t-0 first:pt-0">
+    <fieldset
+      disabled={disabled}
+      className={`space-y-3 border-t border-border/50 pt-3 first:border-t-0 first:pt-0 ${disabled ? 'opacity-60' : ''}`}
+    >
       <legend className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
         {title}
       </legend>
+      {disabled && note && <p className="text-[11px] leading-snug text-amber-500">{note}</p>}
       {children}
     </fieldset>
   );
@@ -269,7 +284,11 @@ export function SettingsPanel({
         </Field>
       </Group>
 
-      <Group title={t('fishStory.group_quality')}>
+      <Group
+        title={t('fishStory.group_quality')}
+        disabled={settings.minimal_request === true}
+        note={t('fishStory.minimal_ignores')}
+      >
         <Field label={t('fishStory.latency')} hint={t('fishStory.latency_hint')}>
           {(id) => (
             <select
@@ -360,7 +379,11 @@ export function SettingsPanel({
         </Field>
       </Group>
 
-      <Group title={t('fishStory.group_advanced')}>
+      <Group
+        title={t('fishStory.group_advanced')}
+        disabled={settings.minimal_request === true}
+        note={t('fishStory.minimal_ignores')}
+      >
         <p className="text-[11px] leading-snug text-muted-foreground">{t('fishStory.advanced_note')}</p>
         <div className="space-y-1">
           <Button

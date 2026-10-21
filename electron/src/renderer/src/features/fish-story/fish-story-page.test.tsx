@@ -383,3 +383,14 @@ it('previews the raw requests with a schema verdict and sends nothing to Fish', 
   expect(JSON.parse(init.body).draft.settings.request_mode).toBe('multi');
   expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 });
+
+it('greys out the tuning fields while "send only the basics" is on, since they are not sent', async () => {
+  render(<FishStoryPage />);
+  const temperature = (await screen.findByLabelText('fishStory.temperature')) as HTMLInputElement;
+  expect(temperature).toBeEnabled();
+  fireEvent.click(screen.getByRole('switch', { name: 'fishStory.minimal_request' }));
+  expect(temperature).toBeDisabled();
+  expect(screen.getAllByText('fishStory.minimal_ignores').length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole('switch', { name: 'fishStory.minimal_request' }));
+  expect(temperature).toBeEnabled();
+});

@@ -3730,6 +3730,7 @@
     "warn_multi_model": "{{model}} does not support multi-speaker calls. Use s2-pro, s2.1-pro or drama-3.",
     "preview_extras": "Beyond a minimal request this also sends: {{fields}}.",
     "preview_extras_none": "This is a minimal request: only text, voice, format and sample rate.",
-    "warn_unapplied_tags": "{{count}} lines still start with a character tag such as [{{tag}}] (first: line {{line}}) that has not been applied, so Fish would receive it as text. Open Tags & cast and press Apply characters and voices."
+    "warn_unapplied_tags": "{{count}} lines still start with a character tag such as [{{tag}}] (first: line {{line}}) that has not been applied, so Fish would receive it as text. Open Tags & cast and press Apply characters and voices.",
+    "minimal_ignores": "Ignored while “Send only the basics” is on. Turn it off to use these."
   }
 }
