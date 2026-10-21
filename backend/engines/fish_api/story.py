@@ -95,8 +95,8 @@ class TTSRequest(BaseModel):
     sample_rate: Optional[int] = Field(None, ge=8000, le=96000)
     mp3_bitrate: Optional[Literal[64, 128, 192]] = None
     opus_bitrate: Optional[int] = Field(None, ge=-1000, le=512000)
-    latency: Literal["normal", "balanced"]
-    normalize: bool
+    latency: Optional[Literal["normal", "balanced"]] = None
+    normalize: Optional[bool] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
     chunk_length: Optional[int] = Field(None, ge=100, le=300)

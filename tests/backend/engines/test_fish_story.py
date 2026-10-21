@@ -311,6 +311,7 @@ def test_minimal_request_sends_only_the_basics_and_preview_lists_extras(monkeypa
         "settings": story.StorySettings(top_p=0.9, minimal_request=True, repetition_penalty=1.1)}))
     body = mini["requests"][0]["body"]
     assert set(body) == {"text", "format", "sample_rate", "reference_id"} and mini["extra_fields"] == []
+    assert mini["ok"] and mini["invalid"] == 0  # a minimal body is valid, not "missing required fields"
 
 
 def test_multi_speaker_on_a_model_without_support_is_flagged():
