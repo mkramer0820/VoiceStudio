@@ -314,6 +314,20 @@ def test_minimal_request_sends_only_the_basics_and_preview_lists_extras(monkeypa
     assert mini["ok"] and mini["invalid"] == 0  # a minimal body is valid, not "missing required fields"
 
 
+def test_preview_lists_every_setting_with_its_source_and_whether_it_is_sent(monkeypatch):
+    monkeypatch.setattr("services.settings_store.get_text", lambda k: "false" if k == "tts.fish.normalize" else None)
+    draft = story.Draft(chunks=[story.Chunk(id="a", text="Hello", voice="vvv")],
+                        settings=story.StorySettings(temperature=0.7))
+    rows = {r["name"]: r for r in story_jobs.preview(draft)["settings"]}
+    assert rows["temperature"] == {"name": "temperature", "value": 0.7, "source": "story", "sent": True, "note": None}
+    assert rows["normalize"]["source"] == "saved default" and rows["normalize"]["value"] is False
+    assert rows["top_p"]["sent"] is False and rows["top_p"]["source"] == "fish"
+    assert rows["mp3_bitrate"]["note"] == "na"
+    mini = {r["name"]: r for r in story_jobs.preview(draft.model_copy(update={
+        "settings": story.StorySettings(temperature=0.7, minimal_request=True)}))["settings"]}
+    assert mini["temperature"]["sent"] is False and mini["temperature"]["note"] == "minimal"
+
+
 def test_multi_speaker_on_a_model_without_support_is_flagged():
     draft = story.Draft(chunks=[story.Chunk(id="a", text="Hi", voice="v")],
                         settings=story.StorySettings(request_mode="multi", model="s1"))

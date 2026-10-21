@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from . import client
-from .config import FishConfig, load_config, resolve_api_key
+from .config import FishConfig, load_config, resolve_api_key, setting_source
 from .story import Chunk, Draft, effective_config
 from .story import check_request as story_check
 
@@ -458,6 +458,53 @@ def _request_audio_name(request: _RenderRequest, draft: Draft, ext: str) -> str:
     return f"{span}_{_safe(label, 'narration')}_{_safe(draft.voices.get(voice or '', voice) or 'default', 'default')}.{ext}"
 
 
+# (setting, where it appears in a request body)
+_TABLE = (
+    ("model", "header"), ("format", "format"), ("sample_rate", "sample_rate"), ("mp3_bitrate", "mp3_bitrate"),
+    ("opus_bitrate", "opus_bitrate"), ("latency", "latency"), ("normalize", "normalize"),
+    ("temperature", "temperature"), ("top_p", "top_p"), ("repetition_penalty", "repetition_penalty"),
+    ("max_new_tokens", "max_new_tokens"), ("min_chunk_length", "min_chunk_length"),
+    ("condition_on_previous_chunks", "condition_on_previous_chunks"),
+    ("early_stop_threshold", "early_stop_threshold"), ("chunk_length", "chunk_length"),
+    ("language", "language"), ("speed", "prosody.speed"), ("volume", "prosody.volume"),
+    ("normalize_loudness", "prosody.normalize_loudness"), ("reference_id", "reference_id"),
+)
+
+
+def settings_in_effect(draft: Draft, cfg: FishConfig, body: dict) -> list[dict]:
+    """Every setting with its effective value, where it came from, and whether ``body`` sends it."""
+    rows = []
+    for name, where in _TABLE:
+        value = draft.settings.speed if name == "speed" else getattr(cfg, name, None)
+        if name == "reference_id":
+            value = draft.settings.default_voice or cfg.reference_id
+        story_value = getattr(draft.settings, "default_voice" if name == "reference_id" else name, None)
+        if name == "speed":
+            story_value = None if abs(draft.settings.speed - 1.0) < 1e-6 else draft.settings.speed
+        if story_value is not None:
+            source = "story"
+        elif name == "model" or name in ("format", "sample_rate", "latency", "normalize"):
+            source = setting_source(name) or "default"
+        elif name == "reference_id":
+            source = setting_source("reference_id") or "none"
+        elif name == "speed":
+            source = "default"
+        else:
+            source = setting_source(name) or "fish"
+        if where == "header":
+            sent = True
+        elif where.startswith("prosody."):
+            sent = where.split(".", 1)[1] in (body.get("prosody") or {})
+        else:
+            sent = where in body
+        note = "minimal" if (cfg.minimal_request and not sent and value not in (None, "")
+                             and name not in ("speed", "volume") and source != "fish") else None
+        if (name == "mp3_bitrate" and cfg.format != "mp3") or (name == "opus_bitrate" and cfg.format != "opus"):
+            note, source = "na", "-"  # only meaningful for that output format
+        rows.append({"name": name, "value": value, "source": source, "sent": sent, "note": note})
+    return rows
+
+
 def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int = 5,
             draft_id: Optional[str] = None) -> dict:
     """Dry run: the exact requests a render would send, checked against the schema.
@@ -508,7 +555,8 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
             "--output line.wav",
         ])
     line_count = sum(len(request.items) for request in requests)
-    return {"extra_fields": sorted({k for r in rows for k in r["extras"]}),
+    return {"settings": settings_in_effect(draft, cfg, rows[0]["body"]) if rows else [],
+            "extra_fields": sorted({k for r in rows for k in r["extras"]}),
             "minimal": cfg.minimal_request, "ok": bool(rows) and problems == 0, "total": line_count,
             "total_requests": len(rows), "invalid": problems,
             "shown": len(shown), "endpoint": cfg.base_url + "/v1/tts",

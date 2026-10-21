@@ -49,6 +49,13 @@ interface PreviewResult {
   multi_requests: number;
   extra_fields: string[];
   minimal: boolean;
+  settings: Array<{
+    name: string;
+    value: string | number | boolean | null;
+    source: string;
+    sent: boolean;
+    note: string | null;
+  }>;
 }
 
 const LIMITS = [3, 10, 50];
@@ -137,6 +144,39 @@ export function PreviewDialog({
               )}
             </dl>
 
+            <details open className="rounded-lg border border-border/50 p-2">
+              <summary className="cursor-pointer text-xs font-medium">{t('fishStory.eff_title')}</summary>
+              <p className="mt-1 text-[11px] text-muted-foreground">{t('fishStory.eff_note')}</p>
+              <div className="mt-1 max-h-56 overflow-auto">
+                <table className="w-full text-[11px]">
+                  <thead className="text-left text-muted-foreground">
+                    <tr>
+                      <th className="pr-2 font-normal">{t('fishStory.eff_setting')}</th>
+                      <th className="pr-2 font-normal">{t('fishStory.eff_value')}</th>
+                      <th className="pr-2 font-normal">{t('fishStory.eff_source')}</th>
+                      <th className="font-normal">{t('fishStory.eff_sent')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.settings.map((row) => (
+                      <tr key={row.name} data-testid="setting-row" className={row.sent ? '' : 'text-muted-foreground'}>
+                        <td className="pr-2 font-mono">{row.name}</td>
+                        <td className="pr-2 font-mono">{row.value === null ? '—' : String(row.value)}</td>
+                        <td className="pr-2">{t(`fishStory.eff_source_${row.source === '-' ? 'na' : row.source.replace(' ', '_')}`)}</td>
+                        <td>
+                          {row.sent
+                            ? t('fishStory.eff_sent_yes')
+                            : row.note
+                              ? t(`fishStory.eff_note_${row.note}`)
+                              : t('fishStory.eff_sent_no')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+
             {unapplied.length > 0 && (
               <p role="alert" className="text-xs text-amber-500">
                 {t('fishStory.warn_unapplied_tags', {
@@ -210,7 +250,7 @@ export function PreviewDialog({
             </ol>
 
             {result.curl && (
-              <details>
+              <details open>
                 <summary className="cursor-pointer text-xs text-muted-foreground">
                   {t('fishStory.preview_curl')}
                 </summary>

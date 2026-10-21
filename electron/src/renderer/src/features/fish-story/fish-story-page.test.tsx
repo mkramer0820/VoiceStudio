@@ -92,6 +92,11 @@ beforeEach(() => {
         first_invalid: null,
         extra_fields: ['latency', 'normalize'],
         minimal: false,
+        settings: [
+          { name: 'temperature', value: 0.7, source: 'story', sent: true, note: null },
+          { name: 'top_p', value: null, source: 'fish', sent: false, note: null },
+          { name: 'normalize', value: false, source: 'saved default', sent: true, note: null },
+        ],
         requests: [
           {
             index: 1,
@@ -393,4 +398,16 @@ it('greys out the tuning fields while "send only the basics" is on, since they a
   expect(screen.getAllByText('fishStory.minimal_ignores').length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole('switch', { name: 'fishStory.minimal_request' }));
   expect(temperature).toBeEnabled();
+});
+
+it('shows every setting in effect with its source and whether it is sent, plus the curl command', async () => {
+  await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.preview_button/ }));
+  const rows = await screen.findAllByTestId('setting-row');
+  expect(rows).toHaveLength(3);
+  expect(within(rows[0]).getByText('temperature')).toBeInTheDocument();
+  expect(within(rows[0]).getByText('fishStory.eff_source_story')).toBeInTheDocument();
+  expect(within(rows[1]).getByText('fishStory.eff_sent_no')).toBeInTheDocument();
+  expect(within(rows[2]).getByText('fishStory.eff_source_saved_default')).toBeInTheDocument();
+  expect(screen.getByText(/curl -X POST/)).toBeVisible();
 });

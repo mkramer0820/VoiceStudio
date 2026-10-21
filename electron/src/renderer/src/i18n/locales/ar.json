@@ -3731,6 +3731,23 @@
     "preview_extras": "Beyond a minimal request this also sends: {{fields}}.",
     "preview_extras_none": "This is a minimal request: only text, voice, format and sample rate.",
     "warn_unapplied_tags": "{{count}} lines still start with a character tag such as [{{tag}}] (first: line {{line}}) that has not been applied, so Fish would receive it as text. Open Tags & cast and press Apply characters and voices.",
-    "minimal_ignores": "Ignored while “Send only the basics” is on. Turn it off to use these."
+    "minimal_ignores": "Ignored while “Send only the basics” is on. Turn it off to use these.",
+    "eff_title": "Settings in effect",
+    "eff_note": "What this request uses, where each value comes from, and whether it is sent. Changes apply automatically and this list refreshes as you edit.",
+    "eff_setting": "Setting",
+    "eff_value": "Value",
+    "eff_source": "From",
+    "eff_sent": "Sent",
+    "eff_source_story": "This story",
+    "eff_source_environment": "Environment",
+    "eff_source_saved_default": "Saved default",
+    "eff_source_fish": "Fish default",
+    "eff_source_default": "App default",
+    "eff_source_none": "Not set",
+    "eff_source_na": "—",
+    "eff_sent_yes": "Yes",
+    "eff_sent_no": "No",
+    "eff_note_minimal": "No (basics only)",
+    "eff_note_na": "n/a for this format"
   }
 }

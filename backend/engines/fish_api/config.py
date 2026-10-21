@@ -65,6 +65,14 @@ def _raw(name: str) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def setting_source(name: str) -> Optional[str]:
+    """Where a saved setting comes from: ``environment``, ``saved default`` or None (Fish's own)."""
+    store_key_, env = _KEYS[name]
+    if (os.environ.get(env) or "").strip():
+        return "environment"
+    return "saved default" if _raw(name) is not None else None
+
+
 def _bool(value: Optional[str], default: bool) -> bool:
     if value is None:
         return default
