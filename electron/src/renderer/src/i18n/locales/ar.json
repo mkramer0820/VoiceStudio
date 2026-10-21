@@ -3748,6 +3748,12 @@
     "eff_sent_yes": "Yes",
     "eff_sent_no": "No",
     "eff_note_minimal": "No (basics only)",
-    "eff_note_na": "n/a for this format"
+    "eff_note_na": "n/a for this format",
+    "voices_collection": "Public collection",
+    "voices_collection_note": "Paste a public fish.audio collection link to add all its voices. This reads the collection's web page; no key is sent. Private pages and bookmarks cannot be read.",
+    "collection_url": "Collection link",
+    "collection_import": "Import",
+    "collection_untitled": "Untitled collection",
+    "collection_add_all": "Add all {{count}}"
   }
 }

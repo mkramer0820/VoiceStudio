@@ -76,6 +76,14 @@ beforeEach(() => {
     if (path.startsWith('/api/fish/story/drafts/')) return Promise.resolve({ id: 'd1' });
     if (path === '/api/fish/voices?scope=mine') return Promise.resolve(VOICES);
     if (path === '/api/fish/story/plan') return Promise.resolve(PLAN);
+    if (path === '/api/fish/collection')
+      return Promise.resolve({
+        title: 'shadow sl',
+        voices: [
+          { id: '59aa49a62c9f4608926420443e673e5c', title: 'Nihilister' },
+          { id: '0c67dc47f4704447a39d436ae677b606', title: 'Moon Goddess' },
+        ],
+      });
     if (path.startsWith('/api/fish/voices?scope=library'))
       return Promise.resolve({ voices: [{ id: 'pub1', title: 'Deep Narrator', author: 'someone', languages: ['en'] }] });
     if (path === '/api/fish/story/preview')
@@ -410,4 +418,21 @@ it('shows every setting in effect with its source and whether it is sent, plus t
   expect(within(rows[1]).getByText('fishStory.eff_sent_no')).toBeInTheDocument();
   expect(within(rows[2]).getByText('fishStory.eff_source_saved_default')).toBeInTheDocument();
   expect(screen.getByText(/curl -X POST/)).toBeVisible();
+});
+
+it('imports a public collection by link and adds all of its voices to the story', async () => {
+  await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.more_voices/ }));
+  fireEvent.change(await screen.findByLabelText('fishStory.collection_url'), {
+    target: { value: 'https://fish.audio/collections/63bdf88542744737926c783b476c91b7' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.collection_import' }));
+  await screen.findByTestId('collection-results');
+  const [, init] = mock.api.mock.calls.find(([p]) => p === '/api/fish/collection')!;
+  expect(JSON.parse(init.body)).toEqual({ url: 'https://fish.audio/collections/63bdf88542744737926c783b476c91b7' });
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.collection_add_all/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.done' }));
+  expect(await screen.findAllByRole('option', { name: 'Moon Goddess' })).not.toHaveLength(0);
+  expect(screen.getAllByRole('option', { name: 'Nihilister' }).length).toBeGreaterThan(0);
+  expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 });

@@ -79,3 +79,15 @@ def test_key_reports_env_and_rejects_bad_input(api, monkeypatch):
     assert api.get("/api/fish/key").json() == {"has_key": True, "stored": False, "from_env": True}
     assert api.put("/api/fish/key", json={"api_key": "short"}).status_code == 422
     assert api.put("/api/fish/key", json={"api_key": "has space inside"}).status_code == 422
+
+
+def test_import_collection_returns_voices_and_rejects_foreign_links(api, monkeypatch):
+    from engines.fish_api import collection
+
+    monkeypatch.setattr(collection, "fetch_collection",
+                        lambda url: {"id": "c" * 32, "title": "shadow sl", "voices": [{"id": "a" * 32, "title": "V"}]})
+    ok = api.post("/api/fish/collection", json={"url": "https://fish.audio/collections/" + "c" * 32})
+    assert ok.status_code == 200 and ok.json()["voices"][0]["title"] == "V"
+    monkeypatch.undo()
+    bad = api.post("/api/fish/collection", json={"url": "https://evil.example/collections/" + "c" * 32})
+    assert bad.status_code == 422 and "collection" in bad.json()["detail"].lower()

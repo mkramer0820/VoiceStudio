@@ -96,6 +96,26 @@ async def list_voices(
             "count": len(items), "scope": scope}
 
 
+class _CollectionBody(BaseModel):
+    url: str = Field(..., min_length=8, max_length=300,
+                     description="A public fish.audio/collections/<id> link, or the 32-character id")
+
+
+@router.post("/collection")
+async def import_collection(body: _CollectionBody):
+    """Read a public collection's voices from its fish.audio web page (explicit action).
+
+    Fish's API cannot list collections or bookmarks, so this fetches the public page the
+    user pasted. No API key or cookie is sent; private pages cannot be read.
+    """
+    from engines.fish_api import collection
+
+    try:
+        return await run_in_threadpool(collection.fetch_collection, body.url)
+    except collection.CollectionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.put("/default-voice")
 def set_default_voice(body: _DefaultVoice):
     """Store the voice used when a request names none (env FISH_TTS_REFERENCE_ID still wins)."""

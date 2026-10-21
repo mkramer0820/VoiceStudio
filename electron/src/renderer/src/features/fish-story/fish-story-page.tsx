@@ -157,6 +157,7 @@ export function FishStoryPage() {
         voiceNames={draft.voices}
         onAdd={story.addVoice}
         onSearch={story.searchLibrary}
+        onImportCollection={story.importCollection}
       />
 
       <TagsDialog

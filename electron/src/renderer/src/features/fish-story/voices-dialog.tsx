@@ -35,12 +35,14 @@ export function VoicesDialog({
   voiceNames,
   onAdd,
   onSearch,
+  onImportCollection,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   voiceNames: Record<string, string>;
   onAdd: (id: string, name?: string) => void;
   onSearch: (title: string, language: string) => Promise<FishVoice[] | null>;
+  onImportCollection: (url: string) => Promise<{ title: string; voices: FishVoice[] } | null>;
 }) {
   const { t } = useTranslation();
   const [rawId, setRawId] = useState('');
@@ -49,12 +51,21 @@ export function VoicesDialog({
   const [language, setLanguage] = useState('');
   const [results, setResults] = useState<FishVoice[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [collectionUrl, setCollectionUrl] = useState('');
+  const [collection, setCollection] = useState<{ title: string; voices: FishVoice[] } | null>(null);
+  const [importing, setImporting] = useState(false);
   const parsed = parseVoiceId(rawId);
 
   const search = async () => {
     setBusy(true);
     setResults(await onSearch(title, language));
     setBusy(false);
+  };
+
+  const importCollection = async () => {
+    setImporting(true);
+    setCollection(await onImportCollection(collectionUrl));
+    setImporting(false);
   };
 
   return (
@@ -101,6 +112,71 @@ export function VoicesDialog({
             <p role="alert" className="text-xs text-amber-500">
               {t('fishStory.voice_id_invalid')}
             </p>
+          )}
+        </section>
+
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            {t('fishStory.voices_collection')}
+          </h3>
+          <p className="text-xs text-muted-foreground">{t('fishStory.voices_collection_note')}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              aria-label={t('fishStory.collection_url')}
+              className="w-96 max-w-full font-mono text-xs"
+              placeholder="https://fish.audio/collections/…"
+              value={collectionUrl}
+              onChange={(e) => setCollectionUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && collectionUrl.trim() && void importCollection()}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={importing || !collectionUrl.trim()}
+              onClick={() => void importCollection()}
+            >
+              {importing ? <LoaderCircleIcon className="animate-spin" /> : <SearchIcon />}
+              {t('fishStory.collection_import')}
+            </Button>
+          </div>
+          {collection && (
+            <div className="space-y-1" data-testid="collection-results">
+              <div className="flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {collection.title || t('fishStory.collection_untitled')}
+                </p>
+                <Button
+                  size="xs"
+                  disabled={collection.voices.every((v) => v.id in voiceNames)}
+                  onClick={() => collection.voices.forEach((v) => onAdd(v.id, v.title))}
+                >
+                  <PlusIcon /> {t('fishStory.collection_add_all', { count: collection.voices.length })}
+                </Button>
+              </div>
+              <ul className="space-y-1">
+                {collection.voices.map((voice) => {
+                  const added = voice.id in voiceNames;
+                  return (
+                    <li
+                      key={voice.id}
+                      className="flex items-center gap-2 rounded-lg border border-border/50 px-2 py-1.5 text-sm"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{voice.title || voice.id}</span>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={added}
+                        aria-label={t('fishStory.voice_add_named', { name: voice.title || voice.id })}
+                        onClick={() => onAdd(voice.id, voice.title)}
+                      >
+                        {added ? <CheckIcon /> : <PlusIcon />}
+                        {added ? t('fishStory.voice_added') : t('fishStory.voice_add')}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </section>
 

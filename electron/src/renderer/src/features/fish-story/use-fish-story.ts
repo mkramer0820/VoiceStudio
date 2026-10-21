@@ -255,6 +255,23 @@ export function useFishStory() {
     }
   }, []);
 
+  /** Contacts fish.audio's website (explicit action): the voices in a public collection. */
+  const importCollection = useCallback(
+    async (url: string): Promise<{ title: string; voices: FishVoice[] } | null> => {
+      setError('');
+      try {
+        return await apiJson<{ title: string; voices: FishVoice[] }>('/api/fish/collection', {
+          method: 'POST',
+          body: JSON.stringify({ url }),
+        });
+      } catch (reason) {
+        setError(describeError(reason));
+        return null;
+      }
+    },
+    [],
+  );
+
   /** Contacts Fish (explicit button): remaining API credit. */
   const checkBalance = useCallback(async () => {
     setBalanceBusy(true);
@@ -291,6 +308,7 @@ export function useFishStory() {
     loadVoices,
     addVoice,
     searchLibrary,
+    importCollection,
     checkBalance,
     saveDefaults,
   };
