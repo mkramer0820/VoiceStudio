@@ -315,7 +315,7 @@ def test_minimal_request_sends_only_the_basics_and_preview_lists_extras(monkeypa
 
 def test_multi_speaker_on_a_model_without_support_is_flagged():
     draft = story.Draft(chunks=[story.Chunk(id="a", text="Hi", voice="v")],
-                        settings=story.StorySettings(request_mode="multi", model="drama-3"))
+                        settings=story.StorySettings(request_mode="multi", model="s1"))
     assert "multi_speaker_model" in story.plan(draft)["warnings"]
 
 

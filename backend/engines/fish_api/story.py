@@ -210,7 +210,7 @@ def plan(draft: Draft) -> dict:
         slot["chunks"] += 1
         slot["chars"] += len(text)
     warnings = []
-    if draft.settings.request_mode == "multi" and cfg.model in ("drama-3", "s1"):
+    if draft.settings.request_mode == "multi" and cfg.model == "s1":
         warnings.append("multi_speaker_model")
     if unassigned and not default:
         warnings.append("unassigned_no_default")
