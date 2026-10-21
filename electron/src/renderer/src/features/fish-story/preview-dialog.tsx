@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircleIcon, CheckCircle2Icon, LoaderCircleIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { apiJson, describeError } from '@/lib/api/client';
 import type { StoryDraft } from './story-model';
+import { findUnappliedSpeakerTags } from './tag-tools';
 
 interface PreviewRequest {
   index: number;
@@ -75,6 +76,7 @@ export function PreviewDialog({
   const [result, setResult] = useState<PreviewResult | null>(null);
   const [limit, setLimit] = useState(LIMITS[0]);
   const [busy, setBusy] = useState(false);
+  const unapplied = useMemo(() => findUnappliedSpeakerTags(draft.chunks), [draft.chunks]);
 
   useEffect(() => {
     if (!open) return;
@@ -134,6 +136,16 @@ export function PreviewDialog({
                 </div>
               )}
             </dl>
+
+            {unapplied.length > 0 && (
+              <p role="alert" className="text-xs text-amber-500">
+                {t('fishStory.warn_unapplied_tags', {
+                  count: unapplied.length,
+                  tag: unapplied[0].tag,
+                  line: unapplied[0].line,
+                })}
+              </p>
+            )}
 
             <p className="text-xs text-muted-foreground">
               {result.extra_fields.length === 0

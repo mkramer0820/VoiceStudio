@@ -88,6 +88,7 @@ Submit and confirm** in the review dialog.
 4. **Tags & cast** handles AI-directed scripts such as `[Shadow] [slow][soft] It feels strange, [pause] to become a [emphasis] human.` It opens by itself when pasted text has `[Name]` tags at the start of lines.
    - **Narrator (default voice):** used for narration and every line with no speaker tag, so characters only need their own lines tagged.
    - **Characters:** a capitalised tag that starts a line (`[Shadow]`, `[Snuggle]`) is a character. Map each to a voice and press **Apply characters and voices**; the name is removed from the text and recorded on the line. A tag in the middle of a line starts a new line. Untagged lines stay narration unless you tick *keep the previous character*. Delivery words such as `[Pause]` are never treated as characters, and each tag can be flipped with *Not a character* / *Is a character*.
+   - **Safety check:** Preview and Review warn when a line still opens with a character tag such as `[Shadow]` that was never applied, since Fish would receive it as text. Only a tag at the start of a line counts; character tags are never expected mid-line.
    - **Delivery tags** (`[slow]`, `[soft]`, `[pause]`, `[emphasis]`…) are kept for Fish by default; remove them or replace them with other tags.
    - **Find and replace** works on plain text across the whole story (include the brackets to change a tag).
 5. **Render settings** (left panel). **Multi-speaker calls** is a plain on/off switch, off by default.

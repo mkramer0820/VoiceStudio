@@ -6,6 +6,7 @@ import {
   detectSpeakers,
   extractSpeakers,
   findReplace,
+  findUnappliedSpeakerTags,
   rewriteTags,
   scanTags,
 } from './tag-tools';
@@ -152,5 +153,28 @@ describe('findReplace', () => {
     expect(countMatches(chunks, '(b)', true).matches).toBe(1);
     expect(texts(findReplace(chunks, '[c]', '[$&]', true))[1]).toBe('A (b) [$&].');
     expect(countMatches(chunks, '', false)).toEqual({ matches: 0, lines: 0 });
+  });
+});
+
+describe('findUnappliedSpeakerTags', () => {
+  const line = (text: string, speaker?: string) => ({ ...makeChunk(text), speaker: speaker ?? null });
+
+  it('flags lines that still open with a character tag, by story line number', () => {
+    const chunks = [
+      line('[Shadow] [slow] It feels strange.'),
+      line('Plain narration.'),
+      line('[Nephis][soft] Hello.'),
+      line('[Pause] Wait.'),
+      line('[Snuggle] Done.', 'Snuggle'),
+    ];
+    expect(findUnappliedSpeakerTags(chunks)).toEqual([
+      { line: 1, tag: 'Shadow' },
+      { line: 3, tag: 'Nephis' },
+    ]);
+  });
+
+  it('ignores delivery tags and anything in the middle of a line', () => {
+    const chunks = [line('[slow][soft] It is, [Pause] done [Shadow] ok.'), line('He said [Emphasis] no.')];
+    expect(findUnappliedSpeakerTags(chunks)).toEqual([]);
   });
 });

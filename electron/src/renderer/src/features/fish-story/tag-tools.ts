@@ -65,6 +65,27 @@ export function detectSpeakers(chunks: readonly StoryChunk[], kinds: TagKinds = 
   return found;
 }
 
+export interface UnappliedTag {
+  /** 1-based line number in the story. */
+  line: number;
+  tag: string;
+}
+
+/**
+ * Lines that still open with a character tag such as `[Shadow]` that was never applied
+ * (no speaker recorded). Applying characters strips the tag; left in, Fish gets it as text.
+ * Speaker tags only ever open a line, so tags elsewhere are left alone.
+ */
+export function findUnappliedSpeakerTags(chunks: readonly StoryChunk[]): UnappliedTag[] {
+  const out: UnappliedTag[] = [];
+  chunks.forEach((chunk, i) => {
+    if (chunk.speaker || !chunk.text.trim()) return;
+    const lead = leadingTags(chunk.text)[0];
+    if (lead && looksLikeSpeaker(lead)) out.push({ line: i + 1, tag: lead });
+  });
+  return out;
+}
+
 /** Every tag in the story with its kind and how often it appears. */
 export function scanTags(chunks: readonly StoryChunk[], kinds: TagKinds = {}): TagInfo[] {
   const speakers = detectSpeakers(chunks, kinds);

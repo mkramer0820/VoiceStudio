@@ -14,6 +14,7 @@ import {
 import { getBridge } from '@/components/bridge';
 import { apiJson, describeError } from '@/lib/api/client';
 import { PreviewDialog } from './preview-dialog';
+import { findUnappliedSpeakerTags } from './tag-tools';
 import type { StoryDraft } from './story-model';
 
 interface PlanResult {
@@ -103,6 +104,8 @@ export function RenderPanel({
     () => retryIds ?? (onlySelected && selectedIds.size > 0 ? [...selectedIds] : undefined),
     [retryIds, onlySelected, selectedIds],
   );
+
+  const unapplied = useMemo(() => findUnappliedSpeakerTags(scoped().chunks), [scoped]);
 
   const running = job?.status === 'running';
   useEffect(() => {
@@ -290,6 +293,15 @@ export function RenderPanel({
                   </li>
                 ))}
               </ul>
+              {unapplied.length > 0 && (
+                <p role="alert" className="text-xs text-amber-500">
+                  {t('fishStory.warn_unapplied_tags', {
+                    count: unapplied.length,
+                    tag: unapplied[0].tag,
+                    line: unapplied[0].line,
+                  })}
+                </p>
+              )}
               {plan.warnings.includes('multi_speaker_model') && (
                 <p role="alert" className="text-xs text-amber-500">
                   {t('fishStory.warn_multi_model', { model: plan.model })}
