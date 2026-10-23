@@ -1,96 +1,143 @@
-# Fish Audio branch handoff
+# Fish Audio: handoff (read this first)
 
-This document records the integration decisions on `ext/fish-api` so future work preserves the intended audio path and Story Studio behavior.
+The single state-of-the-work document for everything Fish in VoiceStudio: the API engine, the story board, the voice library, the training-data screen, and where the LoRA/training phase should start. User-facing behavior lives in [fish-audio.md](fish-audio.md); this file is for whoever works on the code next. Last updated 2026-10-23.
 
-## Audio preservation
+## 1. Branches and status
+
+| Branch | Contents | Status |
+|---|---|---|
+| `main` | none of the Fish work | untouched |
+| `ext/fish-api` | Fish cloud engine, story board, jobs, preview, voices, apply settings, load past runs | pushed, no PR |
+| `ext/fish-training-data` | branches from `ext/fish-api`; voice library, training-data screen, audio measurements, exports, these docs | pushed, no PR |
+
+No release, version bump or tag is involved. Per `CLAUDE.md`, versions only change when the owner asks.
+
+## 2. What exists
+
+All local unless the Contact column says otherwise.
+
+| Area | What it does | Code | Contacts Fish |
+|---|---|---|---|
+| Engine | Fish cloud TTS, lossless WAV defaults, masters archive | `backend/engines/fish_api/{__init__,client,config}.py` | on synthesis, voice list, balance |
+| Story board | Stage a multi-voice story, tags and cast, review, render | `fish_api/{story,story_jobs}.py`, `backend/api/routers/fish_story.py`, `features/fish-story/` | on render only |
+| Request preview | Exact schema-checked requests; each setting's source and whether it is sent | `story_jobs.preview`, `preview-dialog.tsx` | no |
+| Apply settings | Panel edits are staged; preview and render use only applied settings | `settings-panel.tsx` (staged state), `fish-story-page.tsx` | no |
+| Past runs | Jobs dialog: list, log, resume, **Load into board**, **Listen** per line, open a run folder by path | `story_jobs.{load_run,run_audio_path,open_run_folder}`, `jobs-dialog.tsx` | resume only |
+| Voice library | Saved voices with your character name, Fish name, id, details, notes, usage | `fish_api/library.py`, `/api/fish/library` in `routers/fish_audio.py`, `voice-library.tsx`, `voices-dialog.tsx` | no |
+| Loudness | `prosody.normalize_loudness` always sent explicitly | `client.build_body` | n/a |
+| Training data | Index of render folders, speakers by voice id, filters, character zoom, audio measurements, select all/none, export | `fish_api/{dataset,dataset_quality}.py`, `routers/fish_dataset.py`, `features/fish-dataset/` | never |
+
+Local data under `<data dir>/fish_stories/`: drafts `*.json`, `voice_library.json`, `clip_stats.json`, and renders in the configured output folder. Each run folder holds `job.json`, `manifest.json`, `story.json`, `settings.json`, `requests.jsonl`, `run.log` and the WAVs.
+
+## 3. Do not change without a plan
+
+### Audio path
 
 - Fish Audio and GPT-SoVITS are remote backends. Their returned audio must not pass through a local model backend or VoiceStudio's normalization/export pipeline.
-- A single remote WAV response is preserved byte-for-byte, including when it becomes Story Studio's convenience `story.wav` output.
-- Story Studio only decodes and joins audio when Fish's 20,000-character request limit requires multiple responses. That join does not apply loudness normalization. It may resample mismatched responses so a valid combined WAV can be written.
-- The `normalize` field in a Fish request is Fish's server-side option. It is separate from VoiceStudio's local normalization pipeline.
-- Keep the response's real format and sample rate. In particular, a requested WAV at 44.1 kHz must not be silently transcoded or routed through another engine.
+- A single remote WAV response is preserved byte-for-byte, including when it becomes the convenience `story.wav`.
+- Story Studio only decodes and joins audio when Fish's 20,000-character request limit needs multiple responses, or when Join stitches single-speaker lines. The join applies no loudness normalization; it may resample mismatched responses so a valid WAV can be written.
+- The `normalize` field in a request is Fish's server-side option, separate from VoiceStudio's local normalization.
+- Keep the response's real format and sample rate: 44.1 kHz WAV must never be silently transcoded or routed through another engine.
+- The dataset code only reads WAVs. Only an explicit export writes anything, and only to a new copy (optionally resampled).
 
-## Story Studio request modes
+### Request shape and modes
 
-Multi-speaker calls are a simple on/off switch. Off (the default; also a draft with no mode saved) means one call per line. On groups lines into speaker-tagged calls. The choice is saved with the draft and kept for new stories.
+- **Multi-speaker is an on/off switch.** Off (default, and a draft with no saved mode) means one request per line (`single`). On groups lines into speaker-tagged calls (`multi`) below the 20,000-character limit, sending `<|speaker:N|>` tags and an ordered `reference_id` array. A multi group with one speaker uses the single-speaker schema. If a large story needs more than one request, only those response files are joined, with shared filenames deduplicated.
+- **Voice resolution order:** explicit voice on the line, then the draft cast mapping for the line's speaker, then the story/default narrator. A mixed-speaker request is rejected locally if any speaker has no voice.
+- **Preview and render compile the same request groups and schemas**, so preview is the authoritative dry run. Keep it that way.
+- **Minimal request** sends only text, format, sample rate and reference id (plus speed if it is not 1.0).
+- **`prosody.normalize_loudness` is sent on purpose.** Runs from chapter 3200 on were made without the field and still measure about -26 dB, so Fish treats a missing field like `true`; sending it explicitly changes nothing for them but makes it visible in preview. Do not go back to omitting it when true.
 
-- **Small single-speaker calls (`single`)**: one Fish request per story line. VoiceStudio joins the returned files locally when Join is enabled.
-- **Large multi-speaker calls (`multi`)**: Story Studio groups lines into requests below Fish's 20,000-character text limit. It sends speaker-tagged text (`<|speaker:N|>`) and an ordered `reference_id` array. Fish performs the speaker transitions.
-- A large-mode group containing only one speaker uses Fish's single-speaker schema: combined plain text plus one string `reference_id`.
-- If a large story needs more than one Fish request, VoiceStudio joins only those large response files. Shared response filenames are deduplicated before joining.
+### Run folders and manifests
 
-Speaker voices resolve in this order:
+The layout `<root>/<chapter>/<story>/run-NNN_<time>_<id>/` and its JSON files are read by Resume, Load into board and the training-data index, and about 3,400 real clips under `D:\fish_tts\input` depend on them. Keep changes readable for old runs: 728 of 3,510 chunks have no `request_mode`, and the index falls back to `story.json` when a chunk has no `text`.
 
-1. Explicit voice on the line.
-2. The draft cast mapping for the line's speaker ID.
-3. The story/default narrator voice.
+### Local-first and data safety
 
-A mixed-speaker request is rejected locally if any speaker lacks a resolved voice. Preview and render compile the same request groups and schemas, so preview is the authoritative dry run.
+- Only these contact Fish or fish.audio, each from an explicit button: listing the account's voices, searching the public library, importing a collection page, checking the balance, rendering and resuming. Dataset browsing, measuring and exporting make no network call. No telemetry, no keys in fixtures, no background Fish calls.
+- The dataset code never writes to, renames or deletes the user's render folders. Exports refuse a non-empty folder. `fish_non_api` is deliberately ignored.
+- Refreshing the account's voices must never overwrite a name the user chose (`library.update` keeps `alias` and `notes`; the board keeps names already on it).
 
-## Code map
+### Deliberate details that look like bugs
 
-- `backend/engines/fish_api/client.py`: accepts a string or array `reference_id` and sends the Fish request.
-- `backend/engines/fish_api/story.py`: draft schema, explicit nullable `request_mode`, request validation, and planning.
-- `backend/engines/fish_api/story_jobs.py`: request grouping, speaker mapping, preview, render/resume logging, and output joining.
-- `backend/api/routers/fish_story.py`: Story API validation and preview errors.
-- `electron/src/renderer/src/features/fish-story/`: required mode controls, disabled preview/render state, and request preview.
-- `docs/engines/fish-audio.md`: user-facing setup and behavior reference.
+Speakers are grouped by voice id, not name (two names can share one voice). Older re-renders of the same words are hidden by default, not deleted. `exclude_keys` leaves clips listed but out of the selection and the export; the list shows every match.
 
-## Regression coverage
+## 4. Code map
 
-The backend tests cover exact WAV preservation, one-call multi-speaker rendering, one-speaker large calls, missing voice rejection, 20,000-character splitting, local joining, an unset mode meaning single, minimal requests, and the multi-speaker model warning. The renderer test covers the on/off switch. Keep all 21 renderer locales in sync when changing labels.
+- `backend/engines/fish_api/client.py`: request body (`reference_id` string or array), sending, retries.
+- `fish_api/story.py`: draft schema, explicit nullable `request_mode`, request validation, planning.
+- `fish_api/story_jobs.py`: request grouping, speaker mapping, preview, render/resume, logging, joining, past-run loading and audio, voice-use recording.
+- `fish_api/library.py`: the voice library store.
+- `fish_api/dataset.py`: corpus index, filters, facets, export. `fish_api/dataset_quality.py`: per-clip audio measurements, cached by sha256.
+- `backend/api/routers/{fish_audio,fish_story,fish_dataset}.py`: the HTTP surface.
+- `electron/src/renderer/src/features/{fish-story,fish-dataset}/`: UI, hooks and tests. Navigation entries are in `components/app-shell/workspace-menu.tsx`, `use-workspace-sidebar.ts`, `command-palette.tsx` and `routes/index.ts`.
+- Tests: `tests/backend/engines/test_fish_{api,story,story_jobs,collection,dataset}.py`, `tests/backend/api/test_fish_audio_route.py`, and the two feature folders' `*.test.ts(x)`. No live Fish call is needed and no key belongs in fixtures, logs, commits or docs.
 
-No live Fish call is required for these tests, and no API key belongs in fixtures, logs, commits, or documentation.
+## 5. Rules from the repo that apply
 
-## Current state (2026-10-23) and what not to touch
+- No agent credit in commits or PRs (`CLAUDE.md`). Update docs and `CHANGELOG.md` in the same change; changelog entries are one line (a test enforces about 400 characters).
+- All UI text goes through i18n in all **21** locale files; `bun run locale:check` and `tests/test_locale_parity.py` enforce it.
+- Locale JSON is committed with **CRLF** endings. With `core.autocrlf=true` a plain `git add` rewrites them to LF (a ~79k-line diff). Stage them with `git hash-object -w --no-filters <file>` then `git update-index --cacheinfo 100644,<hash>,<file>`. Read and write files with `newline=""` and keep each file's existing endings.
+- Default features must behave the same on macOS, Windows and Linux. GPU training will vary by host, so keep it opt-in and skip it, with a clear message, where it cannot work.
 
-Read this section first if you are picking the work up cold. The two sections above are still correct; this one adds what was built after them.
+## 6. Known environment problems (not caused by this work)
 
-### Branches
+- Many backend tests error at import because `torchaudio` cannot load on the author's Windows machine (`libtorchaudio.pyd`). `test_finished_provider_audio_skips_route_dsp` fails for that reason with or without these changes.
+- `tests/test_no_hardcoded_cjk.py` fails on `features/fish-story/story-model.ts` (a sentence-splitting regex with CJK punctuation) since an earlier commit. The fix is to add that file to the test's `_ALLOWED_FILES` with a justification; it was left alone.
+- Local OmniVoice generation can time out on long text (default chunk size 800 characters; the budget only extends while chunks finish). That is the local engine, not Fish.
+- The folder `_gpt_rewrite_chapter_prompt/` in the repo root is the owner's own untracked material. Never commit it.
 
-- `main` has none of the Fish work. `ext/fish-api` is the Fish API engine and story board, pushed. `ext/fish-training-data` branches from it and adds the training-data screen and the voice library, pushed. Both are unmerged and no PR exists; there is no release or version bump involved.
-- The training branch's own plan and next steps are in [fish-training-handoff.md](fish-training-handoff.md).
+## 7. Before handing back
 
-### What exists, by area (all local unless stated)
+`bun run typecheck` and `bun run locale:check` (from `electron/`; use these, not `npx tsc`), `python -m pytest tests/test_locale_parity.py tests/test_changelog_style.py tests/test_changelog_parse.py`, `python -m pytest tests/backend/engines tests/backend/api/test_fish_audio_route.py -q -k fish`, and `npx vitest run src/renderer/src/features/fish-story src/renderer/src/features/fish-dataset`.
 
-| Area | What it does | Where |
-|---|---|---|
-| Engine and story board | Fish cloud TTS, story staging, preview, render, join | `backend/engines/fish_api/{client,story,story_jobs}.py`, `backend/api/routers/fish_story.py`, `features/fish-story/` |
-| Request preview | Exact schema-checked requests, with each setting's source and whether it was sent | `story_jobs.preview`, `preview-dialog.tsx` |
-| Apply settings | Setting edits are staged in the panel and only used by preview and render after **Apply settings** | `settings-panel.tsx` (staged state), page wiring in `fish-story-page.tsx` |
-| Past runs | Jobs dialog: list, log, resume, **Load into board** (story, voices and settings), **Listen** per line, open a run folder by path | `story_jobs.{load_run,run_audio_path,open_run_folder}`, `jobs-dialog.tsx` |
-| Voice library | Saved voices with your character name, Fish's name, id, details, notes and usage | `backend/engines/fish_api/library.py`, routes in `backend/api/routers/fish_audio.py` (`/api/fish/library`), `voice-library.tsx`, `voices-dialog.tsx` |
-| Loudness | `prosody.normalize_loudness` is now always sent explicitly | `client.build_body` |
-| Training data | Index of the render folders, speakers by voice id, filters, character zoom, audio measurements, select all/none, export (jsonl, Fish `.lab`, LJSpeech) with tag strip or keep list | `backend/engines/fish_api/{dataset,dataset_quality}.py`, `backend/api/routers/fish_dataset.py`, `features/fish-dataset/` |
+## 8. Facts about the data (2026-10-23, `D:\fish_tts\input`)
 
-Local data written by these features (all under `<data dir>/fish_stories/`): drafts `*.json`, `voice_library.json`, `clip_stats.json`, and renders in the configured output folder. Run folders also keep `job.json`, `manifest.json`, `story.json`, `settings.json`, `requests.jsonl` and `run.log`.
+- 32 runs, 31 chapters, about 3,370 usable clips, all `s2.1-pro-free`, 44.1 kHz mono WAV.
+- Only **SS_Narrator** has hours of audio (about 4 h). Noctis (about 34 min) and sun_2 (about 26 min) are borderline; every other speaker is under about 8 min.
+- `[slow]` is on about 99% of narrator clips, so a model trained on the narrator will always speak slowly unless that changes in future renders.
+- Fish's non-verbal tags are `[sighing]` (33), `[laughing]` (17), `[chuckling]` (10); OmniVoice uses its own spellings. Use the export's `name=other` tag mapping (for example `laughing=laughter`).
+- **Loudness differs by chapter.** Chapters 3193–3199 were rendered with `normalize_loudness: false`, `volume: 0`, `top_p: 1.0`: median about -14 dB RMS with peaks near 0.95 (hot, not clipped). From 3200 on, loudness normalization and `volume -4`: about -26 dB RMS, peaks near 0.27. Do not mix them in one training set without choosing a level.
+- 140 clips are listed in manifests but their WAVs were deleted (mostly chapter 3218); 303 clips are older copies of re-rendered lines.
+- Choppiness: pauses of 300 ms or more inside a clip are similar across 3203 and 3206–3208 (settings are identical), so no settings explanation was found for the "choppy" 3206–3208 audio. A/B renders (loudness field omitted, true, false, basics only) were proposed but not run, to avoid spending credits.
 
-### Do not change without a plan
+## 9. Where to start for the LoRA phase
 
-- **Audio preservation:** a single remote WAV is saved byte-for-byte; no local normalization or transcoding of Fish audio. The dataset code only reads the WAVs, and only an explicit export resamples (to a copy).
-- **Request shape:** keep preview and render compiling the same requests, keep `request_mode` meaning "unset = single", and keep minimal-request mode sending only text, format, sample rate and reference id. `prosody.normalize_loudness` is sent on purpose; do not go back to omitting it when true.
-- **The run-folder layout and manifest fields** (`<root>/<chapter>/<story>/run-NNN_<time>_<id>/…`). The training-data index and Load/Resume read them, and real folders (about 3,400 clips under `D:\fish_tts\input`) already depend on them. Changes need to stay readable for old runs: 728 of the 3,510 chunks have no `request_mode`, and the dataset index falls back to `story.json` when a chunk has no `text`.
-- **Never write to, rename or delete the user's render folders** from the dataset code. It is read-only; exports go to a new folder and refuse a non-empty one. `fish_non_api` is deliberately ignored.
-- **Local-first:** only listing the account's voices, searching the public library, importing a collection page, checking the balance, and rendering contact Fish or fish.audio, each from an explicit button. Dataset browsing, measuring and exporting make no network call. Do not add telemetry, keys in fixtures, or background Fish calls.
-- **Voice names:** refreshing the account's voices must never overwrite a name the user chose (`library.update` keeps `alias` and `notes`; the board keeps names already on it).
-- **Do not "fix" these deliberately-kept details:** speakers are grouped by voice id, not name; older re-renders of the same words are hidden by default rather than deleted; `exclude_keys` leaves clips listed but out of the selection and export.
+### The trainer that already exists (OmniVoice)
 
-### Rules from the repo that apply here
+- Code: `omnivoice/training/` (`trainer.py`, `builder.py`, `config.py`, `checkpoint.py`) and `omnivoice/cli/train.py`. Docs: `docs/training.md` (`accelerate launch -m omnivoice.cli.train --train_config … --data_config … --output_dir …`) and `docs/data_preparation.md`. Example configs: `examples/config/`.
+- It does **full fine-tuning** from a checkpoint (`init_from_checkpoint`, `resume_from_checkpoint`; backbone `Qwen/Qwen3-0.6B` via `llm_name_or_path`). A repo-wide search finds **no LoRA or `peft` code**, so LoRA means adding an adapter path to the trainer, and checking `peft` against `pyproject.toml` / `uv tree` before adding a dependency.
+- Input it expects: JSONL with `{"id", "audio_path", "text", "language_id"}` per line, audio resampled to **24 kHz**. `omnivoice.scripts.extract_audio_tokens` (needs `eustlb/higgs-audio-v2-tokenizer`) turns that into WebDataset tar shards plus a `data.lst`, which the data config points at.
+- **Quick win to build first:** an `omnivoice` export format in `dataset.py` that writes exactly that JSONL (24 kHz mono WAVs, tags stripped except the OmniVoice tags you keep, `language_id: "en"`), so the export dialog feeds the existing tokenizer with no manual conversion.
 
-- Per `CLAUDE.md`: no agent credit in commits or PRs (no `Co-authored-by` or "Generated with" lines), update docs and `CHANGELOG.md` in the same change, keep changelog entries one line (a test enforces about 400 characters), put UI text through i18n in all 21 locale files, and read bot reviews before merging. Do not bump versions or create release tags.
-- Locale JSON is committed with **CRLF** endings. With `core.autocrlf=true` a plain `git add` rewrites them to LF (a ~79k-line diff). Stage them with `git hash-object -w --no-filters <file>` and `git update-index --cacheinfo 100644,<hash>,<file>`.
-- Write files with an explicit newline convention (read and write with `newline=""` and keep what the file already uses) so edits do not change line endings.
+### Other targets
 
-### Known environment problems (not caused by this work)
+- **Fish S2 local:** not in the repo (only the cloud engine exists). The `fish_lab` export (WAV + `.lab`) matches Fish's own fine-tuning layout, but a local engine has to come first. The S2 Pro config shared during design shows a 36-layer text model plus a 4-layer audio decoder with 10 codebooks; which modules to target with LoRA was not investigated.
+- **Qwen3-TTS:** nothing in the repo; its tag format, sample rate and trainer are unresearched.
 
-- Many backend tests error at import because `torchaudio` cannot load on the author's Windows machine (`libtorchaudio.pyd`). `test_finished_provider_audio_skips_route_dsp` fails for that reason with or without these changes. Run the Fish tests with `python -m pytest tests/backend/engines tests/backend/api/test_fish_audio_route.py -q -k fish`.
-- `tests/test_no_hardcoded_cjk.py` fails on `features/fish-story/story-model.ts` (a sentence-splitting regex with CJK punctuation) since an earlier commit. Adding that file to the test's `_ALLOWED_FILES` with a justification is the fix; it was left alone.
-- Local OmniVoice generation can time out on long text (default chunk size 800 characters; the budget only extends while chunks finish). That is the local engine, separate from Fish.
+### Infrastructure to reuse
 
-### Checks before handing back
+- **Long jobs with progress, logs and resume:** `story_jobs.py` (background thread, `job.json` + `run.log`, interrupted-run detection, resume) and the smaller `dataset_quality.py` job.
+- **Run training as a killable subprocess:** `backend/services/subprocess_backend.py`, `backend/core/contained_subprocess.py`, and [omnivoice-subprocess.md](omnivoice-subprocess.md) for why a wedged GPU job must be killable. Training will need its own venv for torch, accelerate and peft.
+- **GPU and VRAM gating:** `backend/services/model_manager.py` (GPU pool, execution budgets, "abandoned worker") and `backend/services/gpu_sandbox.py`. Unload the resident TTS model before a run.
+- **API and UI pattern:** `routers/fish_dataset.py` and `features/fish-dataset/`. A natural home is a *Train* step reached from the export dialog, with a runs list like the Jobs dialog.
 
-`bun run typecheck` and `bun run locale:check` (from `electron/`), `python -m pytest tests/test_locale_parity.py tests/test_changelog_style.py tests/test_changelog_parse.py`, the Fish backend tests above, and `npx vitest run src/renderer/src/features/fish-story src/renderer/src/features/fish-dataset` (use `bun run typecheck`, not `npx tsc`). The folder `_gpt_rewrite_chapter_prompt/` in the repo root is the owner's own untracked material; leave it out of commits.
+### Constraints
 
-### Not verified
+- `docs/ROADMAP.md` (the on-device learning rows) says LoRA **ships only with an automatic evaluation gate**. Plan a before/after listening test and a metric (for example speaker similarity or an ASR word-error check on held-out `val.jsonl` clips) in the first version.
+- `val.jsonl` uses a stable hash split, so re-exporting never leaks a validation clip into training.
+- Local-first: no network for training.
 
-No live Fish call was made while building the later features, so the voice-library details (author, languages, tags) rely on the fields the existing voice listing already returns. The screens were tested with component tests, not driven by hand in the running app. OmniVoice's exact non-verbal tag list and anything about LoRA on Fish S2 or Qwen3-TTS are unresearched.
+### Data decisions needed before training
+
+- One loudness level (filter chapters 3193–3199 or add normalization on export).
+- Whether `[slow]` stays in the narrator's text or those clips are re-rendered without it.
+- Tag policy per target: Fish keeps its tags; OmniVoice only its non-verbal tags (verify its exact list first).
+
+## 10. Not built yet
+
+A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gender); loudness normalization on export; an `omnivoice` export format; the training step itself.
+
+## 11. Not verified
+
+No live Fish call was made while building the later features, so voice-library details rely on the fields the existing voice listing already returns. The screens were tested with component tests, not driven by hand in the running app. OmniVoice's exact non-verbal tag list, and LoRA on Fish S2 or Qwen3-TTS, are unresearched.
