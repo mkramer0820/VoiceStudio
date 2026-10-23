@@ -22,6 +22,7 @@ evaluation, gradient accumulation, and learning rate scheduling.
 Launched via ``omnivoice.cli.train``.
 """
 
+import json
 import logging
 import math
 import os
@@ -161,7 +162,8 @@ class OmniTrainer:
     def create_optimizer_and_scheduler(self):
         """Default AdamW + configurable LR Scheduler."""
         optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            # Frozen weights (LoRA runs) get no gradient and need no optimizer state.
+            [p for p in self.model.parameters() if p.requires_grad],
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
@@ -235,6 +237,23 @@ class OmniTrainer:
         eval_metrics = {"eval/loss": final_eval_loss}
         self.accelerator.log(eval_metrics, step=self.global_step)
         logger.info(f"Eval Loss: {final_eval_loss:.4f}")
+        if self.accelerator.is_main_process:
+            # One line per evaluation; the evaluation gate reads step 0 (base model) vs the rest.
+            with open(
+                os.path.join(self.config.output_dir, "eval_history.jsonl"),
+                "a",
+                encoding="utf-8",
+            ) as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "step": self.global_step,
+                            "eval_loss": final_eval_loss,
+                            "batches": eval_count,
+                        }
+                    )
+                    + "\n"
+                )
 
         self.accelerator.wait_for_everyone()
         self.model.train()
@@ -253,6 +272,13 @@ class OmniTrainer:
             self.train_dataloader.dataset.set_epoch(self.epoch)
 
         # Logger
+        if (
+            getattr(self.config, "eval_at_start", False)
+            and self.eval_dataloader is not None
+            and self.global_step == 0
+        ):
+            self.evaluate()  # the untouched base model's held-out loss
+
         train_logger = TrainLogger(
             self.accelerator, self.config.steps, self.config.logging_steps
         )

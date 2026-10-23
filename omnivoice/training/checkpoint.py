@@ -134,11 +134,23 @@ def save_checkpoint(
 
     # 2. Save Model in HF format (config.json + pytorch_model.bin/safetensors)
     unwrap_model = accelerator.unwrap_model(model)
-    unwrap_model.save_pretrained(
-        checkpoint_dir,
-        is_main_process=accelerator.is_main_process,
-        save_function=accelerator.save,
-    )
+    if getattr(unwrap_model, "_lora_spec", None) is not None:
+        # LoRA run: the wrapped layers have adapter-shaped keys, so a full save_pretrained
+        # would not load back as an OmniVoice. Store only the adapter (resume uses save_state).
+        if accelerator.is_main_process:
+            from omnivoice.training.lora import save_adapter
+
+            save_adapter(
+                unwrap_model,
+                os.path.join(checkpoint_dir, "adapter"),
+                {"step": step},
+            )
+    else:
+        unwrap_model.save_pretrained(
+            checkpoint_dir,
+            is_main_process=accelerator.is_main_process,
+            save_function=accelerator.save,
+        )
 
     # 3. Save Tokenizer
     if accelerator.is_main_process:

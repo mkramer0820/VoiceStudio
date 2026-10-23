@@ -22,6 +22,7 @@ metadata and the backend fallback mirror it.
 - Fish story board: a saved voice library remembers every voice you list, add or render with, so you can name each character your own way and still see Fish's name, the voice id and its details — thanks @mkramer0820!
 - Training data screen: browse your Fish renders by speaker with a character zoom, clickable length, tag and chapter charts, audio-quality filters and auto-advance playback, and export WAVs with `metadata.jsonl`, Fish `.lab` or LJSpeech files, stripping all emotion tags or keeping only the ones you list (even renamed, like `laughing=laughter`) — thanks @mkramer0820!
 - Training data export: an OmniVoice format (24 kHz mono WAVs plus `omnivoice_train.jsonl` / `omnivoice_val.jsonl`, plain text with only OmniVoice's own tags kept) and a "bring all clips to one loudness level" option for any format — thanks @mkramer0820!
+- OmniVoice trainer: optional LoRA adapters (`lora_enabled` in the training config; no new dependency), compact adapter checkpoints and a held-out evaluation history for an evaluation gate — thanks @mkramer0820!
 - GitHub Sponsors is now the lead way to support VoiceStudio — on the Support page, the footer support menu, the repository Sponsor button, and SPONSORS.md (#2918)
 
 ### Changed

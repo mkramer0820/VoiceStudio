@@ -55,6 +55,27 @@ class TrainingConfig:
     resume_from_checkpoint: Optional[str] = None
     init_from_checkpoint: Optional[str] = None
 
+    # LoRA adapter (see omnivoice/training/lora.py). Off = full fine-tuning, as before.
+    lora_enabled: bool = False
+    lora_r: int = 16
+    lora_alpha: float = 32.0
+    lora_dropout: float = 0.05
+    lora_target_modules: List[str] = field(
+        default_factory=lambda: [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
+    )
+    # Extra top-level modules trained in full next to the adapter (e.g. ["audio_heads"]).
+    lora_train_modules: List[str] = field(default_factory=list)
+    # Run the held-out evaluation once before training (the base model's loss, for the gate).
+    eval_at_start: bool = False
+
     # Training Hyperparams
     learning_rate: float = 1e-4
     weight_decay: float = 0.01

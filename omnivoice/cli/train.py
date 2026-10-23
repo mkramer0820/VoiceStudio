@@ -57,6 +57,23 @@ def main():
 
     # 2. Build Components
     model, tokenizer = build_model_and_tokenizer(config)
+    if config.lora_enabled:
+        from omnivoice.training.lora import LoraSpec, apply_lora
+
+        report = apply_lora(
+            model,
+            LoraSpec(
+                r=config.lora_r,
+                alpha=config.lora_alpha,
+                dropout=config.lora_dropout,
+                target_modules=list(config.lora_target_modules),
+                train_modules=list(config.lora_train_modules),
+            ),
+        )
+        print(
+            f"LoRA: {len(report.wrapped)} layers wrapped, "
+            f"{report.trainable_params:,} of {report.total_params:,} parameters train"
+        )
     train_loader, eval_loader = build_dataloaders(config, tokenizer)
 
     # 3. Initialize Trainer and Start
