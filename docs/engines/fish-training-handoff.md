@@ -1,5 +1,7 @@
 # Fish training data: handoff for the LoRA phase
 
+Start with the overall state, branch layout and do-not-touch list in [fish-audio-handoff.md](fish-audio-handoff.md#current-state-2026-10-23-and-what-not-to-touch); this file is the training-specific detail.
+
 State of `ext/fish-training-data` and what the next phase (training LoRAs) can build on.
 
 ## What exists
@@ -54,7 +56,7 @@ Read these in order. Everything below was checked in the repo on 2026-10-23.
 ### 4. Constraints from the repo rules
 
 - `docs/ROADMAP.md` (lines about on-device learning) says LoRA **ships only with an automatic evaluation gate**. Plan the before/after listening test and a metric (for example a speaker-similarity or ASR word-error check on held-out `val.jsonl` clips) as part of the first version, not a follow-up.
-- `CLAUDE.md`: default features must behave the same on macOS, Windows and Linux. GPU training will differ by host, so keep it opt-in (a setting or flag), skip it where it cannot work (for example no CUDA) with a clear message, and never call out to the network for it. Docs, changelog, locale parity (all 22 locale files) and a fail-before/pass-after test come with the change.
+- `CLAUDE.md`: default features must behave the same on macOS, Windows and Linux. GPU training will differ by host, so keep it opt-in (a setting or flag), skip it where it cannot work (for example no CUDA) with a clear message, and never call out to the network for it. Docs, changelog, locale parity (all 21 locale files) and a fail-before/pass-after test come with the change.
 - Hold-out: `val.jsonl` already uses a stable hash split, so re-exporting never leaks a validation clip into training.
 
 ### 5. Data decisions to make before training
