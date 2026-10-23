@@ -6,6 +6,7 @@ const SECONDARY_ROUTES = new Set([
   '/stories',
   '/audiobook',
   '/fish-story',
+  '/fish-dataset',
   '/tools',
   '/batch',
   '/gallery',

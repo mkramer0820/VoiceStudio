@@ -74,6 +74,10 @@ for `FISH_TTS_REFERENCE_ID` / the default voice, or the per-request `voice`.
 Listing is an explicit request that contacts Fish; it never runs at startup or
 while checking availability. From Python: `FishAudioBackend().list_voices(mine=True)`.
 
+## Voice library (name your characters)
+
+**More voices** opens your voice library first. Every voice you list with **Load my voices**, add to a story (by id, library search or collection) or render with is saved locally in `<data dir>/fish_stories/voice_library.json`. Each record keeps your **character name**, the Fish name, the voice id (copy button and a link to fish.audio), Fish's details (author, languages, tags, description, visibility), your notes, and how many lines you have rendered with it and when. Renaming a character there also renames it on the board; refreshing your Fish voices never overwrites a name you chose. Search matches the character name, Fish name, id, notes and tags. Removing a voice only removes it from this list. Saving and renaming are local; only listing your account's voices or searching the public library contacts Fish.
+
 ## Story board (stage first, then submit)
 
 **Stories → Fish story board** is a staging editor for multi-voice stories. Everything
@@ -122,6 +126,17 @@ Each render gets its own folder, so nothing is ever overwritten:
 - **Resume:** *Resume N unfinished* (after a confirmation) re-sends only unfinished lines, grouping them again according to the multi-speaker switch, and rebuilds the joined file. Running out of credits stops the job and keeps what finished, so top up and resume.
 - **Warnings:** if Fish returns a different sample rate than requested, the job and log say so.
 - **Defaults:** **Save these as my defaults** stores the render options in Settings for every new story. Environment variables still win.
+
+## Training data (your renders as a dataset)
+
+**Training data** in the sidebar indexes the story renders already on disk. It reads local files only and never contacts Fish.
+
+- **Folder:** set the folder that holds your chapter folders (`<folder>/<chapter>/<story>/run-NNN_…/`, each with `manifest.json`, `story.json` and the WAVs). It is only read. A folder named `fish_non_api` is ignored.
+- **Speakers:** clips are grouped by Fish voice id, so two names for one voice count as one speaker. Lines whose audio file is gone are skipped and counted; an older render of the same words by the same voice is hidden unless you include older copies.
+- **Browse:** filter by text, emotion tag, chapter, length and word count, play any clip, and untick clips to leave them out of the export.
+- **Export:** writes a new folder (`<speaker>/<speaker>_00001.wav`) plus any of `metadata.jsonl` (Hugging Face audiofolder layout), a Fish `.lab` transcript beside each WAV, and an LJSpeech `metadata.csv` per speaker, with an optional fixed validation split, optional resampling and either the `[emotion]` tags kept or removed. A `dataset.json` card records the filters and source. An existing non-empty folder is never overwritten.
+- **Tags:** the transcript can keep every `[emotion]` tag, or strip them all. When stripping, list the tags to leave in, comma-separated; write `laughing=laughter` to keep Fish's `[laughing]` but export it as `[laughter]` for a model that spells the sound differently. The tags found in your clips are listed to click.
+- **Terms:** the clips are synthetic speech from Fish. Check Fish's terms before using them to train another model.
 
 ## Limits (phase 1)
 

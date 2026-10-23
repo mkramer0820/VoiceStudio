@@ -20,6 +20,10 @@ const StoriesPage = lazyRouteComponent(
   () => import('@/features/longform/longform-page'),
   'StoriesPage',
 );
+const FishDatasetPage = lazyRouteComponent(
+  () => import('@/features/fish-dataset/fish-dataset-page'),
+  'FishDatasetPage',
+);
 const FishStoryPage = lazyRouteComponent(
   () => import('@/features/fish-story/fish-story-page'),
   'FishStoryPage',
@@ -192,6 +196,11 @@ export const fishStoryRoute = createRoute({
   path: '/fish-story',
   component: FishStoryPage,
 });
+export const fishDatasetRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/fish-dataset',
+  component: FishDatasetPage,
+});
 export const audiobookRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/audiobook',
@@ -284,6 +293,7 @@ export const routeTree = rootRoute.addChildren([
   credentialsRoute,
   storiesRoute,
   fishStoryRoute,
+  fishDatasetRoute,
   audiobookRoute,
   projectsRoute,
   indexRoute,

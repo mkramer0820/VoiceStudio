@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -92,8 +92,49 @@ async def list_voices(
         items = await run_in_threadpool(_voices, scope == "mine", title, language)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    if scope == "mine":  # your own account's voices are always worth remembering
+        _remember(items, "mine")
     return {"voices": items, "default_voice_id": load_config().reference_id,
             "count": len(items), "scope": scope}
+
+
+def _remember(voices: list[dict], source: str) -> None:
+    from engines.fish_api import library
+
+    try:
+        library.remember(voices, source)
+    except OSError:
+        logger.warning("Fish voice library: could not save", exc_info=True)
+
+
+class _LibraryEntry(BaseModel):
+    alias: Optional[str] = Field(None, max_length=60, description="Your name for the character")
+    notes: Optional[str] = Field(None, max_length=1000)
+    fish: Optional[dict] = Field(None, description="Details Fish gave for the voice (title, description, languages…)")
+
+
+@router.get("/library", dependencies=[Depends(reject_cross_site_get)])
+def library_list():
+    """Every voice you have saved, used or named, newest use first. Local only."""
+    from engines.fish_api import library
+
+    return {"voices": library.list_all()}
+
+
+@router.put("/library/{voice_id}")
+def library_put(body: _LibraryEntry, voice_id: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,128}$")):
+    from engines.fish_api import library
+
+    return library.update(voice_id, alias=body.alias, notes=body.notes, fish=body.fish)
+
+
+@router.delete("/library/{voice_id}")
+def library_delete(voice_id: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,128}$")):
+    from engines.fish_api import library
+
+    if not library.forget(voice_id):
+        raise HTTPException(status_code=404, detail="Voice not in your library")
+    return {"deleted": voice_id}
 
 
 class _CollectionBody(BaseModel):

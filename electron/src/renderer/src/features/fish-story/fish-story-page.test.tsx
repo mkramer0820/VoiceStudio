@@ -495,3 +495,69 @@ it('loads a past run into the board with its settings, without contacting Fish',
   expect(screen.getByRole('switch', { name: 'fishStory.multi_speaker' })).toBeChecked();
   expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 });
+
+const SAVED = {
+  voice_id: 'v-cap',
+  alias: 'Captain Reyes',
+  notes: '',
+  fish_name: 'Gruff Sailor',
+  description: 'Weathered, low and slow',
+  languages: ['en'],
+  tags: ['male', 'old'],
+  visibility: 'public',
+  state: 'trained',
+  author: 'someone',
+  fish_url: 'https://fish.audio/m/v-cap/',
+  source: 'mine',
+  added_at: 1760000000,
+  last_used_at: 1760100000,
+  uses: 3,
+  lines: 42,
+};
+
+it('lists saved voices with your character name beside the Fish name, id and details, and renames them', async () => {
+  const base = mock.api.getMockImplementation()!;
+  mock.api.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/fish/library' && !init?.method) return Promise.resolve({ voices: [SAVED] });
+    if (path === '/api/fish/library/v-cap' && init?.method === 'PUT')
+      return Promise.resolve({ ...SAVED, ...JSON.parse(String(init.body)) });
+    return base(path, init);
+  });
+  await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.more_voices/ }));
+  const row = await screen.findByTestId('library-row');
+  expect(within(row).getByLabelText('fishStory.lib_alias')).toHaveValue('Captain Reyes');
+  expect(within(row).getByText('Gruff Sailor')).toBeInTheDocument();
+  expect(within(row).getByText('v-cap')).toBeInTheDocument();
+  expect(within(row).getByText(/someone · en · public · trained/)).toBeInTheDocument();
+  expect(within(row).getByText('Weathered, low and slow')).toBeInTheDocument();
+  expect(within(row).getByText(/fishStory\.lib_used .*"lines":42,"runs":3/)).toBeInTheDocument();
+
+  fireEvent.click(within(row).getByRole('button', { name: /fishStory\.voice_add_named/ }));
+  const alias = within(row).getByLabelText('fishStory.lib_alias');
+  fireEvent.change(alias, { target: { value: 'The Captain' } });
+  fireEvent.blur(alias);
+  await waitFor(() => expect(calls()).toContainEqual(['/api/fish/library/v-cap', 'PUT']));
+  const put = mock.api.mock.calls.filter(([p, i]) => p === '/api/fish/library/v-cap' && i?.method === 'PUT');
+  expect(JSON.parse(put.at(-1)![1].body)).toMatchObject({ alias: 'The Captain' });
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.done' }));
+  expect((await screen.findAllByRole('option', { name: 'The Captain' })).length).toBeGreaterThan(0);
+});
+
+it('keeps a character name when my voices are listed again, and searches the library', async () => {
+  const base = mock.api.getMockImplementation()!;
+  mock.api.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/fish/library' && !init?.method)
+      return Promise.resolve({ voices: [{ ...SAVED, voice_id: 'v-sun', alias: 'Sunny', fish_name: 'sun_2' }, SAVED] });
+    return base(path, init);
+  });
+  await loadStory();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.load_voices/ }));
+  expect((await screen.findAllByRole('option', { name: 'Sunny' })).length).toBeGreaterThan(0);
+  expect(screen.queryAllByRole('option', { name: 'sun_2' })).toHaveLength(0);
+
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.more_voices/ }));
+  expect(await screen.findAllByTestId('library-row')).toHaveLength(2);
+  fireEvent.change(screen.getByLabelText('fishStory.lib_search'), { target: { value: 'gruff' } });
+  expect(screen.getAllByTestId('library-row')).toHaveLength(1);
+});

@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckIcon, LoaderCircleIcon, PlusIcon, SearchIcon } from 'lucide-react';
+import { VoiceLibrary } from './voice-library';
+import type { VoiceRecord } from './use-fish-story';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -33,14 +35,24 @@ export function VoicesDialog({
   open,
   onOpenChange,
   voiceNames,
+  library,
+  onOpen,
   onAdd,
+  onRename,
+  onNotes,
+  onForget,
   onSearch,
   onImportCollection,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   voiceNames: Record<string, string>;
-  onAdd: (id: string, name?: string) => void;
+  library: VoiceRecord[];
+  onOpen: () => void;
+  onAdd: (id: string, options?: { name?: string; fish?: FishVoice }) => void;
+  onRename: (id: string, alias: string) => void;
+  onNotes: (id: string, notes: string) => void;
+  onForget: (id: string) => void;
   onSearch: (title: string, language: string) => Promise<FishVoice[] | null>;
   onImportCollection: (url: string) => Promise<{ title: string; voices: FishVoice[] } | null>;
 }) {
@@ -55,6 +67,10 @@ export function VoicesDialog({
   const [collection, setCollection] = useState<{ title: string; voices: FishVoice[] } | null>(null);
   const [importing, setImporting] = useState(false);
   const parsed = parseVoiceId(rawId);
+
+  useEffect(() => {
+    if (open) onOpen();
+  }, [open, onOpen]);
 
   const search = async () => {
     setBusy(true);
@@ -75,6 +91,15 @@ export function VoicesDialog({
           <DialogTitle>{t('fishStory.voices_title')}</DialogTitle>
           <DialogDescription>{t('fishStory.voices_desc')}</DialogDescription>
         </DialogHeader>
+
+        <VoiceLibrary
+          library={library}
+          voiceNames={voiceNames}
+          onAdd={onAdd}
+          onRename={onRename}
+          onNotes={onNotes}
+          onForget={onForget}
+        />
 
         <section className="space-y-2">
           <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -100,7 +125,7 @@ export function VoicesDialog({
               disabled={!parsed}
               onClick={() => {
                 if (!parsed) return;
-                onAdd(parsed, name);
+                onAdd(parsed, { name });
                 setRawId('');
                 setName('');
               }}
@@ -148,7 +173,7 @@ export function VoicesDialog({
                 <Button
                   size="xs"
                   disabled={collection.voices.every((v) => v.id in voiceNames)}
-                  onClick={() => collection.voices.forEach((v) => onAdd(v.id, v.title))}
+                  onClick={() => collection.voices.forEach((v) => onAdd(v.id, { fish: v }))}
                 >
                   <PlusIcon /> {t('fishStory.collection_add_all', { count: collection.voices.length })}
                 </Button>
@@ -167,7 +192,7 @@ export function VoicesDialog({
                         variant="outline"
                         disabled={added}
                         aria-label={t('fishStory.voice_add_named', { name: voice.title || voice.id })}
-                        onClick={() => onAdd(voice.id, voice.title)}
+                        onClick={() => onAdd(voice.id, { fish: voice })}
                       >
                         {added ? <CheckIcon /> : <PlusIcon />}
                         {added ? t('fishStory.voice_added') : t('fishStory.voice_add')}
@@ -232,7 +257,7 @@ export function VoicesDialog({
                       variant="outline"
                       disabled={added}
                       aria-label={t('fishStory.voice_add_named', { name: voice.title || voice.id })}
-                      onClick={() => onAdd(voice.id, voice.title)}
+                      onClick={() => onAdd(voice.id, { fish: voice })}
                     >
                       {added ? <CheckIcon /> : <PlusIcon />}
                       {added ? t('fishStory.voice_added') : t('fishStory.voice_add')}

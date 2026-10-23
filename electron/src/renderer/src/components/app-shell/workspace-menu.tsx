@@ -5,6 +5,7 @@ import {
   AudioLinesIcon,
   FingerprintIcon,
   BookAudioIcon,
+  DatabaseIcon,
   BookOpenIcon,
   FolderIcon,
   WrenchIcon,
@@ -30,6 +31,7 @@ type Destination = readonly [
     | '/stories'
     | '/audiobook'
     | '/fish-story'
+    | '/fish-dataset'
     | '/projects'
     | '/tools'
     | '/batch'
@@ -57,6 +59,7 @@ const storyDestinations: Destination[] = [
   ['/stories', 'nav.stories', AudioLinesIcon],
   ['/audiobook', 'audiobook.title', BookOpenIcon],
   ['/fish-story', 'fishStory.nav', BookAudioIcon],
+  ['/fish-dataset', 'fishDataset.nav', DatabaseIcon],
 ];
 const dubDestinations: Destination[] = [
   ['/dub', 'dubWorkspace.title', FilmIcon],
@@ -83,6 +86,7 @@ const iconMotion: Record<Destination[0], string> = {
   '/stories': 'wave',
   '/audiobook': 'tilt',
   '/fish-story': 'wave',
+  '/fish-dataset': 'lift',
   '/dub': 'tilt',
   '/batch': 'lift',
   '/transcriptions': 'nudge',

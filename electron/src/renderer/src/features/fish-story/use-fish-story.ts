@@ -41,6 +41,26 @@ export interface FishDefaults {
   output_dir_effective: string;
 }
 
+/** A voice you have saved, named or used: your character name beside what Fish says about it. */
+export interface VoiceRecord {
+  voice_id: string;
+  alias: string;
+  notes: string;
+  fish_name: string;
+  description: string;
+  languages: string[];
+  tags: string[];
+  visibility: string | null;
+  state: string | null;
+  author: string | null;
+  fish_url: string;
+  source: string;
+  added_at: number;
+  last_used_at: number | null;
+  uses: number;
+  lines: number;
+}
+
 export interface FishBalance {
   credit: string;
   cumulative_top_up: string;
@@ -63,6 +83,9 @@ export function useFishStory() {
   const [defaults, setDefaults] = useState<FishDefaults | null>(null);
   const [voices, setVoices] = useState<FishVoice[] | null>(null);
   const [voicesBusy, setVoicesBusy] = useState(false);
+  const [library, setLibrary] = useState<VoiceRecord[]>([]);
+  const libraryRef = useRef<VoiceRecord[]>([]);
+  libraryRef.current = library;
   const [balance, setBalance] = useState<FishBalance | null>(null);
   const [balanceBusy, setBalanceBusy] = useState(false);
   const history = useRef<StoryChunk[][]>([]);
@@ -107,6 +130,20 @@ export function useFishStory() {
       alive = false;
     };
   }, []);
+
+  /** Local: the voices remembered from earlier lists, additions and renders. */
+  const refreshLibrary = useCallback(async () => {
+    try {
+      const result = await apiJson<{ voices?: VoiceRecord[] }>('/api/fish/library');
+      setLibrary(result.voices ?? []);
+    } catch {
+      // The library is a convenience; the board works without it.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLibrary();
+  }, [refreshLibrary]);
 
   const persist = useCallback(async () => {
     const current = draftRef.current;
@@ -244,29 +281,92 @@ export function useFishStory() {
     try {
       const result = await apiJson<{ voices: FishVoice[] }>('/api/fish/voices?scope=mine');
       setVoices(result.voices);
+      const alias = new Map(libraryRef.current.map((r) => [r.voice_id, r.alias]));
       edit(
         (d) => ({
           ...d,
           voices: {
+            // Names already on the board (and your character names) win over Fish's titles.
+            ...Object.fromEntries(
+              result.voices.map((v) => [v.id, alias.get(v.id) || v.title || v.id]),
+            ),
             ...d.voices,
-            ...Object.fromEntries(result.voices.map((v) => [v.id, v.title || v.id])),
           },
         }),
         false,
       );
+      void refreshLibrary(); // the server remembers your account's voices as they are listed
     } catch (reason) {
       setError(describeError(reason));
     } finally {
       setVoicesBusy(false);
     }
-  }, [edit]);
+  }, [edit, refreshLibrary]);
 
-  /** Local only: put a voice on the board by its Fish id (public voices, a friend's, one you pasted). */
-  const addVoice = useCallback(
-    (id: string, name?: string) =>
-      edit((d) => ({ ...d, voices: { ...d.voices, [id]: name?.trim() || d.voices[id] || id } }), false),
-    [edit],
+  /** Local: name a character, add notes, or store Fish's details for a voice in the library. */
+  const saveVoice = useCallback(
+    async (
+      id: string,
+      patch: { alias?: string; notes?: string; fish?: Partial<FishVoice> },
+    ): Promise<VoiceRecord | null> => {
+      try {
+        const record = await apiJson<VoiceRecord>(`/api/fish/library/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(patch),
+        });
+        if (record?.voice_id) {
+          setLibrary((rows) => [record, ...rows.filter((r) => r.voice_id !== id)]);
+          return record;
+        }
+      } catch (reason) {
+        setError(describeError(reason));
+      }
+      return null;
+    },
+    [],
   );
+
+  /**
+   * Local only: put a voice on the board by its Fish id (public voices, a friend's, one you pasted).
+   * ``name`` is a character name you typed; Fish's own title is kept beside it in the library.
+   */
+  const addVoice = useCallback(
+    (id: string, options: { name?: string; fish?: FishVoice } = {}) => {
+      const known = libraryRef.current.find((r) => r.voice_id === id);
+      const typed = options.name?.trim();
+      edit(
+        (d) => ({
+          ...d,
+          voices: {
+            ...d.voices,
+            [id]: typed || d.voices[id] || known?.alias || options.fish?.title || known?.fish_name || id,
+          },
+        }),
+        false,
+      );
+      void saveVoice(id, { ...(typed ? { alias: typed } : {}), ...(options.fish ? { fish: options.fish } : {}) });
+    },
+    [edit, saveVoice],
+  );
+
+  /** Give a character its own name everywhere: in the library and on this board. */
+  const renameVoice = useCallback(
+    async (id: string, alias: string) => {
+      const record = await saveVoice(id, { alias });
+      const shown = alias.trim() || record?.fish_name || id;
+      edit((d) => (id in d.voices ? { ...d, voices: { ...d.voices, [id]: shown } } : d), false);
+    },
+    [edit, saveVoice],
+  );
+
+  const forgetVoice = useCallback(async (id: string) => {
+    try {
+      await apiJson(`/api/fish/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setLibrary((rows) => rows.filter((r) => r.voice_id !== id));
+    } catch (reason) {
+      setError(describeError(reason));
+    }
+  }, []);
 
   /** Contacts Fish (explicit action): search the public Voice Library. */
   const searchLibrary = useCallback(async (title: string, language: string): Promise<FishVoice[] | null> => {
@@ -334,6 +434,11 @@ export function useFishStory() {
     newStory,
     loadRun,
     loadVoices,
+    library,
+    refreshLibrary,
+    saveVoice,
+    renameVoice,
+    forgetVoice,
     addVoice,
     searchLibrary,
     importCollection,

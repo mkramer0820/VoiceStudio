@@ -19,6 +19,8 @@ metadata and the backend fallback mirror it.
 - Fish story board: add voices by id or from the public library, preview the exact schema-checked requests before sending, advanced generation settings, the free `s2.1-pro-free` test model, and readable story and run folders — thanks @mkramer0820!
 - Fish story board: character tags mapped to voices with a narrator default, render job history with request logs, resume, and a configurable output folder — thanks @mkramer0820!
 - Fish story board: multi-speaker calls are an on/off switch (off = one call per line), plus a send-only-the-basics option, a Use Fish defaults reset, blank tuning fields that no longer inherit stored values, and a warning when a character tag was never applied, and importing a public voice collection by link — thanks @mkramer0820!
+- Fish story board: a saved voice library remembers every voice you list, add or render with, so you can name each character your own way and still see Fish's name, the voice id and its details — thanks @mkramer0820!
+- Training data screen: browse your Fish renders by speaker, filter and play clips, and export WAVs with `metadata.jsonl`, Fish `.lab` or LJSpeech files, stripping all emotion tags or keeping only the ones you list (even renamed, like `laughing=laughter`) — thanks @mkramer0820!
 - GitHub Sponsors is now the lead way to support VoiceStudio — on the Support page, the footer support menu, the repository Sponsor button, and SPONSORS.md (#2918)
 
 ### Changed

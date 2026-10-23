@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from . import client
+from . import library as voice_library
 from .config import FishConfig, load_config, resolve_api_key, setting_source
 from .story import Chunk, Draft, effective_config
 from .story import check_request as story_check
@@ -687,6 +688,11 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
     except OSError as exc:
         raise ValueError(f"Cannot write to the output folder ({type(exc).__name__}).") from exc
     _register(job)
+    used: dict[str, int] = {}
+    for entry in entries:
+        if entry.get("voice"):
+            used[entry["voice"]] = used.get(entry["voice"], 0) + 1
+    voice_library.record_use(used, draft.voices)
     _log(job, "INFO", f"Started: {len(items)} lines in {len(requests)} {draft.settings.request_mode} "
                       f"request(s), model {cfg.model}, {cfg.format} "
                       f"{cfg.sample_rate} Hz, {cfg.max_concurrency} at a time.")

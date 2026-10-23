@@ -11,7 +11,8 @@ from core.browser_guard import reject_cross_site_get
 
 
 @pytest.fixture
-def api(monkeypatch):
+def api(monkeypatch, tmp_path):
+    monkeypatch.setattr("engines.fish_api.story._store_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(fish_audio.router)
     app.dependency_overrides[require_admin] = lambda: None
@@ -91,3 +92,24 @@ def test_import_collection_returns_voices_and_rejects_foreign_links(api, monkeyp
     monkeypatch.undo()
     bad = api.post("/api/fish/collection", json={"url": "https://evil.example/collections/" + "c" * 32})
     assert bad.status_code == 422 and "collection" in bad.json()["detail"].lower()
+
+
+def test_library_remembers_account_voices_and_keeps_your_character_names(api, monkeypatch):
+    voices = [{"id": "v1", "title": "Fish title", "description": "warm", "languages": ["en"], "author": "me"}]
+    monkeypatch.setattr(fish_audio, "_voices", lambda mine, title, language: voices)
+    monkeypatch.setattr("engines.fish_api.config.load_config", lambda: type("C", (), {"reference_id": None})())
+    api.get("/api/fish/voices", params={"scope": "library"})
+    assert api.get("/api/fish/library").json()["voices"] == []  # a public search is not saved
+    api.get("/api/fish/voices", params={"scope": "mine"})
+    row = api.get("/api/fish/library").json()["voices"][0]
+    assert row["voice_id"] == "v1" and row["fish_name"] == "Fish title" and row["languages"] == ["en"]
+    assert row["alias"] == "" and row["fish_url"] == "https://fish.audio/m/v1/"
+
+    named = api.put("/api/fish/library/v1", json={"alias": "Captain Reyes", "notes": "gruff"}).json()
+    assert named["alias"] == "Captain Reyes" and named["fish_name"] == "Fish title"
+    api.get("/api/fish/voices", params={"scope": "mine"})  # a refresh must not wipe the name
+    assert api.get("/api/fish/library").json()["voices"][0]["alias"] == "Captain Reyes"
+
+    assert api.put("/api/fish/library/bad id!", json={}).status_code == 422
+    assert api.delete("/api/fish/library/v1").status_code == 200
+    assert api.delete("/api/fish/library/v1").status_code == 404

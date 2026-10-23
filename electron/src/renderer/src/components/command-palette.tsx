@@ -19,6 +19,7 @@ import { KeyboardCheatsheet } from '@/components/keyboard-cheatsheet';
 import {
   AudioLinesIcon,
   BookAudioIcon,
+  DatabaseIcon,
   BookOpenIcon,
   FilmIcon,
   FolderIcon,
@@ -184,6 +185,13 @@ export function CommandPalette() {
       group: workspaceGroup,
       icon: BookAudioIcon,
       run: () => navigate({ to: '/fish-story' }),
+    },
+    {
+      id: 'fish-dataset',
+      label: t('fishDataset.nav'),
+      group: workspaceGroup,
+      icon: DatabaseIcon,
+      run: () => navigate({ to: '/fish-dataset' }),
     },
     {
       id: 'audiobook',

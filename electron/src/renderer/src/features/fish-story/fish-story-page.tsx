@@ -173,7 +173,12 @@ export function FishStoryPage() {
         open={voicesOpen}
         onOpenChange={setVoicesOpen}
         voiceNames={draft.voices}
+        library={story.library}
+        onOpen={story.refreshLibrary}
         onAdd={story.addVoice}
+        onRename={story.renameVoice}
+        onNotes={(id, notes) => void story.saveVoice(id, { notes })}
+        onForget={story.forgetVoice}
         onSearch={story.searchLibrary}
         onImportCollection={story.importCollection}
       />

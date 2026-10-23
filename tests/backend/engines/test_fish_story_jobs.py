@@ -331,3 +331,16 @@ def test_opening_something_that_is_not_a_run_is_refused(make, tmp_path):
     path = "relative/x" if make == "relative" else str(folder)
     with pytest.raises(ValueError):
         story_jobs.open_run_folder(path)
+
+
+def test_rendering_remembers_the_voices_used_under_their_board_names(monkeypatch):
+    from engines.fish_api import library
+
+    _ok(monkeypatch)
+    library.update("vsn", alias="Snuggle (mine)")  # a name you chose is never overwritten by the board's
+    job = _wait(story_jobs.start_render(_draft())["id"])
+    rows = {r["voice_id"]: r for r in library.list_all()}
+    assert set(rows) == {"vsh", "vsn", "vnar"}
+    assert rows["vsh"]["alias"] == "sun_2" and rows["vsh"]["lines"] == 1 and rows["vsh"]["uses"] == 1
+    assert rows["vsn"]["alias"] == "Snuggle (mine)" and rows["vnar"]["lines"] == 1
+    assert all(r["last_used_at"] for r in rows.values()) and job["status"] == "done"
