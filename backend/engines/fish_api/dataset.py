@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shutil
+import statistics
 import threading
 from typing import Iterable, Optional
 
@@ -255,16 +256,35 @@ def audio_path(corpus: Corpus, key: str) -> Optional[str]:
 
 
 # ── selecting ──
+_QUALITY = (  # filter key -> (stat, comparison)
+    ("max_peak", "peak", "max"), ("min_peak", "peak", "min"),
+    ("max_clip", "clip", "max"), ("min_rms_db", "rms_db", "min"), ("max_rms_db", "rms_db", "max"),
+    ("max_lead_ms", "lead_ms", "max"), ("max_tail_ms", "tail_ms", "max"),
+    ("max_pauses", "pauses", "max"), ("max_gap_ms", "max_gap_ms", "max"),
+)
+SORTS = ("order", "duration_desc", "duration_asc", "words_desc", "words_asc", "random")
+
+
 def select(corpus: Corpus, f: dict) -> list[dict]:
-    """Lines matching a filter dict. Shared by the browser and the exporter so they agree."""
+    """Lines matching a filter dict. Shared by the browser and the exporter so they agree.
+
+    Tags: ``tags_any`` (at least one), ``tags_all`` (every one), ``tags_none`` (none of them).
+    Quality limits need the clip analysed first; while one is set, un-analysed clips are left out.
+    """
+    from . import dataset_quality
+
     voices = set(f.get("voice_ids") or [])
     chapters = set(f.get("chapters") or [])
     exclude = set(f.get("exclude_keys") or [])
+    only = set(f["only_keys"]) if f.get("only_keys") is not None else None
     query = (f.get("q") or "").strip().lower()
-    tag = (f.get("tag") or "").strip().lower()
+    tags_all = set(normalize_tags(f.get("tags_all"))) | ({f["tag"].strip().lower()} if (f.get("tag") or "").strip() else set())
+    tags_any = set(normalize_tags(f.get("tags_any")))
+    tags_none = set(normalize_tags(f.get("tags_none")))
     min_d, max_d = f.get("min_dur"), f.get("max_dur")
-    min_w = f.get("min_words")
+    min_w, max_w = f.get("min_words"), f.get("max_words")
     dups = bool(f.get("duplicates", False))
+    limits = [(key, stat, how, f[key]) for key, stat, how in _QUALITY if f.get(key) is not None]
     out = []
     for line in corpus.lines:
         if voices and line["voice_id"] not in voices:
@@ -275,18 +295,103 @@ def select(corpus: Corpus, f: dict) -> list[dict]:
             continue
         if line["key"] in exclude:
             continue
+        if only is not None and line["key"] not in only:
+            continue
         if min_d is not None and line["duration_s"] < min_d:
             continue
         if max_d is not None and line["duration_s"] > max_d:
             continue
         if min_w is not None and line["words"] < min_w:
             continue
-        if tag and tag not in line["tags"]:
+        if max_w is not None and line["words"] > max_w:
+            continue
+        have = set(line["tags"])
+        if tags_all and not tags_all <= have:
+            continue
+        if tags_any and not tags_any & have:
+            continue
+        if tags_none and tags_none & have:
             continue
         if query and query not in line["plain"].lower():
             continue
+        if limits:
+            stats = dataset_quality.get(line)
+            if stats is None or any(
+                (stats[stat] > value) if how == "max" else (stats[stat] < value)
+                for _, stat, how, value in limits
+            ):
+                continue
         out.append(line)
-    return out
+    return _sorted(out, f.get("sort") or "order", int(f.get("seed") or 0))
+
+
+def _sorted(lines: list[dict], how: str, seed: int) -> list[dict]:
+    if how == "duration_desc":
+        return sorted(lines, key=lambda l: -l["duration_s"])
+    if how == "duration_asc":
+        return sorted(lines, key=lambda l: l["duration_s"])
+    if how == "words_desc":
+        return sorted(lines, key=lambda l: -l["words"])
+    if how == "words_asc":
+        return sorted(lines, key=lambda l: l["words"])
+    if how == "random":
+        import random
+
+        shuffled = list(lines)
+        random.Random(seed).shuffle(shuffled)
+        return shuffled
+    return lines
+
+
+DURATION_EDGES = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30)
+
+
+def facets(lines: list[dict]) -> dict:
+    """What the current selection looks like: lengths, tags, chapters and audio quality."""
+    import collections
+
+    from . import dataset_quality
+
+    edges = DURATION_EDGES
+    counts = [0] * len(edges)
+    for l in lines:
+        d = l["duration_s"]
+        counts[max(i for i, e in enumerate(edges) if d >= e)] += 1
+    bins = [{"from": e, "to": edges[i + 1] if i + 1 < len(edges) else None, "clips": counts[i]}
+            for i, e in enumerate(edges)]
+    tag_counts = collections.Counter(t for l in lines for t in set(l["tags"]))
+    per_chapter: dict[str, list] = {}
+    levels: dict[str, list] = collections.defaultdict(list)
+    peaks: dict[str, float] = {}
+    measured = [(l, dataset_quality.get(l)) for l in lines]
+    for l, st in measured:
+        c = per_chapter.setdefault(l["chapter"], [0, 0.0])
+        c[0] += 1
+        c[1] += l["duration_s"]
+        if st:
+            levels[l["chapter"]].append(st["rms_db"])
+            peaks[l["chapter"]] = max(peaks.get(l["chapter"], 0.0), st["peak"])
+    have = [st for _, st in measured if st]
+    quality = {
+        "analyzed": len(have), "total": len(lines),
+        "clipping": sum(1 for st in have if st["clip"] > 0.0005 or st["peak"] >= 0.999),
+        "loud": sum(1 for st in have if st["peak"] > 0.8),
+        "quiet": sum(1 for st in have if st["peak"] < 0.1),
+        "choppy": sum(1 for st in have if st["pauses"] >= 3),
+        "long_edges": sum(1 for st in have if st["lead_ms"] > 500 or st["tail_ms"] > 800),
+    }
+    words = [l["words"] for l in lines]
+    return {
+        "clips": len(lines), "seconds": round(sum(l["duration_s"] for l in lines), 1),
+        "duration": bins,
+        "tags": tag_counts.most_common(80),
+        "chapters": [{"chapter": c, "clips": n, "seconds": round(sec, 1),
+                      "rms_db": round(statistics.median(levels[c]), 1) if levels.get(c) else None,
+                      "peak": peaks.get(c)}
+                     for c, (n, sec) in sorted(per_chapter.items())],
+        "words": {"min": min(words), "max": max(words), "avg": round(sum(words) / len(words), 1)} if words else None,
+        "quality": quality,
+    }
 
 
 # ── export ──
@@ -317,7 +422,7 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
     kept = normalize_tags(keep_tags)
     if len(kept) > 100:
         raise ValueError("Keep at most 100 tags.")
-    lines = select(corpus, f)
+    lines = select(corpus, {**f, "sort": "order"})
     if not lines:
         raise ValueError("Nothing matches the current filters.")
     raw = (dest or "").strip().strip('"')

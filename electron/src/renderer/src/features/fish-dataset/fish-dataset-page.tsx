@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowLeftIcon,
+  CheckCheckIcon,
   DatabaseIcon,
   DownloadIcon,
   FolderOpenIcon,
@@ -8,6 +10,10 @@ import {
   PauseIcon,
   PlayIcon,
   RefreshCwIcon,
+  ShuffleIcon,
+  SquareIcon,
+  XIcon,
+  ZoomInIcon,
 } from 'lucide-react';
 import { WorkspaceHeader } from '@/components/app-shell/workspace-header';
 import { SecondarySidebar } from '@/components/workspace-sidebar';
@@ -18,30 +24,174 @@ import { getBridge } from '@/components/bridge';
 import { SettingsActionError } from '@/features/settings/settings-action-error';
 import { cn } from '@/lib/utils';
 import { useClipPlayer } from './clip-player';
+import { DatasetExplorer } from './dataset-explorer';
 import { ExportDialog } from './export-dialog';
-import { EMPTY_FILTERS, PAGE_SIZE, useFishDataset } from './use-fish-dataset';
+import {
+  EMPTY_FILTERS,
+  PAGE_SIZE,
+  activeFilterCount,
+  useFishDataset,
+  type DatasetFilters,
+  type DatasetLine,
+  type SortKey,
+} from './use-fish-dataset';
 
 const selectClass =
   'h-8 w-full rounded-md border border-input bg-input/20 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30';
 
 const minutes = (seconds: number) => (seconds / 60).toFixed(seconds >= 6000 ? 0 : 1);
+const SORTS: SortKey[] = ['order', 'duration_desc', 'duration_asc', 'words_desc', 'words_asc', 'random'];
+
+function Num({
+  label,
+  value,
+  onChange,
+  step,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  step?: number;
+}) {
+  return (
+    <label className="space-y-1 text-[11px]">
+      {label}
+      <Input type="number" min={0} step={step} value={value} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
+function StatChips({ line }: { line: DatasetLine }) {
+  const { t } = useTranslation();
+  const s = line.stats;
+  if (!s) return null;
+  const hot = s.clip > 0.0005 || s.peak >= 0.999;
+  return (
+    <span className="flex flex-wrap gap-1 tabular-nums" data-testid="clip-stats">
+      <span className={cn('rounded-full px-1.5', hot ? 'bg-red-500/20 text-red-500' : s.peak > 0.8 ? 'bg-amber-500/15 text-amber-500' : 'bg-muted/50')}>
+        {t('fishDataset.stat_peak', { value: s.peak.toFixed(2) })}
+      </span>
+      <span className="rounded-full bg-muted/50 px-1.5">{s.rms_db} dB</span>
+      {s.pauses > 0 && (
+        <span className={cn('rounded-full px-1.5', s.pauses >= 3 ? 'bg-amber-500/15 text-amber-500' : 'bg-muted/50')}>
+          {t('fishDataset.stat_pauses', { count: s.pauses })}
+        </span>
+      )}
+      {(s.lead_ms > 500 || s.tail_ms > 800) && (
+        <span className="rounded-full bg-amber-500/15 px-1.5 text-amber-500">
+          {t('fishDataset.stat_edges', { lead: s.lead_ms, tail: s.tail_ms })}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export function FishDatasetPage() {
   const { t } = useTranslation();
   const ds = useFishDataset();
-  const player = useClipPlayer(ds.setError);
   const [folder, setFolder] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
-  const { overview, filters } = ds;
+  const [auto, setAuto] = useState(true);
+  const [active, setActive] = useState<string | null>(null);
+  const { overview, filters, facets, analysis } = ds;
+  const pages = Math.max(1, Math.ceil(ds.total / PAGE_SIZE));
   const totals = overview?.totals;
   const maxSeconds = Math.max(1, ...(overview?.speakers.map((s) => s.seconds) ?? [1]));
-  const pages = Math.max(1, Math.ceil(ds.total / PAGE_SIZE));
-  const set = (patch: Partial<typeof filters>) => ds.setFilters({ ...filters, ...patch });
-  const filtered = JSON.stringify(filters) !== JSON.stringify(EMPTY_FILTERS) || ds.voices.size > 0;
   const issues = (overview?.runs ?? []).filter((r) => r.failed > 0 || r.missing > 0);
-  const tags = Array.from(
-    new Set((overview?.speakers ?? []).flatMap((s) => s.top_tags.map(([tag]) => tag))),
-  ).sort();
+  const focused =
+    ds.voices.size === 1 ? overview?.speakers.find((s) => ds.voices.has(s.voice_id)) : undefined;
+  const nFilters = activeFilterCount(filters) + (ds.voices.size > 0 ? 1 : 0);
+
+  // Auto-advance reads fresh values through refs: the player's callback outlives a render.
+  const live = useRef({ lines: ds.lines, page: ds.page, pages, auto });
+  live.current = { lines: ds.lines, page: ds.page, pages, auto };
+  const pendingAuto = useRef(false);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const player = useClipPlayer(ds.setError, (key) => {
+    const { lines, page, pages: count, auto: on } = live.current;
+    if (!on) return;
+    const next = lines[lines.findIndex((l) => l.key === key) + 1];
+    if (next) {
+      setActive(next.key);
+      void player.play(next.key);
+    } else if (page + 1 < count) {
+      pendingAuto.current = true;
+      ds.setPage(page + 1);
+    }
+  });
+
+  useEffect(() => {
+    if (pendingAuto.current && ds.lines.length > 0 && !ds.loading) {
+      pendingAuto.current = false;
+      setActive(ds.lines[0].key);
+      void player.play(ds.lines[0].key);
+    }
+  }, [ds.lines, ds.loading, player]);
+
+  useEffect(() => {
+    if (!active) return;
+    listRef.current?.querySelector(`[data-key="${CSS.escape(active)}"]`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [active]);
+
+  const set = (patch: Partial<DatasetFilters>) => ds.patchFilters(patch);
+  const tagLabel = (tag: string, how: 'all' | 'none') => t(`fishDataset.chip_tag_${how}`, { tag });
+  const chips = useMemo(() => {
+    const out: Array<{ id: string; label: string; clear: () => void }> = [];
+    const f = filters;
+    if (f.q) out.push({ id: 'q', label: t('fishDataset.chip_q', { q: f.q }), clear: () => set({ q: '' }) });
+    f.tagsAll.forEach((tag) =>
+      out.push({ id: `a${tag}`, label: tagLabel(tag, 'all'), clear: () => set({ tagsAll: f.tagsAll.filter((x) => x !== tag) }) }),
+    );
+    f.tagsNone.forEach((tag) =>
+      out.push({ id: `n${tag}`, label: tagLabel(tag, 'none'), clear: () => set({ tagsNone: f.tagsNone.filter((x) => x !== tag) }) }),
+    );
+    f.chapters.forEach((c) =>
+      out.push({ id: `c${c}`, label: c, clear: () => set({ chapters: f.chapters.filter((x) => x !== c) }) }),
+    );
+    if (f.minDur || f.maxDur)
+      out.push({
+        id: 'dur',
+        label: t('fishDataset.chip_dur', { min: f.minDur || '0', max: f.maxDur || '∞' }),
+        clear: () => set({ minDur: '', maxDur: '' }),
+      });
+    if (f.minWords || f.maxWords)
+      out.push({
+        id: 'words',
+        label: t('fishDataset.chip_words', { min: f.minWords || '0', max: f.maxWords || '∞' }),
+        clear: () => set({ minWords: '', maxWords: '' }),
+      });
+    if (f.hideClipped) out.push({ id: 'clip', label: t('fishDataset.chip_noclip'), clear: () => set({ hideClipped: false }) });
+    if (f.maxPeak) out.push({ id: 'peak', label: t('fishDataset.chip_peak', { value: f.maxPeak }), clear: () => set({ maxPeak: '' }) });
+    if (f.minRms || f.maxRms)
+      out.push({
+        id: 'rms',
+        label: t('fishDataset.chip_rms', { min: f.minRms || '−∞', max: f.maxRms || '0' }),
+        clear: () => set({ minRms: '', maxRms: '' }),
+      });
+    if (f.maxLead) out.push({ id: 'lead', label: t('fishDataset.chip_lead', { value: f.maxLead }), clear: () => set({ maxLead: '' }) });
+    if (f.maxTail) out.push({ id: 'tail', label: t('fishDataset.chip_tail', { value: f.maxTail }), clear: () => set({ maxTail: '' }) });
+    if (f.maxPauses) out.push({ id: 'pauses', label: t('fishDataset.chip_pauses', { value: f.maxPauses }), clear: () => set({ maxPauses: '' }) });
+    if (f.maxGap) out.push({ id: 'gap', label: t('fishDataset.chip_gap', { value: f.maxGap }), clear: () => set({ maxGap: '' }) });
+    if (f.excludedOnly) out.push({ id: 'ex', label: t('fishDataset.chip_excluded'), clear: () => set({ excludedOnly: false }) });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, t]);
+
+  const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('input,select,textarea')) return;
+    const index = ds.lines.findIndex((l) => l.key === active);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const next = ds.lines[Math.max(0, Math.min(ds.lines.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))];
+      if (next) setActive(next.key);
+    } else if ((event.key === ' ' || event.key === 'Enter') && active) {
+      event.preventDefault();
+      void player.toggle(active);
+    } else if ((event.key === 'x' || event.key === 'X') && active) {
+      event.preventDefault();
+      ds.toggleExcluded(active);
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -112,62 +262,11 @@ export function FishDatasetPage() {
                 value={filters.q}
                 onChange={(e) => set({ q: e.target.value })}
               />
-              <select
-                aria-label={t('fishDataset.tag')}
-                className={selectClass}
-                value={filters.tag}
-                onChange={(e) => set({ tag: e.target.value })}
-              >
-                <option value="">{t('fishDataset.any_tag')}</option>
-                {tags.map((tag) => (
-                  <option key={tag} value={tag}>
-                    [{tag}]
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label={t('fishDataset.chapter')}
-                className={selectClass}
-                value={filters.chapter}
-                onChange={(e) => set({ chapter: e.target.value })}
-              >
-                <option value="">{t('fishDataset.any_chapter')}</option>
-                {overview?.chapters.map((chapter) => (
-                  <option key={chapter} value={chapter}>
-                    {chapter}
-                  </option>
-                ))}
-              </select>
-              <div className="grid grid-cols-3 gap-2">
-                <label className="space-y-1 text-[11px]">
-                  {t('fishDataset.min_dur')}
-                  <Input
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={filters.minDur}
-                    onChange={(e) => set({ minDur: e.target.value })}
-                  />
-                </label>
-                <label className="space-y-1 text-[11px]">
-                  {t('fishDataset.max_dur')}
-                  <Input
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={filters.maxDur}
-                    onChange={(e) => set({ maxDur: e.target.value })}
-                  />
-                </label>
-                <label className="space-y-1 text-[11px]">
-                  {t('fishDataset.min_words')}
-                  <Input
-                    type="number"
-                    min={0}
-                    value={filters.minWords}
-                    onChange={(e) => set({ minWords: e.target.value })}
-                  />
-                </label>
+              <div className="grid grid-cols-2 gap-2">
+                <Num label={t('fishDataset.min_dur')} step={0.5} value={filters.minDur} onChange={(minDur) => set({ minDur })} />
+                <Num label={t('fishDataset.max_dur')} step={0.5} value={filters.maxDur} onChange={(maxDur) => set({ maxDur })} />
+                <Num label={t('fishDataset.min_words')} value={filters.minWords} onChange={(minWords) => set({ minWords })} />
+                <Num label={t('fishDataset.max_words')} value={filters.maxWords} onChange={(maxWords) => set({ maxWords })} />
               </div>
               <label className="flex items-center justify-between gap-3 text-xs">
                 <span>
@@ -176,26 +275,93 @@ export function FishDatasetPage() {
                 </span>
                 <Switch checked={filters.duplicates} onCheckedChange={(duplicates) => set({ duplicates })} />
               </label>
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={!filtered && ds.excluded.size === 0}
-                onClick={() => {
-                  ds.setFilters(EMPTY_FILTERS);
-                  ds.clearVoices();
-                  ds.clearExcluded();
-                }}
-              >
-                {t('fishDataset.reset')}
-              </Button>
+              <label className="space-y-1 text-[11px]">
+                {t('fishDataset.sort')}
+                <select
+                  className={selectClass}
+                  value={filters.sort}
+                  onChange={(e) => set({ sort: e.target.value as SortKey, seed: filters.seed || 1 })}
+                >
+                  {SORTS.map((s) => (
+                    <option key={s} value={s}>
+                      {t(`fishDataset.sort_${s}`)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-[11px]">
+                {t('fishDataset.view')}
+                <select
+                  className={selectClass}
+                  value={filters.excludedOnly ? 'excluded' : 'all'}
+                  onChange={(e) => set({ excludedOnly: e.target.value === 'excluded' })}
+                >
+                  <option value="all">{t('fishDataset.view_all')}</option>
+                  <option value="excluded">{t('fishDataset.view_excluded', { count: ds.excluded.size })}</option>
+                </select>
+              </label>
+            </fieldset>
+
+            <fieldset className="space-y-3 border-t border-border/50 pt-3" disabled={!overview?.exists}>
+              <legend className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                {t('fishDataset.quality')}
+              </legend>
+              <p className="text-[11px] leading-snug text-muted-foreground">{t('fishDataset.quality_hint')}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="xs" variant="outline" disabled={analysis?.running} onClick={() => void ds.startAnalysis()}>
+                  {analysis?.running ? <LoaderCircleIcon className="animate-spin" /> : null}
+                  {analysis && analysis.cached > 0 ? t('fishDataset.analyze_again') : t('fishDataset.analyze')}
+                </Button>
+                {analysis?.running && (
+                  <span role="status" className="text-[11px] tabular-nums">
+                    {t('fishDataset.analyzing', { done: analysis.done, total: analysis.total })}
+                  </span>
+                )}
+                {!analysis?.running && facets && (
+                  <span className="text-[11px] text-muted-foreground tabular-nums">
+                    {t('fishDataset.analyzed', { done: facets.quality.analyzed, total: facets.quality.total })}
+                  </span>
+                )}
+              </div>
+              <label className="flex items-center justify-between gap-3 text-xs">
+                <span>{t('fishDataset.hide_clipped')}</span>
+                <Switch checked={filters.hideClipped} onCheckedChange={(hideClipped) => set({ hideClipped })} />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <Num label={t('fishDataset.max_peak')} step={0.05} value={filters.maxPeak} onChange={(maxPeak) => set({ maxPeak })} />
+                <Num label={t('fishDataset.max_pauses')} value={filters.maxPauses} onChange={(maxPauses) => set({ maxPauses })} />
+                <label className="space-y-1 text-[11px]">
+                  {t('fishDataset.min_rms')}
+                  <Input type="number" max={0} value={filters.minRms} onChange={(e) => set({ minRms: e.target.value })} />
+                </label>
+                <label className="space-y-1 text-[11px]">
+                  {t('fishDataset.max_rms')}
+                  <Input type="number" max={0} value={filters.maxRms} onChange={(e) => set({ maxRms: e.target.value })} />
+                </label>
+                <Num label={t('fishDataset.max_lead')} step={50} value={filters.maxLead} onChange={(maxLead) => set({ maxLead })} />
+                <Num label={t('fishDataset.max_tail')} step={50} value={filters.maxTail} onChange={(maxTail) => set({ maxTail })} />
+                <Num label={t('fishDataset.max_gap')} step={50} value={filters.maxGap} onChange={(maxGap) => set({ maxGap })} />
+              </div>
             </fieldset>
 
             <Button
+              size="xs"
+              variant="ghost"
+              disabled={nFilters === 0 && ds.excluded.size === 0}
+              onClick={() => {
+                ds.setFilters(EMPTY_FILTERS);
+                ds.clearVoices();
+                ds.clearExcluded();
+              }}
+            >
+              {t('fishDataset.reset')}
+            </Button>
+            <Button
               className="w-full"
-              disabled={!overview?.exists || ds.total === 0}
+              disabled={!overview?.exists || ds.selected === 0}
               onClick={() => setExportOpen(true)}
             >
-              <DownloadIcon /> {t('fishDataset.export_open', { count: ds.total })}
+              <DownloadIcon /> {t('fishDataset.export_open', { count: ds.selected })}
             </Button>
           </div>
         </SecondarySidebar>
@@ -213,123 +379,236 @@ export function FishDatasetPage() {
             </p>
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="space-y-2 border-b border-border/50 p-3">
-                <div className="flex items-baseline gap-2">
-                  <h2 className="text-sm font-medium">{t('fishDataset.speakers')}</h2>
-                  <p className="text-xs text-muted-foreground">{t('fishDataset.speakers_hint')}</p>
+              {focused ? (
+                <div data-testid="character-view" className="space-y-1 border-b border-border/50 p-3">
+                  <Button size="xs" variant="ghost" onClick={() => ds.clearVoices()}>
+                    <ArrowLeftIcon /> {t('fishDataset.all_speakers')}
+                  </Button>
+                  <div className="flex flex-wrap items-baseline gap-x-3">
+                    <h2 className="text-base font-semibold">{focused.name}</h2>
+                    {focused.aliases.length > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        {t('fishDataset.also_called', { names: focused.aliases.join(', ') })}
+                      </span>
+                    )}
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {t('fishDataset.speaker_stats', {
+                        clips: focused.lines.toLocaleString(),
+                        minutes: minutes(focused.seconds),
+                        avg: focused.avg_s.toFixed(1),
+                        chapters: focused.chapters,
+                      })}
+                    </span>
+                  </div>
                 </div>
-                <ul className="space-y-1">
-                  {overview.speakers.map((s) => {
-                    const on = ds.voices.has(s.voice_id);
-                    return (
-                      <li key={s.voice_id}>
-                        <button
-                          type="button"
-                          aria-pressed={on}
-                          data-testid="speaker-row"
-                          onClick={() => ds.toggleVoice(s.voice_id)}
-                          className={cn(
-                            'relative w-full overflow-hidden rounded-lg border px-3 py-2 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
-                            on ? 'border-primary bg-primary/10' : 'border-border/60 bg-card/30 hover:bg-card/60',
-                          )}
-                        >
-                          <span
-                            aria-hidden
-                            className="absolute inset-y-0 left-0 bg-primary/10"
-                            style={{ width: `${(s.seconds / maxSeconds) * 100}%` }}
-                          />
-                          <span className="relative flex flex-wrap items-center gap-x-3 gap-y-1">
-                            <b className="text-sm">{s.name}</b>
-                            {s.aliases.length > 0 && (
-                              <span className="text-muted-foreground">
-                                {t('fishDataset.also_called', { names: s.aliases.join(', ') })}
+              ) : (
+                <div className="space-y-2 border-b border-border/50 p-3">
+                  <div className="flex items-baseline gap-2">
+                    <h2 className="text-sm font-medium">{t('fishDataset.speakers')}</h2>
+                    <p className="text-xs text-muted-foreground">{t('fishDataset.speakers_hint')}</p>
+                  </div>
+                  <ul className="space-y-1">
+                    {overview.speakers.map((s) => {
+                      const on = ds.voices.has(s.voice_id);
+                      return (
+                        <li key={s.voice_id} className="flex items-stretch gap-1">
+                          <button
+                            type="button"
+                            aria-pressed={on}
+                            data-testid="speaker-row"
+                            onClick={() => ds.toggleVoice(s.voice_id)}
+                            className={cn(
+                              'relative min-w-0 flex-1 overflow-hidden rounded-lg border px-3 py-2 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+                              on ? 'border-primary bg-primary/10' : 'border-border/60 bg-card/30 hover:bg-card/60',
+                            )}
+                          >
+                            <span
+                              aria-hidden
+                              className="absolute inset-y-0 left-0 bg-primary/10"
+                              style={{ width: `${(s.seconds / maxSeconds) * 100}%` }}
+                            />
+                            <span className="relative flex flex-wrap items-center gap-x-3 gap-y-1">
+                              <b className="text-sm">{s.name}</b>
+                              {s.aliases.length > 0 && (
+                                <span className="text-muted-foreground">
+                                  {t('fishDataset.also_called', { names: s.aliases.join(', ') })}
+                                </span>
+                              )}
+                              <span className="ml-auto tabular-nums">
+                                {t('fishDataset.speaker_stats', {
+                                  clips: s.lines.toLocaleString(),
+                                  minutes: minutes(s.seconds),
+                                  avg: s.avg_s.toFixed(1),
+                                  chapters: s.chapters,
+                                })}
+                              </span>
+                            </span>
+                            {s.top_tags.length > 0 && (
+                              <span className="relative mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+                                {s.top_tags.map(([tag, count]) => (
+                                  <span key={tag} className="rounded-full bg-muted/50 px-1.5">
+                                    [{tag}] {count}
+                                  </span>
+                                ))}
                               </span>
                             )}
-                            <span className="ml-auto tabular-nums">
-                              {t('fishDataset.speaker_stats', {
-                                clips: s.lines.toLocaleString(),
-                                minutes: minutes(s.seconds),
-                                avg: s.avg_s.toFixed(1),
-                                chapters: s.chapters,
-                              })}
-                            </span>
-                          </span>
-                          {s.top_tags.length > 0 && (
-                            <span className="relative mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
-                              {s.top_tags.map(([tag, count]) => (
-                                <span key={tag} className="rounded-full bg-muted/50 px-1.5">
-                                  [{tag}] {count}
-                                </span>
-                              ))}
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {issues.length > 0 && (
-                  <p className="text-[11px] text-amber-500">
-                    {t('fishDataset.run_issues', {
-                      missing: issues.reduce((n, r) => n + r.missing, 0),
-                      failed: issues.reduce((n, r) => n + r.failed, 0),
-                      runs: issues.length,
+                          </button>
+                          <Button
+                            size="icon-sm"
+                            variant="outline"
+                            className="h-auto"
+                            aria-label={t('fishDataset.zoom', { name: s.name })}
+                            title={t('fishDataset.zoom', { name: s.name })}
+                            onClick={() => ds.setOnlyVoice(s.voice_id)}
+                          >
+                            <ZoomInIcon />
+                          </Button>
+                        </li>
+                      );
                     })}
-                  </p>
-                )}
-                {totals && totals.duplicates > 0 && (
-                  <p className="text-[11px] text-muted-foreground">
-                    {t('fishDataset.duplicates_note', { count: totals.duplicates })}
-                  </p>
-                )}
-              </div>
+                  </ul>
+                  {issues.length > 0 && (
+                    <p className="text-[11px] text-amber-500">
+                      {t('fishDataset.run_issues', {
+                        missing: issues.reduce((n, r) => n + r.missing, 0),
+                        failed: issues.reduce((n, r) => n + r.failed, 0),
+                        runs: issues.length,
+                      })}
+                    </p>
+                  )}
+                  {totals && totals.duplicates > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {t('fishDataset.duplicates_note', { count: totals.duplicates })}
+                    </p>
+                  )}
+                </div>
+              )}
 
-              <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border/50 bg-background/90 px-3 py-2 text-xs backdrop-blur">
-                <span role="status" className="tabular-nums">
-                  {ds.loading ? <LoaderCircleIcon className="inline size-3 animate-spin" /> : null}{' '}
-                  {t('fishDataset.matching', { clips: ds.total.toLocaleString(), minutes: minutes(ds.seconds) })}
-                  {ds.excluded.size > 0 && ` · ${t('fishDataset.excluded', { count: ds.excluded.size })}`}
-                </span>
-                <span className="ml-auto flex items-center gap-1">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={ds.page === 0}
-                    onClick={() => ds.setPage(ds.page - 1)}
-                  >
-                    {t('fishDataset.prev')}
-                  </Button>
-                  <span className="tabular-nums">
-                    {ds.page + 1} / {pages}
+              {facets && <DatasetExplorer facets={facets} filters={filters} onPatch={set} />}
+
+              <div className="sticky top-0 z-10 space-y-1.5 border-b border-border/50 bg-background/90 px-3 py-2 text-xs backdrop-blur">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span role="status" className="tabular-nums">
+                    {ds.loading ? <LoaderCircleIcon className="inline size-3 animate-spin" /> : null}{' '}
+                    {t('fishDataset.selected_of', {
+                      selected: ds.selected.toLocaleString(),
+                      total: ds.total.toLocaleString(),
+                      minutes: minutes(ds.selectedSeconds),
+                    })}
                   </span>
                   <Button
                     size="xs"
                     variant="outline"
-                    disabled={ds.page + 1 >= pages}
-                    onClick={() => ds.setPage(ds.page + 1)}
+                    disabled={ds.lines.length === 0}
+                    onClick={() => {
+                      if (player.playing) return player.stop();
+                      setActive(ds.lines[0].key);
+                      void player.play(ds.lines[0].key);
+                    }}
                   >
-                    {t('fishDataset.next')}
+                    {player.playing ? <PauseIcon /> : <PlayIcon />}
+                    {player.playing ? t('fishDataset.stop') : t('fishDataset.play_all')}
                   </Button>
-                </span>
+                  <label className="flex items-center gap-1.5">
+                    <Switch checked={auto} onCheckedChange={setAuto} aria-label={t('fishDataset.auto_advance')} />
+                    {t('fishDataset.auto_advance')}
+                  </label>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={ds.total === 0}
+                    onClick={() => set({ sort: 'random', seed: Math.floor(Math.random() * 1e6) + 1 })}
+                  >
+                    <ShuffleIcon /> {t('fishDataset.shuffle')}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={ds.total === 0 || ds.selected === ds.total}
+                    onClick={() => void ds.setMatchedExcluded(false)}
+                  >
+                    <CheckCheckIcon /> {t('fishDataset.select_all')}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={ds.selected === 0}
+                    onClick={() => void ds.setMatchedExcluded(true)}
+                  >
+                    <SquareIcon /> {t('fishDataset.select_none')}
+                  </Button>
+                  <span className="ml-auto flex items-center gap-1">
+                    <Button size="xs" variant="outline" disabled={ds.page === 0} onClick={() => ds.setPage(ds.page - 1)}>
+                      {t('fishDataset.prev')}
+                    </Button>
+                    <span className="tabular-nums">
+                      {ds.page + 1} / {pages}
+                    </span>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={ds.page + 1 >= pages}
+                      onClick={() => ds.setPage(ds.page + 1)}
+                    >
+                      {t('fishDataset.next')}
+                    </Button>
+                  </span>
+                </div>
+                {(chips.length > 0 || ds.voices.size > 1) && (
+                  <ul className="flex flex-wrap gap-1" aria-label={t('fishDataset.active_filters')}>
+                    {chips.map((chip) => (
+                      <li key={chip.id}>
+                        <button
+                          type="button"
+                          data-testid="filter-chip"
+                          onClick={chip.clear}
+                          aria-label={t('fishDataset.remove_filter', { filter: chip.label })}
+                          className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary hover:bg-primary/25"
+                        >
+                          {chip.label} <XIcon className="size-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-[10px] text-muted-foreground">{t('fishDataset.keys_hint')}</p>
               </div>
 
-              <ul>
+              <div
+                ref={listRef}
+                role="listbox"
+                tabIndex={0}
+                aria-label={t('fishDataset.clips')}
+                onKeyDown={onListKey}
+                className="outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
                 {ds.lines.map((line) => {
                   const out = ds.excluded.has(line.key);
                   return (
-                    <li
+                    <div
                       key={line.key}
+                      role="option"
+                      aria-selected={active === line.key}
                       data-testid="clip-row"
+                      data-key={line.key}
+                      onClick={() => setActive(line.key)}
                       className={cn(
                         'flex items-start gap-2 border-b border-border/30 px-3 py-2 text-xs',
+                        active === line.key && 'bg-primary/10',
+                        player.playing === line.key && 'bg-primary/15',
                         out && 'opacity-45',
                       )}
                     >
                       <Button
                         size="icon-sm"
                         variant="ghost"
+                        tabIndex={-1}
                         aria-label={t('fishDataset.play', { index: line.index })}
-                        onClick={() => void player.toggle(line.key)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActive(line.key);
+                          void player.toggle(line.key);
+                        }}
                       >
                         {player.playing === line.key ? <PauseIcon /> : <PlayIcon />}
                       </Button>
@@ -351,20 +630,25 @@ export function FishDatasetPage() {
                             </span>
                           )}
                         </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          <StatChips line={line} />
+                        </p>
                       </div>
                       <span className="pt-1.5 tabular-nums text-muted-foreground">{line.duration_s.toFixed(1)}s</span>
                       <label className="flex items-center gap-1 pt-1.5 text-muted-foreground">
                         <input
                           type="checkbox"
+                          tabIndex={-1}
                           checked={!out}
                           aria-label={t('fishDataset.include', { index: line.index })}
+                          onClick={(e) => e.stopPropagation()}
                           onChange={() => ds.toggleExcluded(line.key)}
                         />
                       </label>
-                    </li>
+                    </div>
                   );
                 })}
-              </ul>
+              </div>
               {!ds.loading && ds.lines.length === 0 && (
                 <p className="p-6 text-center text-sm text-muted-foreground">{t('fishDataset.no_match')}</p>
               )}
@@ -376,10 +660,10 @@ export function FishDatasetPage() {
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
-        clips={ds.total}
-        seconds={ds.seconds}
-        excluded={ds.excluded.size}
-        knownTags={overview?.tags ?? []}
+        clips={ds.selected}
+        seconds={ds.selectedSeconds}
+        excluded={ds.total - ds.selected}
+        knownTags={overview?.tags ?? facets?.tags ?? []}
         onExport={ds.runExport}
         onError={ds.setError}
       />

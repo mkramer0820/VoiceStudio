@@ -13,7 +13,16 @@ from fastapi.testclient import TestClient
 from api.dependencies import require_admin
 from api.routers import fish_dataset
 from core.browser_guard import reject_cross_site_get
-from engines.fish_api import dataset
+from engines.fish_api import dataset, dataset_quality
+
+@pytest.fixture(autouse=True)
+def _store(monkeypatch, tmp_path):
+    os.makedirs(tmp_path / "store", exist_ok=True)
+    monkeypatch.setattr("engines.fish_api.story._store_dir", lambda: str(tmp_path / "store"))
+    dataset_quality.reset_for_tests()
+    yield
+    dataset_quality.reset_for_tests()
+
 
 NARR = "a" * 32
 SIDE = "b" * 32
@@ -213,3 +222,130 @@ def test_export_can_keep_listed_tags_while_stripping_the_rest(root, tmp_path):
     # keeping tags has no effect when the transcript keeps everything anyway
     both = dataset.export(c, {"voice_ids": [NARR]}, str(tmp_path / "k2"), formats=["jsonl"], text_mode="keep", keep_tags=["calm"])
     assert both["kept_tags"] == {}
+
+
+def _signal(path, parts, rate=44100):
+    """parts: (seconds, amplitude) pieces joined together; amplitude 0 is silence."""
+    chunks = [np.sin(np.linspace(0, 600, int(rate * sec))) * amp for sec, amp in parts]
+    sf.write(path, np.concatenate(chunks).astype("float32"), rate, subtype="PCM_16")
+
+
+def test_measure_reports_clipping_level_edges_and_pauses(tmp_path):
+    clean = str(tmp_path / "clean.wav")
+    _signal(clean, [(2.0, 0.2)])
+    m = dataset_quality.measure(clean)
+    assert m["peak"] == pytest.approx(0.2, abs=0.01) and m["clip"] == 0 and m["pauses"] == 0
+    assert m["rms_db"] == pytest.approx(-17, abs=1.5) and m["lead_ms"] == 0
+
+    hot = str(tmp_path / "hot.wav")
+    _signal(hot, [(1.0, 1.0)])
+    assert dataset_quality.measure(hot)["clip"] > 0.001
+
+    chopped = str(tmp_path / "chopped.wav")
+    _signal(chopped, [(0.6, 0.0), (0.5, 0.2), (0.4, 0.0), (0.5, 0.2), (0.35, 0.0), (0.5, 0.2), (0.9, 0.0)])
+    m = dataset_quality.measure(chopped)
+    assert 500 <= m["lead_ms"] <= 650 and 800 <= m["tail_ms"] <= 950
+    assert m["pauses"] == 2 and 350 <= m["max_gap_ms"] <= 450
+
+
+def _analyze(corpus, timeout=15):
+    import time
+
+    dataset_quality.start(corpus)
+    end = time.time() + timeout
+    while dataset_quality.status()["running"] and time.time() < end:
+        time.sleep(0.02)
+    return dataset_quality.status()
+
+
+def test_analysis_fills_the_cache_once_and_quality_filters_use_it(root):
+    c = dataset.load(root)
+    # make the Noctis clip clip and the 4 s narrator clip choppy
+    hot = os.path.join(root, "3001_one", "untitled", "run-001_20261001-000000_aaaa", "003_Noctis.wav")
+    _signal(hot, [(2.0, 1.0)])
+    chop = os.path.join(root, "3002_two", "untitled", "run-001_20261003-000000_cccc", "001_Narrator.wav")
+    _signal(chop, [(0.5, 0.2), (0.4, 0.0), (0.5, 0.2), (0.4, 0.0), (0.5, 0.2), (0.4, 0.0), (0.5, 0.2)])
+
+    assert len(dataset.select(c, {"max_clip": 0.0})) == 0  # a quality limit with no measurements matches nothing
+    status = _analyze(c)
+    assert status["done"] == status["total"] == 5 and status["failed"] == 0 and not status["running"]
+    keys = lambda f: {l["voice_name"] + str(l["index"]) for l in dataset.select(c, f)}
+    assert len(dataset.select(c, {"max_clip": 0.0005})) == 3  # four clips, one of them clipping
+    assert "Noctis3" not in keys({"max_clip": 0.0005}) and "Noctis3" in keys({"max_peak": 1.0})
+    chopped = [l for l in dataset.select(c, {}) if (dataset_quality.get(l) or {}).get("pauses", 0) >= 3]
+    assert len(chopped) == 1 and chopped[0]["chapter"] == "3002_two"
+    assert all(l["chapter"] != "3002_two" for l in dataset.select(c, {"max_pauses": 1}))
+
+    again = dataset_quality.start(c)  # nothing left to measure
+    assert again["total"] == 0
+    assert dataset.facets(dataset.select(c, {}))["quality"]["clipping"] == 1
+    dataset_quality.reset_for_tests()  # a fresh process reads the saved cache from disk
+    assert dataset.select(c, {"max_peak": 0.5})
+
+
+def test_tag_chapter_word_and_sort_filters(root):
+    c = dataset.load(root)
+    names = lambda f: [l["plain"] for l in dataset.select(c, f)]
+    assert names({"tags_any": ["calm", "shouting"]}) == ["Come out!", "The road was long."]
+    assert names({"tags_all": ["slow", "calm"]}) == ["The road was long."]
+    assert "Rain fell." not in names({"tags_none": ["[slow]"]}) and len(names({"tags_none": ["slow"]})) == 1
+    assert names({"max_words": 2}) == ["Rain fell.", "Come out!"]
+    assert names({"chapters": ["3002_two"]}) == ["Another chapter begins."]
+    assert names({"sort": "duration_desc"})[0] == "Another chapter begins."
+    assert names({"sort": "duration_asc"})[0] == "Rain fell."
+    assert names({"sort": "random", "seed": 3}) == names({"sort": "random", "seed": 3})
+    assert sorted(names({"sort": "random", "seed": 3})) == sorted(names({}))
+    keys = [l["key"] for l in c.lines if not l["duplicate"]][:2]
+    assert [l["key"] for l in dataset.select(c, {"only_keys": keys})] == keys
+    assert dataset.select(c, {"only_keys": []}) == []
+
+
+def test_facets_describe_the_selection(root):
+    c = dataset.load(root)
+    f = dataset.facets(dataset.select(c, {"voice_ids": [NARR]}))
+    assert f["clips"] == 3 and f["seconds"] == pytest.approx(8.5)
+    assert sum(b["clips"] for b in f["duration"]) == 3
+    by_from = {b["from"]: b["clips"] for b in f["duration"]}
+    assert by_from[1] == 1 and by_from[3] == 1 and by_from[4] == 1  # 1.0 s, 3.5 s, 4.0 s
+    assert dict(f["tags"])["slow"] == 3 and dict(f["tags"])["calm"] == 1
+    assert [(x["chapter"], x["clips"]) for x in f["chapters"]] == [("3001_one", 2), ("3002_two", 1)]
+    assert f["words"]["min"] == 2 and f["quality"]["analyzed"] == 0
+    assert dataset.facets([])["words"] is None
+
+
+def test_facets_analyze_and_new_filters_over_the_api(api, root):
+    import time
+
+    api.put("/api/fish/dataset/root", json={"path": root})
+    facets = api.post("/api/fish/dataset/facets", json={"voice_ids": [NARR], "tags_none": ["calm"]}).json()
+    assert facets["clips"] == 2 and dict(facets["tags"]).get("calm") is None
+    assert api.post("/api/fish/dataset/lines", json={"sort": "sideways"}).status_code == 422
+
+    assert api.post("/api/fish/dataset/analyze").status_code == 200
+    end = time.time() + 15
+    while api.get("/api/fish/dataset/analyze").json()["running"] and time.time() < end:
+        time.sleep(0.02)
+    assert api.get("/api/fish/dataset/analyze").json()["done"] == 5
+    page = api.post("/api/fish/dataset/lines", json={"max_clip": 0.01, "sort": "duration_desc"}).json()
+    assert page["total"] == 4 and page["lines"][0]["stats"]["peak"] > 0
+    assert page["lines"][0]["duration_s"] >= page["lines"][-1]["duration_s"]
+
+
+def test_ticked_off_clips_stay_listed_but_leave_the_selection_and_export(api, root, tmp_path):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    everything = api.post("/api/fish/dataset/lines", json={}).json()
+    assert everything["total"] == 4 and everything["selected"] == 4
+    left_out = [l["key"] for l in everything["lines"][:3]]
+    page = api.post("/api/fish/dataset/lines", json={"exclude_keys": left_out}).json()
+    assert page["total"] == 4 and len(page["lines"]) == 4  # still listed, so they can be ticked again
+    assert page["selected"] == 1 and page["selected_seconds"] == pytest.approx(everything["lines"][3]["duration_s"])
+    assert api.post("/api/fish/dataset/facets", json={"exclude_keys": left_out}).json()["clips"] == 4
+    only = api.post("/api/fish/dataset/lines", json={"only_keys": left_out, "exclude_keys": []}).json()
+    assert only["total"] == 3
+    out = api.post("/api/fish/dataset/export", json={"dest": str(tmp_path / "sel"), "exclude_keys": left_out,
+                                                    "formats": ["jsonl"]}).json()
+    assert out["clips"] == 1
+    none = api.post("/api/fish/dataset/export", json={"dest": str(tmp_path / "none"),
+                                                     "exclude_keys": [l["key"] for l in everything["lines"]],
+                                                     "formats": ["jsonl"]})
+    assert none.status_code == 422  # nothing selected
