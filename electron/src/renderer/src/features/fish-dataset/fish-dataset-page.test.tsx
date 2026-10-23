@@ -142,7 +142,15 @@ beforeEach(() => {
       return Promise.resolve(init?.method === 'POST' ? { ...IDLE, running: true, total: 3 } : IDLE);
     if (path === '/api/fish/dataset/root') return Promise.resolve({ root: 'D:\\other' });
     if (path === '/api/fish/dataset/export')
-      return Promise.resolve({ path: 'D:\\out\\set', clips: 1, hours: 0.001, speakers: {} });
+      return Promise.resolve({
+        path: 'D:\\out\\set',
+        clips: 1,
+        hours: 0.001,
+        speakers: {},
+        formats: JSON.parse(String(init?.body ?? '{}')).formats,
+      });
+    if (path === '/api/fish/training')
+      return Promise.resolve({ enabled: false, defaults: {}, runs: [], limits: {} });
     if (path.startsWith('/api/fish/dataset')) return Promise.resolve(OVERVIEW);
     return Promise.resolve({});
   });
@@ -185,6 +193,18 @@ it('saves a new dataset folder', async () => {
   expect(JSON.parse(mock.api.mock.calls.find(([p]) => p === '/api/fish/dataset/root')![1].body)).toEqual({
     path: 'D:\\other',
   });
+});
+
+it('offers no Train step for an export without the OmniVoice format', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
+  await within(dialog).findByText(/fishDataset\.export_done/);
+  expect(within(dialog).queryByRole('button', { name: /fishTraining\.train_open/ })).not.toBeInTheDocument();
+  expect(calls().some(([p]) => String(p).startsWith('/api/fish/training'))).toBe(false);
 });
 
 it('exports the filtered set only after the folder is given', async () => {
@@ -230,6 +250,10 @@ it('exports the OmniVoice format at 24 kHz with stripped text and an optional lo
     sample_rate: 24000,
     loudness_db: -22,
   });
+  // the Train step is offered for this export, and starts out switched off
+  fireEvent.click(within(dialog).getByRole('button', { name: /fishTraining\.train_open/ }));
+  expect(await screen.findByTestId('train-off')).toBeInTheDocument();
+  expect(calls().some(([p]) => p === '/api/fish/training')).toBe(true);
 });
 
 it('asks for a folder first when none is saved', async () => {

@@ -540,6 +540,11 @@ def list_runs(limit: int = 100) -> list[dict]:
     return out[:limit]
 
 
+def dry_run_report(job_id: str) -> Optional[dict]:
+    run_dir = _find_run_dir(job_id)
+    return _read_json(os.path.join(run_dir, DRY_FILE)) if run_dir else None
+
+
 def read_log(job_id: str, max_lines: int = 400) -> Optional[str]:
     run_dir = _find_run_dir(job_id)
     if not run_dir:

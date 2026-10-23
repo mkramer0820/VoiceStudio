@@ -473,3 +473,88 @@ def test_the_real_probe_describes_this_python_without_needing_a_gpu():
     assert "error" not in probe and "accelerate" in probe and "omnivoice" in probe and "cuda" in probe or "torch_error" in probe
     assert training.assess_hardware(probe)["ok"] in (True, False)  # a verdict, never an exception
     assert training.SubprocessLauncher().probe("Z:/no/such/python.exe", {})["error"]
+
+
+# ── HTTP surface ──
+@pytest.fixture
+def api(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.dependencies import require_admin
+    from api.routers import fish_training
+    from core.browser_guard import reject_cross_site_get
+
+    store: dict = {}
+    monkeypatch.setattr("services.settings_store.get_text", lambda k, d=None: store.get(k, d))
+    monkeypatch.setattr("services.settings_store.set_text", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr("services.settings_store.clear_text", lambda k: store.pop(k, None))
+    app = FastAPI()
+    app.include_router(fish_training.router)
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[reject_cross_site_get] = lambda: None
+    return TestClient(app)
+
+
+def test_routes_are_admin_protected_and_gets_reject_cross_site():
+    from api.dependencies import require_admin
+    from api.routers import fish_training
+    from core.browser_guard import reject_cross_site_get
+
+    assert any(d.dependency is require_admin for d in fish_training.router.dependencies)
+    gets = [r for r in fish_training.router.routes if "GET" in r.methods]
+    assert gets and all(any(d.call is reject_cross_site_get for d in r.dependant.dependencies) for r in gets)
+
+
+def test_overview_toggle_and_the_opt_in_gate(api, tmp_path):
+    first = api.get("/api/fish/training").json()
+    assert first["enabled"] is False and first["defaults"]["steps"] == 2000 and first["runs"] == []
+    export = _make_export(tmp_path)
+    off = api.post("/api/fish/training/runs", json={"confirm": True, "export_dir": export})
+    assert off.status_code == 403 and "switched off" in off.json()["detail"]
+    assert api.put("/api/fish/training/enabled", json={"enabled": True}).json() == {"enabled": True}
+    assert api.get("/api/fish/training").json()["enabled"] is True
+    unconfirmed = api.post("/api/fish/training/runs", json={"confirm": False, "export_dir": export})
+    assert unconfirmed.status_code == 422
+
+
+def test_dry_run_route_returns_the_report_and_bad_input_is_a_422(api, tmp_path):
+    training.set_launcher(FakeLauncher())
+    export = _make_export(tmp_path)
+    res = api.post("/api/fish/training/dry-run", json={"export_dir": export, "options": {"steps": 100}})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "dry_run" and body["report"]["ready"] and body["report"]["train_config"]["steps"] == 100
+    assert api.post("/api/fish/training/dry-run", json={"export_dir": "Z:/not/here"}).status_code == 422
+    assert api.post("/api/fish/training/dry-run", json={"export_dir": export,
+                                                        "options": {"steps": 1}}).status_code == 422
+    got = api.get(f"/api/fish/training/runs/{body['id']}").json()
+    assert got["report"]["ready"] and api.get("/api/fish/training/runs/nosuch").status_code == 404
+
+
+def test_a_run_over_http_progress_log_cancel_and_resume(api, tmp_path):
+    api.put("/api/fish/training/enabled", json={"enabled": True})
+    launcher = FakeLauncher(hang_train=True, write_adapter=False)
+    training.set_launcher(launcher)
+    export = _make_export(tmp_path)
+    started = api.post("/api/fish/training/runs", json={"confirm": True, "export_dir": export, "name": "narrator",
+                                                        "options": {"steps": 50}}).json()
+    assert started["status"] == "running" and started["name"] == "narrator"
+    end = time.time() + 20
+    while len(launcher.calls) < 3 and time.time() < end:
+        time.sleep(0.05)
+    time.sleep(1.2)  # let the supervisor read the fake child's output once
+    live = api.get(f"/api/fish/training/runs/{started['id']}").json()
+    assert live["phase"] == "training" and live["step"] == 50
+    assert "Step 25" in api.get(f"/api/fish/training/runs/{started['id']}/log").json()["log"]
+    assert api.post(f"/api/fish/training/runs/{started['id']}/resume", json={"confirm": True}).status_code == 422  # still going
+    assert api.post(f"/api/fish/training/runs/{started['id']}/cancel").status_code == 200
+    _wait(started["id"], {"cancelled"})
+    assert api.post(f"/api/fish/training/runs/{started['id']}/cancel").status_code == 409
+    assert api.post(f"/api/fish/training/runs/{started['id']}/resume", json={"confirm": False}).status_code == 422
+    training.set_launcher(FakeLauncher())
+    assert api.post(f"/api/fish/training/runs/{started['id']}/resume", json={"confirm": True}).status_code == 200
+    _wait(started["id"], {"done"})
+    rows = api.get("/api/fish/training/runs").json()["runs"]
+    assert rows[0]["id"] == started["id"] and rows[0]["status"] == "done"
+    assert api.get("/api/fish/training/runs/bad id!").status_code in (404, 422)

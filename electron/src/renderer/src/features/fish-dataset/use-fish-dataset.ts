@@ -156,6 +156,7 @@ export interface ExportResult {
   clips: number;
   hours: number;
   speakers: Record<string, { clips: number; seconds: number }>;
+  formats?: string[];
 }
 
 export const PAGE_SIZE = 50;

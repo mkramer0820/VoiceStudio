@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowLeftIcon,
   CheckCheckIcon,
+  CpuIcon,
   DatabaseIcon,
   DownloadIcon,
   FolderOpenIcon,
@@ -26,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { useClipPlayer } from './clip-player';
 import { DatasetExplorer } from './dataset-explorer';
 import { ExportDialog } from './export-dialog';
+import { TrainDialog } from './train-dialog';
 import {
   EMPTY_FILTERS,
   PAGE_SIZE,
@@ -91,6 +93,8 @@ export function FishDatasetPage() {
   const ds = useFishDataset();
   const [folder, setFolder] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
+  const [trainOpen, setTrainOpen] = useState(false);
+  const [trainDir, setTrainDir] = useState('');
   const [auto, setAuto] = useState(true);
   const [active, setActive] = useState<string | null>(null);
   const { overview, filters, facets, analysis } = ds;
@@ -362,6 +366,9 @@ export function FishDatasetPage() {
               onClick={() => setExportOpen(true)}
             >
               <DownloadIcon /> {t('fishDataset.export_open', { count: ds.selected })}
+            </Button>
+            <Button className="w-full" variant="outline" onClick={() => setTrainOpen(true)}>
+              <CpuIcon /> {t('fishTraining.runs_open')}
             </Button>
           </div>
         </SecondarySidebar>
@@ -667,7 +674,13 @@ export function FishDatasetPage() {
         omnivoiceTags={overview?.omnivoice_tags}
         onExport={ds.runExport}
         onError={ds.setError}
+        onTrain={(dir) => {
+          setTrainDir(dir);
+          setExportOpen(false);
+          setTrainOpen(true);
+        }}
       />
+      <TrainDialog open={trainOpen} onOpenChange={setTrainOpen} initialExportDir={trainDir} />
     </div>
   );
 }

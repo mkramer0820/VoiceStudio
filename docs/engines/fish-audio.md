@@ -142,6 +142,18 @@ Each render gets its own folder, so nothing is ever overwritten:
 - **Tags:** the transcript can keep every `[emotion]` tag, or strip them all. When stripping, list the tags to leave in, comma-separated; write `laughing=laughter` to keep Fish's `[laughing]` but export it as `[laughter]` for a model that spells the sound differently. The tags found in your clips are listed to click.
 - **Terms:** the clips are synthetic speech from Fish. Check Fish's terms before using them to train another model.
 
+## Training a voice (LoRA on OmniVoice)
+
+The **Training** button in the Training data sidebar (and **Train a LoRA from this export** in the export dialog after an *OmniVoice training files* export) trains a small LoRA adapter for the local OmniVoice model from your clips. Nothing is uploaded and Fish is never contacted.
+
+- **Opt in first.** Training is off until you turn it on in the dialog. It uses the GPU for a long time, writes several GB under the app's data folder (`fish_training/`), and unloads the other speech models while it runs. Starting a run also needs a confirmation tick.
+- **What to export first.** One speaker only, *OmniVoice training files* format, *bring all clips to one loudness level* on, and a validation share (5-10%) so the result can be checked. The dialog warns about mixed speakers, unmatched loudness, no validation clips and small sets (under about 300 clips or 30 minutes).
+- **Check (dry run)** validates the export (files, 24 kHz mono, ids, no train/validation overlap), builds the training and data configs and the exact commands, and probes the training Python and GPU, without starting anything. It tells you precisely what is missing: no NVIDIA GPU (Apple Silicon and CPU cannot run this trainer yet), too little GPU memory (about 8 GB is needed), Triton (OmniVoice's flex attention needs it; on Windows install `triton-windows` into the training Python, or train under WSL/Linux), `accelerate`, `webdataset`, `tensorboard` or OmniVoice itself.
+- **A run** converts the audio to tokens (skipped if already done), trains, then stores the adapter in `fish_training/run_*/adapter/` with `adapter.json` and `evaluation.json`. Both steps are child processes, so **Cancel** really stops them. **Resume** continues from the last complete checkpoint after a cancel, a failure or closing the app (those runs show as *Interrupted*). One run at a time.
+- **Offline by default.** The child processes run with `HF_HUB_OFFLINE=1`; the base model (`k2-fsa/OmniVoice`) and audio tokenizer (`eustlb/higgs-audio-v2-tokenizer`) must already be on disk or in the Hugging Face cache unless you tick *Allow downloading models from Hugging Face*.
+- **Evaluation gate.** Each run records a held-out check: the validation loss before training (the untouched base model) against the finished adapter. The record is stored with the adapter and a run is **only marked ready to use when every check passes**. Today only the held-out-loss check can run automatically, so a finished run reads *Not fully checked*; the checks that need generated audio (speech-recognition word error rate, speaker similarity to your real clips, and a listening test on `heldout.jsonl`) are listed as pending in `evaluation.json`.
+- **Not supported yet.** Fish S2 local and Qwen3-TTS adapters (those trainers are not in the repo), and loading a finished adapter into the synthesis engine.
+
 ## Limits (phase 1)
 
 - Saved voices by `reference_id` only (list them as above); no inline cloning or voice upload yet.

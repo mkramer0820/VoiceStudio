@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderOpenIcon, LoaderCircleIcon } from 'lucide-react';
+import { CpuIcon, FolderOpenIcon, LoaderCircleIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -30,6 +30,7 @@ export function ExportDialog({
   omnivoiceTags = [],
   onExport,
   onError,
+  onTrain,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -40,6 +41,8 @@ export function ExportDialog({
   omnivoiceTags?: string[];
   onExport: (options: ExportOptions) => Promise<ExportResult | null>;
   onError: (message: string) => void;
+  /** Open the Train step for the export that was just written. */
+  onTrain?: (exportDir: string) => void;
 }) {
   const { t } = useTranslation();
   const [dest, setDest] = useState('');
@@ -271,6 +274,11 @@ export function ExportDialog({
               >
                 <FolderOpenIcon /> {t('fishStory.reveal')}
               </Button>
+              {onTrain && done.formats?.includes('omnivoice') && (
+                <Button size="xs" onClick={() => onTrain(done.path)}>
+                  <CpuIcon /> {t('fishTraining.train_open')}
+                </Button>
+              )}
             </div>
           )}
         </div>
