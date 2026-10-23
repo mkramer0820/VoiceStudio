@@ -30,6 +30,8 @@ export interface DatasetOverview {
   chapters: string[];
   /** Inline tags across the usable clips, most common first. */
   tags?: Array<[string, number]>;
+  /** Non-verbal tags the OmniVoice export accepts. */
+  omnivoice_tags?: string[];
   totals: { lines: number; duplicates: number; seconds: number; runs: number } | null;
 }
 
@@ -145,6 +147,8 @@ export interface ExportOptions {
   val_fraction: number;
   /** With text_mode strip: tags to leave in, each optionally `written=exported`. */
   keep_tags: string[];
+  /** Bring every clip to this average level (dB RMS); null leaves levels alone. */
+  loudness_db: number | null;
 }
 
 export interface ExportResult {

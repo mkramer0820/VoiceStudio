@@ -65,11 +65,13 @@ class _Filter(BaseModel):
 class _Export(_Filter):
     dest: str = Field(..., min_length=3, max_length=400)
     name: str = Field("fish-dataset", min_length=1, max_length=60)
-    formats: list[str] = Field(default_factory=lambda: ["jsonl"], max_length=3)
+    formats: list[str] = Field(default_factory=lambda: ["jsonl"], max_length=4)
     text_mode: str = Field("keep", pattern="^(keep|strip)$")
     sample_rate: Optional[int] = Field(None, ge=8000, le=96000)
     val_fraction: float = Field(0.0, ge=0.0, lt=0.5)
     keep_tags: list[str] = Field(default_factory=list, max_length=100, description="Tags left in the text when text_mode is strip")
+    loudness_db: Optional[float] = Field(None, ge=-60, le=-3, description="Bring every clip to this RMS level (dBFS); null leaves levels alone")
+    language_id: str = Field("en", min_length=2, max_length=12, description="language_id written by the omnivoice format")
 
 
 def _corpus(refresh: bool = False):
@@ -93,7 +95,7 @@ async def overview(refresh: bool = False):
     tag_counts = collections.Counter(t for l in usable for t in l["tags"])
     return {
         "root": root, "exists": True, "speakers": corpus.speakers(), "runs": corpus.runs,
-        "tags": tag_counts.most_common(80),
+        "tags": tag_counts.most_common(80), "omnivoice_tags": list(ds.OMNIVOICE_TAGS),
         "chapters": sorted({l["chapter"] for l in corpus.lines}),
         "totals": {"lines": len(usable), "duplicates": len(corpus.lines) - len(usable),
                    "seconds": round(sum(l["duration_s"] for l in usable), 1), "runs": len(corpus.runs)},
@@ -165,7 +167,7 @@ async def export(body: _Export):
         return await run_in_threadpool(
             lambda: ds.export(corpus, spec, body.dest, formats=body.formats, text_mode=body.text_mode,
                               sample_rate=body.sample_rate, val_fraction=body.val_fraction, name=body.name,
-                              keep_tags=body.keep_tags))
+                              keep_tags=body.keep_tags, loudness_db=body.loudness_db, language_id=body.language_id))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except OSError as exc:

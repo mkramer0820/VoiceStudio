@@ -349,3 +349,88 @@ def test_ticked_off_clips_stay_listed_but_leave_the_selection_and_export(api, ro
                                                      "exclude_keys": [l["key"] for l in everything["lines"]],
                                                      "formats": ["jsonl"]})
     assert none.status_code == 422  # nothing selected
+
+
+# ── omnivoice export + loudness matching ──
+def _loud_and_quiet(tmp_path):
+    r = str(tmp_path / "levels")
+    hot = _run(r, "3193_hot", "run-001_20261001-000000_eeee", 100, [
+        ("h1", NARR, "Narrator", "[slow][laughing] Hot clip one.", 2.0, "done"),
+        ("h2", NARR, "Narrator", "[slow][chuckling] Hot clip two.", 2.0, "done"),
+    ])
+    quiet = _run(r, "3200_quiet", "run-001_20261002-000000_ffff", 200, [
+        ("q1", NARR, "Narrator", "[slow] Quiet clip one.", 2.0, "done"),
+        ("q2", NARR, "Narrator", "[slow] Quiet clip two.", 2.0, "done"),
+    ])
+    for fld, amp in ((hot, 0.6), (quiet, 0.04)):
+        for name in os.listdir(fld):
+            if name.endswith(".wav"):
+                t = np.linspace(0, 440, 88200)
+                sf.write(os.path.join(fld, name), (np.sin(t) * amp).astype("float32"), 44100, subtype="PCM_16")
+    return r
+
+
+def _jsonl(path):
+    return [json.loads(l) for l in open(path, encoding="utf-8")]
+
+
+def test_omnivoice_export_writes_the_trainer_jsonl_at_24k_mono(root, tmp_path):
+    c = dataset.load(root)
+    out = dataset.export(c, {}, str(tmp_path / "o"), formats=["omnivoice"], val_fraction=0.25, name="ov")
+    folder = out["path"]
+    rows = _jsonl(os.path.join(folder, "omnivoice_train.jsonl")) + _jsonl(os.path.join(folder, "omnivoice_val.jsonl"))
+    assert len(rows) == 4 and {tuple(sorted(r)) for r in rows} == {("audio_path", "id", "language_id", "text")}
+    for r in rows:
+        assert r["language_id"] == "en" and os.path.isabs(r["audio_path"])
+        info = sf.info(r["audio_path"])
+        assert (info.samplerate, info.channels) == (24000, 1)
+        assert "[slow]" not in r["text"] and "[calm]" not in r["text"] and "[shouting]" not in r["text"]
+    assert any(r["text"] == "The road was long." for r in rows)
+    assert out["sample_rate"] == 24000 and out["language_id"] == "en"
+    assert not os.path.exists(os.path.join(folder, "metadata.jsonl"))  # only what was asked for
+
+
+def test_omnivoice_export_maps_tags_and_refuses_ones_the_model_does_not_know(tmp_path):
+    c = dataset.load(_loud_and_quiet(tmp_path))
+    out = dataset.export(c, {}, str(tmp_path / "o"), formats=["omnivoice"], keep_tags=["laughing=laughter"])
+    texts = [r["text"] for r in _jsonl(os.path.join(out["path"], "omnivoice_train.jsonl"))]
+    assert "[laughter] Hot clip one." in texts and "Hot clip two." in texts  # chuckling and slow dropped
+    with pytest.raises(ValueError, match=r"does not know the tag.*\[giggle\]"):
+        dataset.export(c, {}, str(tmp_path / "p"), formats=["omnivoice"], keep_tags=["laughing=giggle"])
+    with pytest.raises(ValueError, match="24000"):
+        dataset.export(c, {}, str(tmp_path / "q"), formats=["omnivoice"], sample_rate=16000)
+    with pytest.raises(ValueError, match="language_id"):
+        dataset.export(c, {}, str(tmp_path / "s"), formats=["omnivoice"], language_id="not a code!")
+
+
+def test_loudness_matching_brings_hot_and_quiet_chapters_to_one_level(tmp_path):
+    r = _loud_and_quiet(tmp_path)
+    c = dataset.load(r)
+    before = [dataset_quality.measure(os.path.join(r, l["file"]))["rms_db"] for l in c.lines]
+    assert max(before) - min(before) > 15  # the premise: chapters differ a lot
+    out = dataset.export(c, {}, str(tmp_path / "o"), formats=["omnivoice"], loudness_db=-24.0)
+    after = [dataset_quality.measure(x["audio_path"]) for x in _jsonl(os.path.join(out["path"], "omnivoice_train.jsonl"))]
+    assert len(after) == 4
+    assert all(abs(a["rms_db"] - (-24.0)) < 0.6 for a in after), [a["rms_db"] for a in after]
+    assert all(a["peak"] <= 0.971 and a["clip"] == 0 for a in after)
+    assert out["loudness"] == {"target_rms_db": -24.0, "adjusted": 4, "peak_limited": 0}
+
+
+def test_loudness_matching_never_clips_a_peaky_clip(tmp_path):
+    r = str(tmp_path / "peaky")
+    folder = _run(r, "3300_x", "run-001_20261001-000000_gggg", 100, [("p1", NARR, "Narrator", "Spiky.", 2.0, "done")])
+    sig = np.zeros(88200, dtype="float32")
+    sig[::4410] = 0.9  # sparse spikes: very low RMS, high peak
+    sf.write(os.path.join(folder, "001_Narrator.wav"), sig, 44100, subtype="PCM_16")
+    out = dataset.export(dataset.load(r), {}, str(tmp_path / "o"), formats=["jsonl"], loudness_db=-12.0)
+    stats = dataset_quality.measure(os.path.join(out["path"], "Narrator", "Narrator_00001.wav"))
+    assert stats["peak"] <= 0.971 and stats["clip"] == 0 and stats["rms_db"] < -12.0
+    assert out["loudness"]["peak_limited"] == 1
+
+
+def test_loudness_option_is_validated_and_off_by_default(root, tmp_path):
+    c = dataset.load(root)
+    with pytest.raises(ValueError, match="loudness_db"):
+        dataset.export(c, {}, str(tmp_path / "o"), formats=["jsonl"], loudness_db=0.0)
+    out = dataset.export(c, {}, str(tmp_path / "p"), formats=["jsonl"])
+    assert out["loudness"] is None and out["sample_rate"] == "as rendered"

@@ -207,6 +207,28 @@ it('exports the filtered set only after the folder is given', async () => {
     sample_rate: null,
     val_fraction: 0.05,
     keep_tags: [],
+    loudness_db: null,
+  });
+});
+
+it('exports the OmniVoice format at 24 kHz with stripped text and an optional loudness level', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByLabelText(/fishDataset\.format_omnivoice(?!_)/));
+  expect(within(dialog).getByLabelText('fishDataset.export_text')).toBeDisabled();
+  expect(within(dialog).getByLabelText('fishDataset.export_rate')).toBeDisabled();
+  fireEvent.click(within(dialog).getByLabelText('fishDataset.export_loudness'));
+  fireEvent.change(within(dialog).getByLabelText('fishDataset.export_loudness_db'), { target: { value: '-22' } });
+  fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
+  await within(dialog).findByText(/fishDataset\.export_done/);
+  expect(lastBody('/api/fish/dataset/export')).toMatchObject({
+    formats: ['jsonl', 'fish_lab', 'omnivoice'],
+    text_mode: 'strip',
+    sample_rate: 24000,
+    loudness_db: -22,
   });
 });
 

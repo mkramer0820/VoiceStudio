@@ -156,7 +156,7 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 
 ## 10. Not built yet
 
-A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gender); loudness normalization on export; an `omnivoice` export format; the training step itself.
+A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gender); the training step itself. Done in the LoRA phase: the `omnivoice` export format (`dataset.export`, `OMNIVOICE_TAGS`) and optional loudness matching (`loudness_db`, RMS target with a 0.97 peak ceiling).
 
 ## 11. Not verified
 

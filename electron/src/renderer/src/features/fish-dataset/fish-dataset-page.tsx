@@ -664,6 +664,7 @@ export function FishDatasetPage() {
         seconds={ds.selectedSeconds}
         excluded={ds.total - ds.selected}
         knownTags={overview?.tags ?? facets?.tags ?? []}
+        omnivoiceTags={overview?.omnivoice_tags}
         onExport={ds.runExport}
         onError={ds.setError}
       />

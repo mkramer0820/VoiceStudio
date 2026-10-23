@@ -3909,6 +3909,12 @@
     "chip_excluded": "only clips I left out",
     "select_all": "Select all matching",
     "select_none": "Select none",
-    "selected_of": "{{selected}} of {{total}} selected · {{minutes}} min"
+    "selected_of": "{{selected}} of {{total}} selected · {{minutes}} min",
+    "format_omnivoice": "OmniVoice training files",
+    "format_omnivoice_hint": "omnivoice_train.jsonl (and omnivoice_val.jsonl): id, audio_path, text and language_id per clip, with 24 kHz mono WAVs, ready for the Train step.",
+    "export_omni_note": "OmniVoice export: audio is always 24000 Hz mono and the text is plain speech plus only the tags you keep below. OmniVoice understands: {{tags}}.",
+    "export_loudness": "Bring all clips to one loudness level",
+    "export_loudness_db": "Target level (dB, average)",
+    "export_loudness_hint": "Rewrites each exported clip to the same average level so loud and quiet chapters do not mix. Peaks stay below 0.97, so a very spiky clip can end up a little quieter. Your original files are never changed."
   }
 }

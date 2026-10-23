@@ -16,6 +16,7 @@ import glob
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -395,7 +396,49 @@ def facets(lines: list[dict]) -> dict:
 
 
 # ── export ──
-FORMATS = ("jsonl", "ljspeech", "fish_lab")
+FORMATS = ("jsonl", "ljspeech", "fish_lab", "omnivoice")
+OMNIVOICE_RATE = 24000  # what OmniVoice's audio tokenizer reads
+OMNIVOICE_TAGS = (  # non-verbal tags OmniVoice understands (omnivoice.models.omnivoice._NONVERBAL_PATTERN)
+    "laughter", "sigh", "confirmation-en", "question-en", "question-ah", "question-oh", "question-ei",
+    "question-yi", "surprise-ah", "surprise-oh", "surprise-wa", "surprise-yo", "dissatisfaction-hnn",
+)
+PEAK_CEILING = 0.97  # loudness matching never pushes a clip's peak above this
+
+
+def resample_mono(data, src: int, dst: int):
+    """(n,) or (n, channels) float32 to mono float32 at ``dst`` Hz, band-limited when SciPy is present."""
+    import numpy as np
+
+    mono = data.mean(axis=1) if data.ndim > 1 else data
+    if src == dst:
+        return mono.astype("float32")
+    try:
+        from math import gcd
+
+        from scipy.signal import resample_poly
+
+        g = gcd(int(src), int(dst))
+        return resample_poly(mono, int(dst) // g, int(src) // g).astype("float32")
+    except Exception:  # noqa: BLE001 — SciPy missing: fall back to the story join's resampler
+        from .story_jobs import _resample
+
+        return _resample(mono.reshape(-1, 1), src, dst)[:, 0]
+
+
+def loudness_gain(data, target_db: float) -> tuple[float, bool]:
+    """Linear gain that brings a clip's whole-clip RMS to ``target_db`` dBFS (the number
+    ``dataset_quality.measure`` reports as ``rms_db``), capped so the peak stays under
+    ``PEAK_CEILING``. Returns ``(gain, peak_limited)``."""
+    import numpy as np
+
+    rms = float(np.sqrt(np.mean(data ** 2)))
+    peak = float(np.abs(data).max()) if len(data) else 0.0
+    if rms <= 1e-6 or peak <= 0:
+        return 1.0, False
+    gain = 10 ** ((target_db - 20 * math.log10(rms)) / 20)
+    if peak * gain > PEAK_CEILING:
+        return PEAK_CEILING / peak, True
+    return gain, False
 
 
 def _in_validation(sha: str, fraction: float) -> bool:
@@ -405,7 +448,8 @@ def _in_validation(sha: str, fraction: float) -> bool:
 
 def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode: str = "keep",
            sample_rate: Optional[int] = None, val_fraction: float = 0.0, name: str = "fish-dataset",
-           keep_tags: Optional[list[str]] = None) -> dict:
+           keep_tags: Optional[list[str]] = None, loudness_db: Optional[float] = None,
+           language_id: str = "en") -> dict:
     """Write the selected clips under ``dest/<name>/<speaker>/`` plus metadata. Never overwrites."""
     import numpy as np
     import soundfile as sf
@@ -419,9 +463,24 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
         raise ValueError("sample_rate must be between 8000 and 96000.")
     if not 0 <= val_fraction < 0.5:
         raise ValueError("val_fraction must be between 0 and 0.5.")
+    if loudness_db is not None and not -60.0 <= loudness_db <= -3.0:
+        raise ValueError("loudness_db must be between -60 and -3 (dBFS RMS).")
     kept = normalize_tags(keep_tags)
     if len(kept) > 100:
         raise ValueError("Keep at most 100 tags.")
+    omni = "omnivoice" in formats
+    if omni:
+        if sample_rate not in (None, OMNIVOICE_RATE):
+            raise ValueError(f"The omnivoice format is always {OMNIVOICE_RATE} Hz; leave the sample rate unset.")
+        sample_rate = OMNIVOICE_RATE
+        text_mode = "strip"  # OmniVoice reads plain text plus its own tags, never Fish's [slow] / [calm]
+        unknown = sorted({t for t in kept.values() if t not in OMNIVOICE_TAGS})
+        if unknown:
+            raise ValueError("OmniVoice does not know the tag(s) " + ", ".join(f"[{t}]" for t in unknown)
+                             + ". Map them to one of: " + ", ".join(OMNIVOICE_TAGS) + ", or leave them out.")
+        language_id = (language_id or "en").strip()
+        if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", language_id):
+            raise ValueError("language_id must look like en, de or pt-BR.")
     lines = select(corpus, {**f, "sort": "order"})
     if not lines:
         raise ValueError("Nothing matches the current filters.")
@@ -443,6 +502,8 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
     rows: list[dict] = []
     csv_rows: dict[str, list[list[str]]] = collections.defaultdict(list)
     seconds = 0.0
+    adjusted = peak_limited = 0
+    omni_rows: list[tuple[bool, dict]] = []
     for line in lines:
         speaker = names[line["voice_id"]]
         counters[speaker] += 1
@@ -453,13 +514,17 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
         target = os.path.join(folder, clip_id + ".wav")
         duration = line["duration_s"]
         rate = line["sample_rate"]
-        if sample_rate and sample_rate != line["sample_rate"]:
-            from .story_jobs import _resample
-
+        if omni or loudness_db is not None or (sample_rate and sample_rate != line["sample_rate"]):
             data, src_rate = sf.read(src, dtype="float32", always_2d=True)
-            data = _resample(data.mean(axis=1, keepdims=True) if data.shape[1] > 1 else data, src_rate, sample_rate)
-            sf.write(target, np.clip(data, -1.0, 1.0), sample_rate, subtype="PCM_16")
-            rate, duration = sample_rate, len(data) / sample_rate
+            out_rate = sample_rate or src_rate
+            mono = resample_mono(data, src_rate, out_rate)
+            if loudness_db is not None:
+                gain, limited = loudness_gain(mono, loudness_db)
+                mono = mono * gain
+                adjusted += 1
+                peak_limited += int(limited)
+            sf.write(target, np.clip(mono, -1.0, 1.0), out_rate, subtype="PCM_16")
+            rate, duration = out_rate, len(mono) / out_rate
         else:
             shutil.copyfile(src, target)
         text = strip_tags(line["text"], kept) if text_mode == "strip" else line["text"].strip()
@@ -471,6 +536,9 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
             "tags": line["tags"], "chapter": line["chapter"], "run_id": line["run_id"],
             "validation": _in_validation(line["sha256"] or clip_id, val_fraction),
         })
+        if omni:
+            omni_rows.append((rows[-1]["validation"], {"id": clip_id, "audio_path": os.path.abspath(target),
+                                                       "text": text, "language_id": language_id}))
         if "fish_lab" in formats:
             with open(os.path.join(folder, clip_id + ".lab"), "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(text + "\n")
@@ -486,6 +554,15 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
         if val_fraction > 0:
             write(os.path.join(out_dir, "train.jsonl"), [r for r in rows if not r["validation"]])
             write(os.path.join(out_dir, "val.jsonl"), [r for r in rows if r["validation"]])
+    if omni:
+        def write_omni(path: str, subset: list[dict]) -> None:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                for row in subset:
+                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        write_omni(os.path.join(out_dir, "omnivoice_train.jsonl"), [r for v, r in omni_rows if not v])
+        if val_fraction > 0:
+            write_omni(os.path.join(out_dir, "omnivoice_val.jsonl"), [r for v, r in omni_rows if v])
     if "ljspeech" in formats:
         for speaker, items in csv_rows.items():
             with open(os.path.join(out_dir, speaker, "metadata.csv"), "w", encoding="utf-8", newline="") as fh:
@@ -495,7 +572,10 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
     card = {
         "name": name, "clips": len(rows), "hours": round(seconds / 3600, 3), "speakers": per_speaker,
         "formats": formats, "text_mode": text_mode, "kept_tags": kept if text_mode == "strip" else {}, "sample_rate": sample_rate or "as rendered",
-        "val_fraction": val_fraction, "source_root": corpus.root,
+        "val_fraction": val_fraction,
+        "loudness": {"target_rms_db": loudness_db, "adjusted": adjusted, "peak_limited": peak_limited}
+        if loudness_db is not None else None,
+        "language_id": language_id if omni else None, "source_root": corpus.root,
         "source": "Synthetic speech generated by Fish Audio (models: "
                   + ", ".join(sorted({l["model"] or "unknown" for l in lines}))
                   + "). Check Fish's terms before using it to train another model.",

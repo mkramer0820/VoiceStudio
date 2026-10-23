@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { getBridge } from '@/components/bridge';
 import type { ExportOptions, ExportResult } from './use-fish-dataset';
 
-const FORMATS = ['jsonl', 'fish_lab', 'ljspeech'] as const;
+const FORMATS = ['jsonl', 'fish_lab', 'ljspeech', 'omnivoice'] as const;
 const RATES = [24000, 22050, 16000] as const;
 const selectClass =
   'h-8 w-full rounded-md border border-input bg-input/20 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30';
@@ -27,6 +27,7 @@ export function ExportDialog({
   seconds,
   excluded,
   knownTags,
+  omnivoiceTags = [],
   onExport,
   onError,
 }: {
@@ -36,6 +37,7 @@ export function ExportDialog({
   seconds: number;
   excluded: number;
   knownTags: Array<[string, number]>;
+  omnivoiceTags?: string[];
   onExport: (options: ExportOptions) => Promise<ExportResult | null>;
   onError: (message: string) => void;
 }) {
@@ -47,6 +49,8 @@ export function ExportDialog({
   const [rate, setRate] = useState('');
   const [val, setVal] = useState('5');
   const [keep, setKeep] = useState('');
+  const [level, setLevel] = useState(false);
+  const [levelDb, setLevelDb] = useState('-24');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<ExportResult | null>(null);
 
@@ -55,6 +59,8 @@ export function ExportDialog({
       current.includes(format) ? current.filter((f) => f !== format) : [...current, format],
     );
 
+  const omni = formats.includes('omnivoice');
+  const stripped = omni || textMode === 'strip';
   const keepList = keep
     .split(',')
     .map((part) => part.trim())
@@ -75,10 +81,11 @@ export function ExportDialog({
       dest: dest.trim(),
       name: name.trim() || 'fish-dataset',
       formats,
-      text_mode: textMode,
-      sample_rate: rate ? Number(rate) : null,
+      text_mode: stripped ? 'strip' : 'keep',
+      sample_rate: omni ? 24000 : rate ? Number(rate) : null,
       val_fraction: Math.max(0, Math.min(0.49, Number(val) / 100 || 0)),
-      keep_tags: textMode === 'strip' ? keepList : [],
+      keep_tags: stripped ? keepList : [],
+      loudness_db: level && Number.isFinite(Number(levelDb)) ? Number(levelDb) : null,
     });
     setBusy(false);
     if (result) setDone(result);
@@ -145,7 +152,8 @@ export function ExportDialog({
               <select
                 id="ds-text"
                 className={selectClass}
-                value={textMode}
+                value={stripped ? 'strip' : textMode}
+                disabled={omni}
                 onChange={(e) => setTextMode(e.target.value as 'keep' | 'strip')}
               >
                 <option value="keep">{t('fishDataset.text_keep')}</option>
@@ -156,7 +164,13 @@ export function ExportDialog({
               <label htmlFor="ds-rate" className="text-xs font-medium">
                 {t('fishDataset.export_rate')}
               </label>
-              <select id="ds-rate" className={selectClass} value={rate} onChange={(e) => setRate(e.target.value)}>
+              <select
+                id="ds-rate"
+                className={selectClass}
+                value={omni ? '24000' : rate}
+                disabled={omni}
+                onChange={(e) => setRate(e.target.value)}
+              >
                 <option value="">{t('fishDataset.rate_asis')}</option>
                 {RATES.map((r) => (
                   <option key={r} value={r}>
@@ -166,7 +180,12 @@ export function ExportDialog({
               </select>
             </div>
           </div>
-          {textMode === 'strip' && (
+          {omni && (
+            <p className="rounded-md bg-muted/40 p-2 text-[11px] leading-snug text-muted-foreground">
+              {t('fishDataset.export_omni_note', { tags: omnivoiceTags.join(', ') })}
+            </p>
+          )}
+          {stripped && (
             <div className="space-y-1">
               <label htmlFor="ds-keep" className="text-xs font-medium">
                 {t('fishDataset.keep_tags')}
@@ -198,6 +217,25 @@ export function ExportDialog({
               )}
             </div>
           )}
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-xs font-medium">
+              <input type="checkbox" checked={level} onChange={(e) => setLevel(e.target.checked)} />
+              {t('fishDataset.export_loudness')}
+            </label>
+            {level && (
+              <Input
+                id="ds-level"
+                aria-label={t('fishDataset.export_loudness_db')}
+                type="number"
+                min={-60}
+                max={-3}
+                className="w-24"
+                value={levelDb}
+                onChange={(e) => setLevelDb(e.target.value)}
+              />
+            )}
+            <p className="text-[11px] text-muted-foreground">{t('fishDataset.export_loudness_hint')}</p>
+          </div>
           <div className="space-y-1">
             <label htmlFor="ds-val" className="text-xs font-medium">
               {t('fishDataset.export_val')}
