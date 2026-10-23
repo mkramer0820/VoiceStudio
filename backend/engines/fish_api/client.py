@@ -114,8 +114,7 @@ def build_body(text: str, cfg: FishConfig, *, reference_id: Optional[str | list[
         prosody["speed"] = max(0.5, min(2.0, float(speed)))
     if abs(cfg.volume) > 1e-6:
         prosody["volume"] = cfg.volume
-    if not cfg.normalize_loudness:  # Fish's own default is on; only send a change
-        prosody["normalize_loudness"] = False
+    prosody["normalize_loudness"] = bool(cfg.normalize_loudness)  # always explicit, as in Fish's docs
     if prosody:
         body["prosody"] = prosody
     language = language or cfg.language

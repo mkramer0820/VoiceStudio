@@ -219,12 +219,47 @@ def _record(job: dict, entry: dict) -> None:
             pass
 
 
+_EXTRA_RUNS_KEY = "tts.fish.extra_runs"
+
+
+def _extra_runs() -> list[str]:
+    """Run folders the user opened by path (outside the output folder), newest first."""
+    from services import settings_store
+
+    try:
+        folders = json.loads(settings_store.get_text(_EXTRA_RUNS_KEY) or "[]")
+    except ValueError:
+        return []
+    return [f for f in folders if isinstance(f, str) and os.path.isfile(os.path.join(f, JOB_FILE))]
+
+
+def open_run_folder(path: str) -> dict:
+    """Remember a finished run folder so it can be loaded, played and resumed. Reads only."""
+    from services import settings_store
+
+    if not isinstance(path, str) or not os.path.isabs(path):
+        raise ValueError("Give the full path of a run folder.")
+    folder = os.path.normpath(path)
+    data = _read_json(os.path.join(folder, JOB_FILE))
+    if not data or not JOB_ID_RE.match(str(data.get("id") or "")):
+        raise ValueError("That folder has no job.json from a Fish story render.")
+    if not os.path.isfile(os.path.join(folder, STORY_FILE)):
+        raise ValueError("That run has no story.json, so its lines cannot be loaded.")
+    known = [f for f in _extra_runs() if os.path.normcase(f) != os.path.normcase(folder)]
+    settings_store.set_text(_EXTRA_RUNS_KEY, json.dumps([folder, *known][:50]))
+    return _summary({**data, "out_dir": folder})
+
+
 def _find_run_dir(job_id: str) -> Optional[str]:
     if not JOB_ID_RE.match(job_id or ""):
         return None
     for root in _scan_roots():
         for hit in glob.glob(os.path.join(glob.escape(root), "*", f"*_{job_id}", JOB_FILE)):
             return os.path.dirname(hit)
+    for folder in _extra_runs():
+        data = _read_json(os.path.join(folder, JOB_FILE))
+        if data and data.get("id") == job_id:
+            return folder
     return None
 
 
@@ -283,6 +318,10 @@ def list_jobs(limit: int = 200) -> list[dict]:
             data = _read_json(path)
             if data and data.get("id"):
                 rows[data["id"]] = data
+    for folder in _extra_runs():
+        data = _read_json(os.path.join(folder, JOB_FILE))
+        if data and data.get("id"):
+            rows.setdefault(data["id"], {**data, "out_dir": folder})  # the folder it is in now
     with _jobs_lock:
         live = {k: _view(v) for k, v in _jobs.items()}
     rows.update(live)
@@ -294,6 +333,35 @@ def list_jobs(limit: int = 200) -> list[dict]:
         out.append(row)
     out.sort(key=lambda r: r.get("started_at") or 0, reverse=True)
     return out[:limit]
+
+
+def load_run(job_id: str) -> Optional[dict]:
+    """A finished run's draft (story.json) and per-line audio, to reload and test it again."""
+    run_dir = _find_run_dir(job_id)
+    snapshot = _read_json(os.path.join(run_dir, STORY_FILE)) if run_dir else None
+    if not run_dir or not snapshot:
+        return None
+    draft = Draft.model_validate(snapshot["draft"])
+    data = _read_json(os.path.join(run_dir, JOB_FILE)) or {}
+    lines = [{"id": c.get("id"), "index": c.get("index"), "status": c.get("status"),
+              "file": c.get("file") if c.get("file") and os.path.isfile(os.path.join(run_dir, c["file"])) else None,
+              "voice_name": c.get("voice_name"), "duration_s": c.get("duration_s")}
+             for c in data.get("chunks", [])]
+    return {"draft": draft.model_dump(), "title": data.get("title"), "lines": lines,
+            "joined": data.get("joined")}
+
+
+def run_audio_path(job_id: str, name: str) -> Optional[str]:
+    """Path of one audio file the run itself lists (a line or the joined file); nothing else is served."""
+    run_dir = _find_run_dir(job_id)
+    data = _read_json(os.path.join(run_dir, JOB_FILE)) if run_dir else None
+    if not data:
+        return None
+    allowed = {c.get("file") for c in data.get("chunks", [])} | {data.get("joined")}
+    if name not in allowed or name != os.path.basename(name):
+        return None
+    path = os.path.join(run_dir, name)
+    return path if os.path.isfile(path) else None
 
 
 def read_log(job_id: str, max_lines: int = 400) -> Optional[str]:

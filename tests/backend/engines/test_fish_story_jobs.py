@@ -274,7 +274,7 @@ def test_preview_shows_the_exact_requests_without_any_network_or_files(monkeypat
     out = story_jobs.preview(_draft(speed=1.2, repetition_penalty=1.1, max_new_tokens=512), limit=2)
     assert out["ok"] and out["total"] == 3 and out["shown"] == 2 and out["invalid"] == 0
     first = out["requests"][0]
-    assert first["body"]["reference_id"] == "vsh" and first["body"]["prosody"] == {"speed": 1.2}
+    assert first["body"]["reference_id"] == "vsh" and first["body"]["prosody"] == {"speed": 1.2, "normalize_loudness": True}
     assert first["body"]["repetition_penalty"] == 1.1 and first["body"]["max_new_tokens"] == 512
     assert first["file"] == "001_Shadow_sun_2.wav"
     assert out["headers"]["model"] == "s2.1-pro" and out["headers"]["Authorization"] == "Bearer <hidden>"
@@ -290,3 +290,44 @@ def test_request_schema_catches_bad_bodies_and_blocks_the_render(monkeypatch):
     monkeypatch.setattr(client, "build_body", lambda *a, **k: {"text": "hi", "format": "flac"})
     with pytest.raises(ValueError, match="Line 1 would be rejected"):
         story_jobs.start_render(_draft())
+
+
+def test_a_finished_run_reloads_its_draft_and_serves_only_its_own_audio(monkeypatch, tmp_path):
+    _ok(monkeypatch)
+    job = _wait(story_jobs.start_render(_draft())["id"])
+    loaded = story_jobs.load_run(job["id"])
+    assert [c["text"] for c in loaded["draft"]["chunks"]] == ["Hello there.", "He looked around.", "Run!"]
+    assert loaded["draft"]["settings"]["default_voice"] == "vnar"
+    assert all(line["file"] for line in loaded["lines"])
+    first = loaded["lines"][0]["file"]
+    assert story_jobs.run_audio_path(job["id"], first).endswith(first)
+    for bad in ("job.json", "settings.json", "../job.json", "nope.wav"):
+        assert story_jobs.run_audio_path(job["id"], bad) is None
+
+
+def test_a_run_folder_from_anywhere_can_be_opened_listed_and_loaded(monkeypatch, tmp_path):
+    _ok(monkeypatch)
+    job = _wait(story_jobs.start_render(_draft())["id"])
+    moved = tmp_path / "elsewhere" / "run-001_x"
+    os.makedirs(moved.parent)
+    os.rename(job["out_dir"], moved)  # a run moved out of the output folder, like an archived one
+    store = {}
+    monkeypatch.setattr("services.settings_store.get_text", lambda k, d=None: store.get(k, d))
+    monkeypatch.setattr("services.settings_store.set_text", lambda k, v: store.__setitem__(k, v))
+    story_jobs._jobs.clear()
+    assert story_jobs.load_run(job["id"]) is None
+    row = story_jobs.open_run_folder(str(moved))
+    assert row["id"] == job["id"] and row["out_dir"] == str(moved)
+    assert [r["out_dir"] for r in story_jobs.list_jobs()] == [str(moved)]
+    assert story_jobs.load_run(job["id"])["draft"]["title"] == "The Long Night"
+
+
+@pytest.mark.parametrize("make", ["relative", "empty", "no-story"])
+def test_opening_something_that_is_not_a_run_is_refused(make, tmp_path):
+    folder = tmp_path / "x"
+    folder.mkdir()
+    if make == "no-story":
+        (folder / "job.json").write_text(json.dumps({"id": "597d44a297ba"}))
+    path = "relative/x" if make == "relative" else str(folder)
+    with pytest.raises(ValueError):
+        story_jobs.open_run_folder(path)

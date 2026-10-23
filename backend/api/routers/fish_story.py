@@ -231,6 +231,38 @@ def job_log(job_id: str = _id(), lines: int = Query(400, ge=1, le=5000)):
     return {"log": text}
 
 
+class _OpenRunBody(BaseModel):
+    path: str = Field(..., min_length=3, max_length=500, description="Full path of a run folder")
+
+
+@router.post("/story/jobs/open")
+def open_run(body: _OpenRunBody):
+    """Add a run folder from anywhere on disk to the list. Reads local files only."""
+    try:
+        return _jobs().open_run_folder(body.path.strip().strip('"'))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/story/jobs/{job_id}/load", dependencies=[Depends(reject_cross_site_get)])
+def load_run(job_id: str = _id()):
+    """The run's saved draft plus its audio files, to reload it into the board."""
+    data = _jobs().load_run(job_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Render job or its story.json not found")
+    return data
+
+
+@router.get("/story/jobs/{job_id}/audio/{name}", dependencies=[Depends(reject_cross_site_get)])
+def run_audio(job_id: str = _id(), name: str = Path(..., pattern=r"^[A-Za-z0-9._ -]{1,200}$")):
+    from fastapi.responses import FileResponse
+
+    path = _jobs().run_audio_path(job_id, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(path)
+
+
 @router.post("/story/jobs/{job_id}/resume")
 async def resume_job(body: _ResumeBody, job_id: str = _id()):
     """Re-run only the lines that did not finish, in the same folder. Contacts Fish."""

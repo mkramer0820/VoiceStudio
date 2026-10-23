@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { getBridge } from '@/components/bridge';
@@ -72,7 +72,7 @@ function numberOrNull(raw: string): number | null {
 }
 
 export function SettingsPanel({
-  settings,
+  settings: applied,
   defaults,
   voiceNames,
   onChange,
@@ -82,6 +82,7 @@ export function SettingsPanel({
   settings: StorySettings;
   defaults: FishDefaults | null;
   voiceNames: Record<string, string>;
+  /** Commit the staged edits; renders and previews use only what was applied. */
   onChange: (patch: Partial<StorySettings>) => void;
   /** Persist to Settings; resolves true on success. */
   onSaveDefaults: (patch: Record<string, unknown>) => Promise<boolean>;
@@ -90,6 +91,27 @@ export function SettingsPanel({
   const { t } = useTranslation();
   const [folder, setFolder] = useState('');
   const [note, setNote] = useState('');
+  // Edits are staged here until Apply, so it is always clear which settings a render will use.
+  const [staged, setStaged] = useState<StorySettings>(applied);
+  useEffect(() => setStaged(applied), [applied]);
+  const settings = staged;
+  const stage = (patch: Partial<StorySettings>) => {
+    setStaged((current) => ({ ...current, ...patch }));
+    setNote('');
+  };
+  const changed = useMemo(
+    () =>
+      (Object.keys(staged) as Array<keyof StorySettings>).filter(
+        (key) => JSON.stringify(staged[key] ?? null) !== JSON.stringify(applied[key] ?? null),
+      ),
+    [staged, applied],
+  );
+  const apply = () => {
+    const patch: Record<string, unknown> = {};
+    for (const key of changed) patch[key] = staged[key] ?? null;
+    onChange(patch as Partial<StorySettings>);
+    setNote(t('fishStory.settings_applied'));
+  };
   const format = settings.format ?? defaults?.format ?? 'wav';
   const lossless = format === 'wav' || format === 'pcm';
   const inherit = (value: string | number | null | undefined) =>
@@ -100,6 +122,25 @@ export function SettingsPanel({
 
   return (
     <div className="space-y-4 p-1 text-sm">
+      <div
+        data-testid="apply-bar"
+        className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 border-b border-border/50 bg-background/90 px-1 py-2 backdrop-blur"
+      >
+        <Button size="sm" disabled={changed.length === 0} onClick={apply}>
+          {t('fishStory.apply_settings')}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={changed.length === 0} onClick={() => setStaged(applied)}>
+          {t('fishStory.discard_settings')}
+        </Button>
+        <p
+          role="status"
+          className={`text-[11px] leading-snug ${changed.length ? 'text-amber-500' : 'text-muted-foreground'}`}
+        >
+          {changed.length
+            ? t('fishStory.settings_unapplied', { count: changed.length })
+            : t('fishStory.settings_in_effect')}
+        </p>
+      </div>
       <Group title={t('fishStory.group_output')}>
         <Field label={t('fishStory.format')} hint={lossless ? t('fishStory.format_lossless') : t('fishStory.format_lossy')}>
           {(id) => (
@@ -107,7 +148,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={settings.format ?? ''}
-              onChange={(e) => onChange({ format: (e.target.value || null) as StorySettings['format'] })}
+              onChange={(e) => stage({ format: (e.target.value || null) as StorySettings['format'] })}
             >
               <option value="">{t('fishStory.inherit', { value: defaults?.format ?? 'wav' })}</option>
               {FORMATS.map((f) => (
@@ -125,7 +166,7 @@ export function SettingsPanel({
                 id={id}
                 className={selectClass}
                 value={settings.sample_rate ?? ''}
-                onChange={(e) => onChange({ sample_rate: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ sample_rate: numberOrNull(e.target.value) })}
               >
                 <option value="">{t('fishStory.inherit', { value: `${defaults?.sample_rate ?? 44100} Hz` })}</option>
                 {SAMPLE_RATES.map((r) => (
@@ -145,7 +186,7 @@ export function SettingsPanel({
                 className={selectClass}
                 value={settings.mp3_bitrate ?? ''}
                 onChange={(e) =>
-                  onChange({ mp3_bitrate: (numberOrNull(e.target.value) as StorySettings['mp3_bitrate']) })
+                  stage({ mp3_bitrate: (numberOrNull(e.target.value) as StorySettings['mp3_bitrate']) })
                 }
               >
                 <option value="">{t('fishStory.inherit', { value: `${defaults?.mp3_bitrate ?? 192} kbps` })}</option>
@@ -176,7 +217,7 @@ export function SettingsPanel({
               id={id}
               checked={settings.join && lossless}
               disabled={!lossless}
-              onCheckedChange={(join) => onChange({ join })}
+              onCheckedChange={(join) => stage({ join })}
             />
           )}
         </Field>
@@ -197,7 +238,7 @@ export function SettingsPanel({
               step={50}
               value={settings.pause_ms}
               onChange={(e) =>
-                onChange({ pause_ms: Math.max(0, Math.min(5000, Number(e.target.value) || 0)) })
+                stage({ pause_ms: Math.max(0, Math.min(5000, Number(e.target.value) || 0)) })
               }
             />
           )}
@@ -211,7 +252,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={settings.model ?? ''}
-              onChange={(e) => onChange({ model: e.target.value || null })}
+              onChange={(e) => stage({ model: e.target.value || null })}
             >
               <option value="">{t('fishStory.inherit', { value: defaults?.model ?? 's2.1-pro' })}</option>
               {MODELS.map((m) => (
@@ -228,7 +269,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={settings.default_voice ?? ''}
-              onChange={(e) => onChange({ default_voice: e.target.value || null })}
+              onChange={(e) => stage({ default_voice: e.target.value || null })}
             >
               <option value="">
                 {defaults?.reference_id
@@ -253,7 +294,7 @@ export function SettingsPanel({
               step={0.05}
               value={settings.speed}
               className="w-full accent-[hsl(var(--primary))]"
-              onChange={(e) => onChange({ speed: Number(e.target.value) })}
+              onChange={(e) => stage({ speed: Number(e.target.value) })}
             />
           )}
         </Field>
@@ -267,7 +308,7 @@ export function SettingsPanel({
               step={0.5}
               placeholder={inherit(defaults?.volume)}
               value={inherit(settings.volume)}
-              onChange={(e) => onChange({ volume: numberOrNull(e.target.value) })}
+              onChange={(e) => stage({ volume: numberOrNull(e.target.value) })}
             />
           )}
         </Field>
@@ -278,7 +319,7 @@ export function SettingsPanel({
               maxLength={35}
               placeholder={defaults?.language ?? t('fishStory.auto')}
               value={settings.language ?? ''}
-              onChange={(e) => onChange({ language: e.target.value.trim() || null })}
+              onChange={(e) => stage({ language: e.target.value.trim() || null })}
             />
           )}
         </Field>
@@ -295,7 +336,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={settings.latency ?? ''}
-              onChange={(e) => onChange({ latency: (e.target.value || null) as StorySettings['latency'] })}
+              onChange={(e) => stage({ latency: (e.target.value || null) as StorySettings['latency'] })}
             >
               <option value="">{t('fishStory.inherit', { value: defaults?.latency ?? 'normal' })}</option>
               <option value="normal">{t('fishStory.latency_normal')}</option>
@@ -309,7 +350,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={triState(settings.normalize)}
-              onChange={(e) => onChange({ normalize: fromTriState(e.target.value) })}
+              onChange={(e) => stage({ normalize: fromTriState(e.target.value) })}
             >
               <option value="default">{t('fishStory.inherit', { value: defaults?.normalize ? 'on' : 'off' })}</option>
               <option value="on">{t('fishStory.on')}</option>
@@ -323,7 +364,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={triState(settings.normalize_loudness)}
-              onChange={(e) => onChange({ normalize_loudness: fromTriState(e.target.value) })}
+              onChange={(e) => stage({ normalize_loudness: fromTriState(e.target.value) })}
             >
               <option value="default">
                 {t('fishStory.inherit', { value: defaults?.normalize_loudness === false ? 'off' : 'on' })}
@@ -344,7 +385,7 @@ export function SettingsPanel({
                 step={0.05}
                 placeholder={inherit(defaults?.temperature)}
                 value={inherit(settings.temperature)}
-                onChange={(e) => onChange({ temperature: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ temperature: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -358,7 +399,7 @@ export function SettingsPanel({
                 step={0.05}
                 placeholder={inherit(defaults?.top_p)}
                 value={inherit(settings.top_p)}
-                onChange={(e) => onChange({ top_p: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ top_p: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -373,7 +414,7 @@ export function SettingsPanel({
               step={10}
               placeholder={inherit(defaults?.chunk_length)}
               value={inherit(settings.chunk_length)}
-              onChange={(e) => onChange({ chunk_length: numberOrNull(e.target.value) })}
+              onChange={(e) => stage({ chunk_length: numberOrNull(e.target.value) })}
             />
           )}
         </Field>
@@ -395,6 +436,7 @@ export function SettingsPanel({
                 max_new_tokens: null, min_chunk_length: null, condition_on_previous_chunks: null,
                 early_stop_threshold: null, opus_bitrate: null,
               };
+              stage(cleared);
               onChange(cleared);
               void onSaveDefaults(cleared).then((ok) => ok && setNote(t('fishStory.fish_defaults_done')));
             }}
@@ -414,7 +456,7 @@ export function SettingsPanel({
                 step={0.05}
                 placeholder={inherit(defaults?.repetition_penalty)}
                 value={inherit(settings.repetition_penalty)}
-                onChange={(e) => onChange({ repetition_penalty: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ repetition_penalty: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -428,7 +470,7 @@ export function SettingsPanel({
                 step={64}
                 placeholder={inherit(defaults?.max_new_tokens)}
                 value={inherit(settings.max_new_tokens)}
-                onChange={(e) => onChange({ max_new_tokens: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ max_new_tokens: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -441,7 +483,7 @@ export function SettingsPanel({
                 max={300}
                 placeholder={inherit(defaults?.min_chunk_length)}
                 value={inherit(settings.min_chunk_length)}
-                onChange={(e) => onChange({ min_chunk_length: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ min_chunk_length: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -455,7 +497,7 @@ export function SettingsPanel({
                 step={0.05}
                 placeholder={inherit(defaults?.early_stop_threshold)}
                 value={inherit(settings.early_stop_threshold)}
-                onChange={(e) => onChange({ early_stop_threshold: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ early_stop_threshold: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -466,7 +508,7 @@ export function SettingsPanel({
               id={id}
               className={selectClass}
               value={triState(settings.condition_on_previous_chunks)}
-              onChange={(e) => onChange({ condition_on_previous_chunks: fromTriState(e.target.value) })}
+              onChange={(e) => stage({ condition_on_previous_chunks: fromTriState(e.target.value) })}
             >
               <option value="default">{t('fishStory.fish_default')}</option>
               <option value="on">{t('fishStory.on')}</option>
@@ -483,7 +525,7 @@ export function SettingsPanel({
                 min={-1000}
                 placeholder="-1000"
                 value={inherit(settings.opus_bitrate)}
-                onChange={(e) => onChange({ opus_bitrate: numberOrNull(e.target.value) })}
+                onChange={(e) => stage({ opus_bitrate: numberOrNull(e.target.value) })}
               />
             )}
           </Field>
@@ -590,7 +632,7 @@ export function SettingsPanel({
             <Switch
               id={id}
               checked={settings.request_mode === 'multi'}
-              onCheckedChange={(on) => onChange({ request_mode: on ? 'multi' : 'single' })}
+              onCheckedChange={(on) => stage({ request_mode: on ? 'multi' : 'single' })}
             />
           )}
         </Field>
@@ -599,7 +641,7 @@ export function SettingsPanel({
             <Switch
               id={id}
               checked={settings.minimal_request === true}
-              onCheckedChange={(minimal_request) => onChange({ minimal_request })}
+              onCheckedChange={(minimal_request) => stage({ minimal_request })}
             />
           )}
         </Field>
@@ -615,7 +657,7 @@ export function SettingsPanel({
               value={inherit(settings.max_concurrency)}
               onChange={(e) => {
                 const n = numberOrNull(e.target.value);
-                onChange({ max_concurrency: n === null ? null : Math.max(1, Math.min(8, Math.round(n))) });
+                stage({ max_concurrency: n === null ? null : Math.max(1, Math.min(8, Math.round(n))) });
               }}
             />
           )}

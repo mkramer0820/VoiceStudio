@@ -84,7 +84,7 @@ def test_request_shape_and_model_header(monkeypatch):
     assert seen["headers"]["authorization"] == "Bearer secret"
     assert seen["headers"]["model"] == "drama-3"
     assert seen["body"]["reference_id"] == "abc"
-    assert seen["body"]["prosody"] == {"speed": 1.5}
+    assert seen["body"]["prosody"] == {"speed": 1.5, "normalize_loudness": True}
 
 
 @pytest.mark.parametrize("status,needle", [(401, "API key"), (402, "credits"), (404, "could not find")])

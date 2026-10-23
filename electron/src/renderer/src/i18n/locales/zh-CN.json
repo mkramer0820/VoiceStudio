@@ -3607,7 +3607,8 @@
     "plan_voice_row": "{{chunks}} lines · {{chars}} characters",
     "warn_unassigned": "{{count}} lines have no voice and will use the default voice.",
     "only_selected": "Render only the {{count}} selected lines",
-    "submit_to_fish": "Submit to Fish",
+    "submit_to_fish": "Submit to Fish"
+,
     "tags_button": "Tags & cast",
     "tags_title": "Tags and cast",
     "tags_desc": "Turn script tags like [Shadow] into voices, and rewrite delivery tags like [slow] or [pause]. Nothing is sent to Fish.",
@@ -3641,7 +3642,8 @@
     "matches": "{{matches}} matches on {{lines}} lines",
     "replaced": "Replaced {{count}} matches.",
     "tags_applied_speakers": "Applied. {{lines}} lines now have a character voice; the rest use the narrator.",
-    "tags_applied_directions": "Updated {{count}} tags.",
+    "tags_applied_directions": "Updated {{count}} tags.",
+
     "jobs_button": "Render jobs",
     "jobs_running_count": "{{count}} running",
     "jobs_title": "Render jobs",
@@ -3746,6 +3748,22 @@
     "collection_url": "Collection link",
     "collection_import": "Import",
     "collection_untitled": "Untitled collection",
-    "collection_add_all": "Add all {{count}}"
+    "collection_add_all": "Add all {{count}}",
+    "apply_settings": "Apply settings",
+    "discard_settings": "Discard changes",
+    "settings_unapplied": "{{count}} change(s) not applied yet. Renders and previews still use the last applied settings.",
+    "settings_in_effect": "These settings are in effect for renders and previews.",
+    "settings_applied": "Settings applied.",
+    "jobs_open_label": "Open a run folder",
+    "jobs_open_hint": "Paste the full path of a run folder (the one with job.json and story.json), for example one you moved or archived.",
+    "jobs_open_button": "Open",
+    "jobs_load": "Load into board",
+    "jobs_load_confirm": "Replace the current board? It stays saved as its own draft.",
+    "jobs_load_yes": "Load",
+    "jobs_loaded": "Loaded \"{{title}}\" with {{count}} lines and its settings. Check the settings, then render to test again.",
+    "jobs_listen": "Listen",
+    "jobs_listen_hide": "Hide lines",
+    "jobs_play": "Play line {{index}}",
+    "jobs_no_audio": "No audio file for this line."
   }
 }

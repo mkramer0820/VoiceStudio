@@ -387,6 +387,7 @@ it('adds a voice by id or link, and from a public library search, without a rend
 it('previews the raw requests with a schema verdict and sends nothing to Fish', async () => {
   await loadStory();
   fireEvent.click(screen.getByRole('switch', { name: 'fishStory.multi_speaker' }));
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.apply_settings' }));
   fireEvent.click(screen.getByRole('button', { name: /fishStory\.preview_button/ }));
   await screen.findByText(/fishStory\.preview_ok/);
   expect(screen.getByLabelText(/fishStory\.preview_body/)).toHaveTextContent('"format": "wav"');
@@ -434,5 +435,63 @@ it('imports a public collection by link and adds all of its voices to the story'
   fireEvent.click(screen.getByRole('button', { name: 'fishStory.done' }));
   expect(await screen.findAllByRole('option', { name: 'Moon Goddess' })).not.toHaveLength(0);
   expect(screen.getAllByRole('option', { name: 'Nihilister' }).length).toBeGreaterThan(0);
+  expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
+});
+
+it('holds setting edits until Apply, so previews only use what was applied', async () => {
+  await loadStory();
+  const apply = screen.getByRole('button', { name: 'fishStory.apply_settings' });
+  expect(apply).toBeDisabled();
+  expect(screen.getByText('fishStory.settings_in_effect')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('switch', { name: 'fishStory.multi_speaker' }));
+  expect(apply).toBeEnabled();
+  expect(screen.getByText(/fishStory\.settings_unapplied \{"count":1\}/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /fishStory\.preview_button/ }));
+  await screen.findByText(/fishStory\.preview_ok/);
+  const [, before] = mock.api.mock.calls.find(([p]) => p === '/api/fish/story/preview')!;
+  expect(JSON.parse(before.body).draft.settings.request_mode).not.toBe('multi');
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.done' }));
+
+  fireEvent.click(apply);
+  expect(apply).toBeDisabled();
+  expect(screen.getByText('fishStory.settings_in_effect')).toBeInTheDocument();
+});
+
+it('discards unapplied setting edits', async () => {
+  await loadStory();
+  const toggle = screen.getByRole('switch', { name: 'fishStory.multi_speaker' });
+  fireEvent.click(toggle);
+  expect(toggle).toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'fishStory.discard_settings' }));
+  expect(toggle).not.toBeChecked();
+});
+
+it('loads a past run into the board with its settings, without contacting Fish', async () => {
+  const base = mock.api.getMockImplementation()!;
+  mock.api.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/fish/story/jobs' || path === '/api/fish/story/jobs?limit=20')
+      return Promise.resolve({ jobs: [{ ...JOB, status: 'done', failed: 0, done: 10 }] });
+    if (path === `/api/fish/story/jobs/${JOB.id}/load`)
+      return Promise.resolve({
+        draft: {
+          title: 'Old run',
+          chunks: [{ id: 'a', text: 'Hello again.', voice: null, speaker: null }],
+          voices: {},
+          cast: {},
+          settings: { temperature: 0.4, request_mode: 'multi' },
+        },
+        lines: [],
+      });
+    return base(path, init);
+  });
+  render(<FishStoryPage />);
+  fireEvent.click(await screen.findByRole('button', { name: /fishStory\.jobs_button/ }));
+  const row = await screen.findByTestId('job-row');
+  fireEvent.click(within(row).getByRole('button', { name: 'fishStory.jobs_load' }));
+
+  expect(await screen.findByText(/fishStory\.jobs_loaded/)).toBeInTheDocument();
+  expect(screen.getByText('Hello again.')).toBeInTheDocument();
+  expect(screen.getByRole('switch', { name: 'fishStory.multi_speaker' })).toBeChecked();
   expect(calls().some(([p]) => p === '/api/fish/story/render')).toBe(false);
 });

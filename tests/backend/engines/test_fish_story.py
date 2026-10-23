@@ -77,7 +77,7 @@ def test_prosody_and_language_reach_the_request_body():
     body = client.build_body("hi", cfg, speed=1.25)
     assert body["prosody"] == {"speed": 1.25, "volume": -3.0, "normalize_loudness": False}
     assert body["language"] == "en"
-    assert "prosody" not in client.build_body("hi", load_config())
+    assert client.build_body("hi", load_config())["prosody"] == {"normalize_loudness": True}  # explicit, never left to Fish's default
 
 
 def test_draft_roundtrip_and_id_validation():

@@ -193,6 +193,33 @@ export function useFishStory() {
     setDraft((d) => ({ ...EMPTY, settings: d.settings }));
   }, []);
 
+  /**
+   * Local only: put a finished run's saved story (lines, voices, settings) on the board as a new
+   * draft, so it can be re-rendered with different settings. The previous draft stays saved.
+   */
+  const loadRun = useCallback(async (jobId: string): Promise<{ title: string; lines: number } | null> => {
+    setError('');
+    try {
+      const run = await apiJson<{ draft: StoryDraft }>(`/api/fish/story/jobs/${jobId}/load`);
+      idRef.current = null;
+      setDraftId(null);
+      history.current = [];
+      setCanUndo(false);
+      dirty.current = true;
+      setDraft({
+        title: run.draft.title ?? '',
+        chunks: run.draft.chunks ?? [],
+        voices: run.draft.voices ?? {},
+        cast: run.draft.cast ?? {},
+        settings: { ...DEFAULT_SETTINGS, ...run.draft.settings },
+      });
+      return { title: run.draft.title ?? '', lines: run.draft.chunks?.length ?? 0 };
+    } catch (reason) {
+      setError(describeError(reason));
+      return null;
+    }
+  }, []);
+
   /** Saves render defaults (and the output folder) to Settings; local only. */
   const saveDefaults = useCallback(async (patch: Record<string, unknown>): Promise<boolean> => {
     setError('');
@@ -305,6 +332,7 @@ export function useFishStory() {
     setTitle,
     undo,
     newStory,
+    loadRun,
     loadVoices,
     addVoice,
     searchLibrary,

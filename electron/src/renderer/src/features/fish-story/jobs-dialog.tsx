@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
   FileTextIcon,
   FolderOpenIcon,
+  HeadphonesIcon,
+  PauseIcon,
+  PlayIcon,
+  DownloadIcon,
   LoaderCircleIcon,
   RotateCcwIcon,
 } from 'lucide-react';
@@ -19,7 +23,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { getBridge } from '@/components/bridge';
-import { apiJson, describeError } from '@/lib/api/client';
+import { Input } from '@/components/ui/input';
+import { apiFetch, apiJson, describeError } from '@/lib/api/client';
 
 export interface JobRow {
   id: string;
@@ -38,6 +43,20 @@ export interface JobRow {
   sample_rate: number;
   audio_seconds: number;
   warnings: string[];
+}
+
+interface RunLine {
+  id: string;
+  index: number;
+  status: string;
+  file: string | null;
+  voice_name: string | null;
+  duration_s: number | null;
+}
+
+interface RunLoad {
+  draft: { chunks: Array<{ id: string; text: string }> };
+  lines: RunLine[];
 }
 
 const POLL_MS = 3000;
@@ -69,14 +88,93 @@ export function useRunningJobs(enabled: boolean): number {
   return count;
 }
 
+/** Lines of a finished run with a play button each; audio goes through the API client so auth applies. */
+function RunLines({ jobId, onError }: { jobId: string; onError: (message: string) => void }) {
+  const { t } = useTranslation();
+  const [run, setRun] = useState<RunLoad | null>(null);
+  const [playing, setPlaying] = useState<string | null>(null);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const url = useRef<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    apiJson<RunLoad>(`/api/fish/story/jobs/${jobId}/load`)
+      .then((r) => alive && setRun(r))
+      .catch((reason) => alive && onError(describeError(reason)));
+    return () => {
+      alive = false;
+      audio.current?.pause();
+      if (url.current) URL.revokeObjectURL(url.current);
+    };
+  }, [jobId, onError]);
+
+  const play = async (line: RunLine) => {
+    if (!line.file) return;
+    if (playing === line.id) {
+      audio.current?.pause();
+      setPlaying(null);
+      return;
+    }
+    try {
+      const res = await apiFetch(`/api/fish/story/jobs/${jobId}/audio/${encodeURIComponent(line.file)}`);
+      audio.current?.pause();
+      if (url.current) URL.revokeObjectURL(url.current);
+      url.current = URL.createObjectURL(await res.blob());
+      const next = new Audio(url.current);
+      next.onended = () => setPlaying(null);
+      audio.current = next;
+      setPlaying(line.id);
+      await next.play();
+    } catch (reason) {
+      setPlaying(null);
+      onError(describeError(reason));
+    }
+  };
+
+  if (!run) return <LoaderCircleIcon className="mx-auto size-4 animate-spin" />;
+  const text = new Map(run.draft.chunks.map((c) => [c.id, c.text]));
+  return (
+    <ol className="max-h-64 space-y-1 overflow-auto rounded-md bg-background/70 p-2 text-xs">
+      {run.lines.map((line) => (
+        <li key={line.id} className="flex items-start gap-2">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            disabled={!line.file}
+            title={line.file ? undefined : t('fishStory.jobs_no_audio')}
+            aria-label={t('fishStory.jobs_play', { index: line.index })}
+            onClick={() => void play(line)}
+          >
+            {playing === line.id ? <PauseIcon /> : <PlayIcon />}
+          </Button>
+          <span className="w-8 shrink-0 pt-1.5 tabular-nums text-muted-foreground">{line.index}</span>
+          <span className="min-w-0 flex-1 pt-1.5">
+            {line.voice_name && <b className="mr-1">{line.voice_name}</b>}
+            {text.get(line.id)}
+          </span>
+          {line.duration_s ? (
+            <span className="pt-1.5 tabular-nums text-muted-foreground">{line.duration_s.toFixed(1)}s</span>
+          ) : null}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function JobsDialog({
   open,
   onOpenChange,
   onError,
+  onLoad,
+  hasBoard,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onError: (message: string) => void;
+  /** Put a finished run's story and settings on the board. */
+  onLoad: (jobId: string) => Promise<void>;
+  /** The board has lines, so loading replaces them. */
+  hasBoard: boolean;
 }) {
   const { t } = useTranslation();
   const [jobs, setJobs] = useState<JobRow[] | null>(null);
@@ -84,6 +182,9 @@ export function JobsDialog({
   const [log, setLog] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [listening, setListening] = useState<string | null>(null);
+  const [loadConfirm, setLoadConfirm] = useState<string | null>(null);
+  const [folder, setFolder] = useState('');
 
   const refresh = useCallback(async () => {
     try {
@@ -134,6 +235,29 @@ export function JobsDialog({
     }
   };
 
+  const load = async (id: string) => {
+    setBusy(id);
+    try {
+      await onLoad(id);
+      setLoadConfirm(null);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openFolder = async () => {
+    try {
+      await apiJson('/api/fish/story/jobs/open', {
+        method: 'POST',
+        body: JSON.stringify({ path: folder }),
+      });
+      setFolder('');
+      await refresh();
+    } catch (reason) {
+      onError(describeError(reason));
+    }
+  };
+
   const reveal = (path: string) =>
     void getBridge()?.files.revealPath(path).catch((reason) => onError(describeError(reason)));
 
@@ -144,6 +268,25 @@ export function JobsDialog({
           <DialogTitle>{t('fishStory.jobs_title')}</DialogTitle>
           <DialogDescription>{t('fishStory.jobs_desc')}</DialogDescription>
         </DialogHeader>
+
+        <div className="space-y-1">
+          <label htmlFor="fish-open-run" className="text-xs font-medium">
+            {t('fishStory.jobs_open_label')}
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id="fish-open-run"
+              className="font-mono text-xs"
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && folder.trim() && void openFolder()}
+            />
+            <Button size="sm" variant="outline" disabled={!folder.trim()} onClick={() => void openFolder()}>
+              {t('fishStory.jobs_open_button')}
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('fishStory.jobs_open_hint')}</p>
+        </div>
 
         {jobs === null ? (
           <LoaderCircleIcon className="mx-auto size-5 animate-spin" />
@@ -215,6 +358,39 @@ export function JobsDialog({
                     >
                       <FileTextIcon /> {logFor === job.id ? t('fishStory.jobs_hide_log') : t('fishStory.jobs_log')}
                     </Button>
+                    {job.status !== 'running' && job.done > 0 && (
+                      <>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => setListening(listening === job.id ? null : job.id)}
+                        >
+                          <HeadphonesIcon />{' '}
+                          {listening === job.id ? t('fishStory.jobs_listen_hide') : t('fishStory.jobs_listen')}
+                        </Button>
+                        {loadConfirm !== job.id && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            disabled={busy === job.id}
+                            onClick={() => (hasBoard ? setLoadConfirm(job.id) : void load(job.id))}
+                          >
+                            <DownloadIcon /> {t('fishStory.jobs_load')}
+                          </Button>
+                        )}
+                      </>
+                    )}
+                    {loadConfirm === job.id && (
+                      <span className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <span className="text-amber-500">{t('fishStory.jobs_load_confirm')}</span>
+                        <Button size="xs" disabled={busy === job.id} onClick={() => void load(job.id)}>
+                          {t('fishStory.jobs_load_yes')}
+                        </Button>
+                        <Button size="xs" variant="ghost" onClick={() => setLoadConfirm(null)}>
+                          {t('common.cancel')}
+                        </Button>
+                      </span>
+                    )}
                     {RESUMABLE.has(job.status) && left > 0 && confirming !== job.id && (
                       <Button size="xs" variant="outline" onClick={() => setConfirming(job.id)}>
                         <RotateCcwIcon /> {t('fishStory.jobs_resume', { count: left })}
@@ -232,6 +408,7 @@ export function JobsDialog({
                       </span>
                     )}
                   </div>
+                  {listening === job.id && <RunLines jobId={job.id} onError={onError} />}
                   {logFor === job.id && (
                     <pre
                       aria-label={t('fishStory.jobs_log')}

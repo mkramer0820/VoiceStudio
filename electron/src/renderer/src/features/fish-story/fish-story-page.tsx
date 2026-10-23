@@ -65,6 +65,7 @@ export function FishStoryPage() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [voicesOpen, setVoicesOpen] = useState(false);
+  const [notice, setNotice] = useState('');
   const runningJobs = useRunningJobs(story.ready);
 
   const order = useMemo(() => voiceOrder(draft.chunks), [draft.chunks]);
@@ -149,7 +150,24 @@ export function FishStoryPage() {
         </span>
       </WorkspaceHeader>
 
-      <JobsDialog open={jobsOpen} onOpenChange={setJobsOpen} onError={story.setError} />
+      <JobsDialog
+        open={jobsOpen}
+        onOpenChange={setJobsOpen}
+        onError={story.setError}
+        hasBoard={draft.chunks.length > 0}
+        onLoad={async (jobId) => {
+          const loaded = await story.loadRun(jobId);
+          if (!loaded) return;
+          setSelected(new Set());
+          setJobsOpen(false);
+          setNotice(
+            t('fishStory.jobs_loaded', {
+              title: loaded.title || t('fishStory.untitled'),
+              count: loaded.lines,
+            }),
+          );
+        }}
+      />
 
       <VoicesDialog
         open={voicesOpen}
@@ -198,6 +216,11 @@ export function FishStoryPage() {
 
           <div className="space-y-2 border-b border-border/50 bg-background/40 p-3">
             <p className="text-xs text-muted-foreground">{t('fishStory.local_note')}</p>
+            {notice && (
+              <p role="status" className="text-xs text-emerald-500">
+                {notice}
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => setShowImport((v) => !v)}>
                 <FilePlusIcon /> {t('fishStory.add_text')}
