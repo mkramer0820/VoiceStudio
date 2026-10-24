@@ -261,7 +261,7 @@ export function QwenTrainingSection({
       <div className="grid grid-cols-2 gap-3">{(Object.keys(QWEN_NUMBERS) as QwenNumberKey[]).map(number)}</div>
       {text('drive_folder')}
       <p className="break-all font-mono text-[11px] text-muted-foreground" data-testid="qwen-checkpoint-path">
-        My Drive/{folder}/{speaker.trim() || '<speaker>'}/checkpoints
+        My Drive/{folder}/runs/{speaker.trim() || '<speaker>'}/{'<run_id>'}/checkpoints
       </p>
       <p className="text-[11px] text-muted-foreground">{t('fishDataset.qtr_checkpoint_hint')}</p>
       {estimate && (

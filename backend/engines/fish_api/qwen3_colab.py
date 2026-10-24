@@ -1,30 +1,43 @@
-"""Text written next to a Qwen3-TTS export: README, the Colab setup script and the command sheet.
+"""Files written next to a Qwen3-TTS export: the Colab runner script, the notebook, README, command sheet and settings.
 
 Everything here was written from the official ``finetuning/`` files of QwenLM/Qwen3-TTS as they stood at
-``QWEN_COMMIT`` (README.md, prepare_data.py, sft_12hz.py, dataset.py). The scripts and the commands were
-NOT run: that needs a GPU runtime. Only the speaker name, the folder names and the Drive folder vary, and
-they are validated to be shell-safe before they reach a script.
+``QWEN_COMMIT`` (README.md, prepare_data.py, sft_12hz.py, dataset.py, pyproject.toml). The scripts and the commands
+were NOT run: that needs a GPU runtime. All logic lives in ONE file, ``qwen3_colab_runner.py`` (standard library only),
+which is copied into every export as ``voicestudio_qwen3_colab.py``. The notebook, ``colab_setup.sh`` and the
+``colab`` command-line route are thin callers of it. Only the speaker name, the folder names and the Drive folder
+vary, and they are validated to be shell-safe before they reach a script.
 """
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
-import re
+import os
+import shlex
 from typing import Optional
 
-QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
-QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
-QWEN_COMMIT_DATE = "2026-03-17"
-READ_ON = "2026-10-24"
-BASE_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-TOKENIZER = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
-SAMPLE_RATE = 24000  # dataset.py: extract_mels asserts "Only support 24kHz audio" for ref_audio
-DEFAULT_DRIVE_FOLDER = "VoiceStudio-training"
-SPEAKER_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
-FOLDER_RE = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")  # a folder under My Drive, may be nested
-MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")  # a Hugging Face model id
+from . import qwen3_colab_runner as runner
+from .qwen3_colab_runner import (BASE_MODEL, DEFAULT_DRIVE_FOLDER, FOLDER_RE, MODEL_RE, QWEN_COMMIT, QWEN_COMMIT_DATE,  # noqa: F401
+                                 QWEN_REPO, READ_ON, SAMPLE_RATE, SESSION, SPEAKER_RE, TOKENIZER)
+
 ACCUMULATION = 4  # sft_12hz.py: Accelerator(gradient_accumulation_steps=4), not an option
-SESSION = "qwen-train"
+RUNNER_NAME = "voicestudio_qwen3_colab.py"
+NOTEBOOK_NAME = "Qwen3_TTS_Colab_Training.ipynb"
+DEFAULT_SAMPLE_TEXT = runner.DEFAULT_SAMPLE_TEXT
+DEFAULT_SPEAKER, DEFAULT_FOLDER_NAME = "MySpeaker", "my-dataset"  # the committed notebooks/ copy uses these
+LAYOUT = {
+    "cache/models": "base model and tokenizer, downloaded once",
+    "cache/Qwen3-TTS": "the official repo at the pinned commit",
+    "cache/wheelhouse/sm<arch>": "compiled or downloaded FlashAttention wheels, one folder per GPU architecture",
+    "cache/pip": "pip download cache",
+    "cache/fingerprints.json": "which runtime types (Python, torch, CUDA, GPU) have used this cache",
+    "datasets": "your dataset zips or folders (put the export zip here)",
+    "prepared/<speaker>": "audio codes (train_with_codes.jsonl), reused only when the dataset hash matches",
+    "runs/<speaker>/<run_id>/checkpoints": "checkpoint-epoch-N, copied here from /content under .tmp names and verified",
+    "runs/<speaker>/<run_id>/{config,logs,environment,samples}": "settings, logs, reproducibility snapshot, final.wav",
+    "runs/<speaker>/<run_id>/status.json": "status, epoch, step, loss, latest checkpoint (metrics.csv beside it)",
+    "logs": "setup logs and timings.jsonl",
+}
 
 
 @dataclasses.dataclass
@@ -37,7 +50,7 @@ class TrainSettings:
     batch_size: int = 2  # --batch_size (default 2; the README example uses 32)
     base_model: str = BASE_MODEL  # --init_model_path
     tokenizer_model: str = TOKENIZER  # prepare_data.py --tokenizer_model_path
-    drive_folder: str = DEFAULT_DRIVE_FOLDER  # checkpoints go to My Drive/<drive_folder>/<speaker>/checkpoints
+    drive_folder: str = DEFAULT_DRIVE_FOLDER  # everything lives under My Drive/<drive_folder>
 
     _RANGES = {"epochs": (1, 100), "learning_rate": (1e-7, 1e-3), "batch_size": (1, 256)}
 
@@ -75,30 +88,57 @@ def estimate(settings: TrainSettings, clips: int) -> dict:
                     f"{ACCUMULATION} batches (fixed in sft_12hz.py). Not a time or quality prediction."}
 
 
+def drive_root(settings: TrainSettings) -> str:
+    return f"/content/drive/MyDrive/{settings.drive_folder}"
+
+
 def commands(settings: TrainSettings, speaker: str, folder_name: str) -> dict:
-    """The two official commands with this export's values (what colab_setup.sh runs)."""
-    drive = f"/content/drive/MyDrive/{settings.drive_folder}/{speaker}"
+    """The two official commands with this export's values (what the runner executes), for reading and for manual use."""
+    drive = f"{drive_root(settings)}/prepared/{speaker}"
+    ft = "/content/Qwen3-TTS/finetuning"
     return {
-        "checkpoint_dir": f"{drive}/checkpoints",
-        "prepare": (f"python /content/Qwen3-TTS/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path "
-                    f"{settings.tokenizer_model} --input_jsonl train.jsonl --output_jsonl {drive}/train_with_codes.jsonl"),
-        "train": (f"python /content/Qwen3-TTS/finetuning/sft_12hz.py --init_model_path /content/models/{settings.base_model.split('/')[-1]} "
-                  f"--output_model_path {drive}/checkpoints --train_jsonl {drive}/train_with_codes.jsonl "
+        "checkpoint_dir": f"{drive_root(settings)}/runs/{speaker}/<run_id>/checkpoints",
+        "prepare": (f"python {ft}/prepare_data.py --device cuda:0 --tokenizer_model_path "
+                    f"/content/models/{settings.tokenizer_model.split('/')[-1]} --input_jsonl train.jsonl "
+                    f"--output_jsonl {drive}/train_with_codes.jsonl"),
+        "train": (f"python {ft}/sft_12hz.py --init_model_path /content/models/{settings.base_model.split('/')[-1]} "
+                  f"--output_model_path /content/runs/{speaker}/<run_id>/checkpoints --train_jsonl /content/work/{speaker}/train_with_codes.jsonl "
                   f"--batch_size {settings.batch_size} --lr {settings.learning_rate:g} --num_epochs {settings.epochs} "
                   f"--speaker_name {speaker}"),
     }
 
 
+def runner_args(settings: TrainSettings, speaker: str, data_source: str) -> str:
+    """The runner's flags for this export (the `colab` CLI route and the shell route pass them explicitly)."""
+    return " ".join([
+        "--drive-root", shlex.quote(drive_root(settings)), "--data-source", shlex.quote(data_source),
+        "--speaker-name", shlex.quote(speaker), "--epochs", str(settings.epochs), "--lr", f"{settings.learning_rate:g}",
+        "--batch-size", str(settings.batch_size), "--base-model", shlex.quote(settings.base_model),
+        "--tokenizer-model", shlex.quote(settings.tokenizer_model)])
+
+
 def start_commands(speaker: str, folder_name: str, zip_name: str, settings: TrainSettings) -> dict:
-    """How to start the run: notebook cells and the `colab` command-line route (also in colab_commands.txt)."""
-    d = f"/content/drive/MyDrive/{settings.drive_folder}/{speaker}"
+    """How to start the run; shown in the export dialog's success box and written to colab_commands.txt."""
+    root = drive_root(settings)
+    zip_path = f"{root}/datasets/{zip_name}"
     return {
-        "notebook": ["from google.colab import drive; drive.mount('/content/drive')",
-                     f"!mkdir -p /content/{folder_name} && unzip -q -o \"{d}/{zip_name}\" -d /content/{folder_name}",
-                     f"!bash /content/{folder_name}/colab_setup.sh"],
-        "colab_cli": [f"colab new -s {SESSION} --gpu A100", f"colab drivemount -s {SESSION}",
-                      f"# unzip, then start in the background: see colab_commands.txt, Route B",
-                      f"colab exec -s {SESSION} --timeout 60 (starts: nohup bash /content/{folder_name}/colab_setup.sh > {d}/train.log &)"],
+        "notebook": [
+            "from google.colab import drive; drive.mount('/content/drive')",
+            f"!unzip -q -o \"{zip_path}\" {RUNNER_NAME} training_settings.json -d /content/vs",
+            f"!python3 /content/vs/{RUNNER_NAME} all --settings /content/vs/training_settings.json --data-source \"{zip_path}\"",
+            f"# or open {NOTEBOOK_NAME} (inside the export folder and its zip) in Colab",
+        ],
+        "colab_cli": [
+            f"colab new -s {SESSION} --gpu A100", f"colab drivemount -s {SESSION}",
+            f"colab upload -s {SESSION} {RUNNER_NAME} /content/{RUNNER_NAME}",
+            f"colab exec -s {SESSION} --timeout 60 (starts: nohup python3 /content/{RUNNER_NAME} all "
+            f"{runner_args(settings, speaker, zip_path)} > {root}/logs/cli-train.log 2>&1 &)",
+            f"colab stop -s {SESSION}   # when finished: release the GPU",
+        ],
+        "notebook_file": NOTEBOOK_NAME,
+        "runner_file": RUNNER_NAME,
+        "data_source": zip_path,
+        "drive_layout": {f"{root}/{k}": v for k, v in LAYOUT.items()},
     }
 
 
@@ -107,205 +147,135 @@ def verified_facts() -> dict:
         "repository": QWEN_REPO.removesuffix(".git"), "commit": QWEN_COMMIT, "commit_date": QWEN_COMMIT_DATE,
         "read_on": READ_ON, "base_model": BASE_MODEL, "tokenizer": TOKENIZER,
         "files_read": ["finetuning/README.md", "finetuning/prepare_data.py", "finetuning/sft_12hz.py",
-                       "finetuning/dataset.py"],
+                       "finetuning/dataset.py", "pyproject.toml"],
         "record_fields": ["audio", "text", "ref_audio"], "audio": "wav, read with librosa; reference must be 24 kHz",
         "scripts_run_by_voicestudio": False,
     }
 
 
+# ------------------------------------------------------------------------------------------------ text templates
 SETUP = r"""#!/usr/bin/env bash
-# Qwen3-TTS fine-tuning on Google Colab with the checkpoints written straight to Google Drive.
-# Written by VoiceStudio. Commands follow QwenLM/Qwen3-TTS finetuning/ at commit @@COMMIT@@ (@@COMMIT_DATE@@).
-# Not run by VoiceStudio: it needs a Colab GPU runtime. Run:  !bash /content/@@DIR@@/colab_setup.sh
-# Mount Google Drive first (see colab_commands.txt). Every value below can be overridden by an environment variable.
+# Qwen3-TTS fine-tuning on Google Colab. Written by VoiceStudio. All the work is done by voicestudio_qwen3_colab.py
+# (next to this file): Drive cache layout, dependency checks, FlashAttention wheel cache, models, dataset checks,
+# training. Not run by VoiceStudio: it needs a Colab GPU runtime. Mount Google Drive first (colab_commands.txt), then:
+#   !bash /content/@@DIR@@/colab_setup.sh
+# Settings come from training_settings.json (dialog values); override with flags or environment variables, e.g.
+#   !RESTART=1 EPOCHS=5 bash /content/@@DIR@@/colab_setup.sh          or      bash colab_setup.sh --smoke-run
+# STEP=setup|data|train|results|sample|all (default all).
 set -euo pipefail
-
-SPEAKER_NAME="${SPEAKER_NAME:-@@SPEAKER@@}"                  # name the fine-tuned model answers to
-DRIVE_DIR="${DRIVE_DIR:-/content/drive/MyDrive/@@DRIVE@@/${SPEAKER_NAME}}"   # survives a disconnect
-DATASET_ARCHIVE="${DATASET_ARCHIVE:-${DRIVE_DIR}/@@ZIP@@}"
-DATASET_DIR="${DATASET_DIR:-/content/@@DIR@@}"               # local copy: training from /content is faster than from Drive
-OUTPUT_DIR="${OUTPUT_DIR:-${DRIVE_DIR}/checkpoints}"         # checkpoint-epoch-N folders are written here, on Drive
-CODES_JSONL="${CODES_JSONL:-${DRIVE_DIR}/train_with_codes.jsonl}"   # prepare_data.py output, kept on Drive so it is not redone
-QWEN_REPO="${QWEN_REPO:-/content/Qwen3-TTS}"
-QWEN_COMMIT="${QWEN_COMMIT:-@@COMMIT@@}"
-BASE_MODEL="@@BASE@@"
-TOKENIZER_MODEL="@@TOKENIZER@@"
-MODEL_DIR="${MODEL_DIR:-/content/models/@@BASE_NAME@@}"
-BATCH_SIZE="${BATCH_SIZE:-@@BATCH@@}"      # set in the VoiceStudio export dialog (the script defaults are 2, 2e-5, 3)
-LR="${LR:-@@LR@@}"
-EPOCHS="${EPOCHS:-@@EPOCHS@@}"
-
-echo "== 0/6 checks"
-[ -d /content/drive/MyDrive ] || { echo "Google Drive is not mounted. Mount it first (colab_commands.txt)."; exit 1; }
-nvidia-smi -L || { echo "No GPU. Runtime > Change runtime type > pick a GPU."; exit 1; }
-nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | awk -F. '$1 < 8 { print "WARNING: this GPU is older than Ampere. sft_12hz.py hard-codes flash_attention_2, which needs Ampere or newer (A100, L4, H100); a T4 will fail." }' || true
-if ls "${OUTPUT_DIR}"/checkpoint-epoch-* >/dev/null 2>&1 && [ "${RESTART:-0}" != "1" ]; then
-  echo "Checkpoints already exist in ${OUTPUT_DIR}:"; ls -d "${OUTPUT_DIR}"/checkpoint-epoch-*
-  echo "sft_12hz.py cannot resume: a new run starts from the base model and overwrites checkpoint-epoch-0, -1, ... in place."
-  echo "Pick another OUTPUT_DIR, or set RESTART=1 to start over and overwrite. Nothing was changed."
-  exit 2
-fi
-
-echo "== 1/6 dataset to ${DATASET_DIR}"
-if [ -f "${DATASET_DIR}/train.jsonl" ]; then
-  echo "already there"
-elif [ -f "${DATASET_ARCHIVE}" ]; then
-  mkdir -p "${DATASET_DIR}" && unzip -q -o "${DATASET_ARCHIVE}" -d "${DATASET_DIR}"
-elif [ -f "${DRIVE_DIR}/@@DIR@@/train.jsonl" ]; then
-  mkdir -p "${DATASET_DIR}" && cp -r "${DRIVE_DIR}/@@DIR@@/." "${DATASET_DIR}/"
-else
-  echo "Dataset not found. Put @@ZIP@@ in ${DRIVE_DIR} (or set DATASET_ARCHIVE / DATASET_DIR)."; exit 1
-fi
-[ -f "${DATASET_DIR}/train.jsonl" ] && [ -f "${DATASET_DIR}/reference/ref.wav" ] || { echo "train.jsonl or reference/ref.wav is missing in ${DATASET_DIR}"; exit 1; }
-echo "$(wc -l < "${DATASET_DIR}/train.jsonl") training rows"
-
-echo "== 2/6 official Qwen3-TTS repository"
-[ -d "${QWEN_REPO}/.git" ] || git clone https://github.com/QwenLM/Qwen3-TTS.git "${QWEN_REPO}"
-git -C "${QWEN_REPO}" checkout --quiet "${QWEN_COMMIT}"
-
-echo "== 3/6 dependencies"
-pip install -q -e "${QWEN_REPO}"
-pip install -q accelerate tensorboard librosa soundfile safetensors huggingface_hub
-if [ "${SKIP_FLASH_ATTN:-0}" != "1" ]; then
-  python -c "import flash_attn" 2>/dev/null || MAX_JOBS=4 pip install -q -U flash-attn --no-build-isolation
-fi
-
-echo "== 4/6 base model ${BASE_MODEL} to ${MODEL_DIR}"
-# sft_12hz.py copies the init model FOLDER into every checkpoint, so it needs a local folder, not a hub id.
-[ -f "${MODEL_DIR}/config.json" ] || python -c "from huggingface_hub import snapshot_download; snapshot_download('${BASE_MODEL}', local_dir='${MODEL_DIR}')"
-
-echo "== 5/6 official preprocessing (audio_codes)"
-# Paths in train.jsonl are relative to the dataset folder, and the official scripts open them relative to the
-# working directory, so every step runs from inside DATASET_DIR.
-cd "${DATASET_DIR}"
-if [ -s "${CODES_JSONL}" ]; then
-  echo "using ${CODES_JSONL}"
-else
-  mkdir -p "$(dirname "${CODES_JSONL}")"
-  python "${QWEN_REPO}/finetuning/prepare_data.py" --device cuda:0 --tokenizer_model_path "${TOKENIZER_MODEL}" \
-    --input_jsonl train.jsonl --output_jsonl "${CODES_JSONL}.tmp"
-  mv "${CODES_JSONL}.tmp" "${CODES_JSONL}"
-fi
-
-echo "== 6/6 fine-tuning (checkpoints go to ${OUTPUT_DIR} on Drive after every epoch)"
-mkdir -p "${OUTPUT_DIR}"
-python "${QWEN_REPO}/finetuning/sft_12hz.py" --init_model_path "${MODEL_DIR}" --output_model_path "${OUTPUT_DIR}" \
-  --train_jsonl "${CODES_JSONL}" --batch_size "${BATCH_SIZE}" --lr "${LR}" --num_epochs "${EPOCHS}" \
-  --speaker_name "${SPEAKER_NAME}"
-
-echo "Done. Checkpoints:"; ls -d "${OUTPUT_DIR}"/checkpoint-epoch-*
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$HERE/voicestudio_qwen3_colab.py" "${STEP:-all}" "$@"
 """
 
-COMMANDS = r"""VoiceStudio: Qwen3-TTS fine-tuning on Google Colab, checkpoints on Google Drive
-===============================================================================
+COMMANDS = r"""VoiceStudio: Qwen3-TTS fine-tuning on Google Colab, everything reusable on Google Drive
+======================================================================================
 Verified against QwenLM/Qwen3-TTS commit @@COMMIT@@ (@@COMMIT_DATE@@): finetuning/README.md, prepare_data.py,
-sft_12hz.py, dataset.py. VoiceStudio did not run them (no GPU here). Treat the first Colab run as the real test.
+sft_12hz.py, dataset.py, pyproject.toml. VoiceStudio did not run them (no GPU here). Treat the first Colab run as the real test.
+All logic is in ONE file, voicestudio_qwen3_colab.py; the notebook, colab_setup.sh and the commands below only call it.
 
 Before you start
-  1. Copy @@ZIP@@ to Google Drive:  My Drive/@@DRIVE@@/@@SPEAKER@@/@@ZIP@@
-  2. Colab: Runtime > Change runtime type > a GPU with FlashAttention 2 support (A100, L4 or H100).
-     sft_12hz.py hard-codes flash_attention_2, so a T4 will not work without editing Qwen's script.
+  1. Copy @@ZIP@@ to Google Drive:  My Drive/@@DRIVE@@/datasets/@@ZIP@@   (or point DATA_SOURCE at the folder or zip)
+  2. Colab: Runtime > Change runtime type > a GPU. A100, H100 and L4 use the original script with FlashAttention 2.
+     The G4 (RTX PRO 6000 Blackwell) defaults to a patched SDPA copy of the script (UNVERIFIED). A T4 needs ATTN_FALLBACK=True.
+  3. First run: set SMOKE_RUN to run a short timing run and see the projected time and compute units before the long run.
 
------ Route A: Colab notebook (three cells) -----
+Drive layout (My Drive/@@DRIVE@@/)
+  cache/models/ cache/Qwen3-TTS/ cache/wheelhouse/sm<arch>/ cache/pip/ cache/fingerprints.json
+  datasets/   prepared/@@SPEAKER@@/train_with_codes.jsonl (+ prepared.json: the dataset hash it belongs to)   logs/
+  runs/@@SPEAKER@@/<run_id>/{config,logs,checkpoints,samples,environment}/  status.json  metrics.csv   (run_id = timestamp unless you set RUN_ID)
+  Nothing is overwritten or deleted by default: every run has its own folder. Checkpoints are written to /content, copied to Drive as
+  checkpoint-epoch-N.tmp, verified (file sizes, hashes of small files) and renamed only when complete.
 
-Cell 1: mount Drive
-    from google.colab import drive
-    drive.mount('/content/drive')
+----- Route A: the notebook (recommended) -----
+  Open @@NOTEBOOK@@ from Drive in Colab (it is inside this export and its zip: put it anywhere on Drive and open it
+  with Google Colab). Pick the GPU runtime, edit the parameters cell (DATA_SOURCE is where Qwen3 finds the training
+  data), then run the cells top to bottom.
 
-Cell 2: unzip the dataset to /content (local disk is faster than Drive)
-    !mkdir -p /content/@@DIR@@
-    !unzip -q -o "/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/@@ZIP@@" -d /content/@@DIR@@
+----- Route B: three notebook cells, no notebook file -----
+    from google.colab import drive; drive.mount('/content/drive')
+    !unzip -q -o "/content/drive/MyDrive/@@DRIVE@@/datasets/@@ZIP@@" voicestudio_qwen3_colab.py training_settings.json -d /content/vs
+    !python3 /content/vs/voicestudio_qwen3_colab.py all --settings /content/vs/training_settings.json --data-source "/content/drive/MyDrive/@@DRIVE@@/datasets/@@ZIP@@"
+  Steps one at a time: replace `all` with setup, data, train, results or sample. Timing run: add --smoke-run.
+  Other flags: --restart, --keep-last-n N, --attn-fallback auto|true|false, --batch-size N|auto, --units-per-hour R, --units-available U,
+  --compare-epoch-seconds S --compare-units-per-hour R.
+  Keep the tab open; a disconnect ends the run (see Resume below).
 
-Cell 3: clone, install, preprocess and train (everything in colab_setup.sh)
-    !bash /content/@@DIR@@/colab_setup.sh
-
-  Change the speaker, epochs and so on with variables in front of the command:
-    !SPEAKER_NAME=@@SPEAKER@@ EPOCHS=@@EPOCHS@@ BATCH_SIZE=@@BATCH@@ LR=@@LR@@ bash /content/@@DIR@@/colab_setup.sh
-  Skip the FlashAttention install if it is already present:  SKIP_FLASH_ATTN=1
-  Keep the notebook tab open; a disconnect ends the run (see Resume below).
-
-The steps colab_setup.sh runs, written out (DATASET_DIR=/content/@@DIR@@, OUTPUT_DIR=Drive checkpoints folder):
-    git clone https://github.com/QwenLM/Qwen3-TTS.git /content/Qwen3-TTS
-    git -C /content/Qwen3-TTS checkout @@COMMIT@@
-    pip install -e /content/Qwen3-TTS
-    pip install accelerate tensorboard librosa soundfile safetensors huggingface_hub
-    MAX_JOBS=4 pip install -U flash-attn --no-build-isolation
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('@@BASE@@', local_dir='/content/models/@@BASE_NAME@@')"
+What the runner does, written out (the exact commands it runs for training; paths are the defaults):
+    git clone @@REPO@@ /content/drive/MyDrive/@@DRIVE@@/cache/Qwen3-TTS ; git checkout @@COMMIT@@   (then copied to /content/Qwen3-TTS)
+    pip install -e /content/Qwen3-TTS ; pip install accelerate tensorboard librosa soundfile safetensors huggingface_hub
+    FlashAttention 2 wheel: Drive cache, else the prebuilt release wheel, else one build saved to the Drive wheelhouse
+    models downloaded once into Drive cache/models, then copied to /content/models/@@BASE_NAME@@ and /content/models/@@TOKENIZER_NAME@@
     cd /content/@@DIR@@
-    python /content/Qwen3-TTS/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path @@TOKENIZER@@ \
-        --input_jsonl train.jsonl --output_jsonl /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/train_with_codes.jsonl
+    (prepare_data.py is re-driven by a small script with the same tokenizer calls so it can show progress and write a partial file;
+     the equivalent official command is:)
+    python /content/Qwen3-TTS/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path /content/models/@@TOKENIZER_NAME@@ \
+        --input_jsonl train.jsonl --output_jsonl /content/drive/MyDrive/@@DRIVE@@/prepared/@@SPEAKER@@/train_with_codes.jsonl
     python /content/Qwen3-TTS/finetuning/sft_12hz.py --init_model_path /content/models/@@BASE_NAME@@ \
-        --output_model_path /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints \
-        --train_jsonl /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/train_with_codes.jsonl \
+        --output_model_path /content/runs/@@SPEAKER@@/<run_id>/checkpoints \
+        --train_jsonl /content/work/@@SPEAKER@@/train_with_codes.jsonl \
         --batch_size @@BATCH@@ --lr @@LR@@ --num_epochs @@EPOCHS@@ --speaker_name @@SPEAKER@@
-  (Plain python, not torchrun: sft_12hz.py creates its own accelerate Accelerator and was written for one process.)
+    (each finished checkpoint-epoch-N is then copied to Drive runs/@@SPEAKER@@/<run_id>/checkpoints as .tmp, verified, renamed)
+  (Plain python, not torchrun: sft_12hz.py creates its own accelerate Accelerator and was written for one process.
+   On the SDPA path the runner runs a patched COPY of sft_12hz.py from /content/qwen3_patched; the cached repo is never changed.)
 
-Checkpoints: /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-0, -1, -2 ...
-  One folder per finished epoch, written directly to Drive. Each is a complete model folder (the script copies the
-  whole base model folder into it), so expect several GB per epoch (about the size of the base model); check your
-  free Drive space against the number of epochs, and delete older epochs you do not need.
-
-Test a checkpoint (same Colab runtime):
-    import torch, soundfile as sf
-    from qwen_tts import Qwen3TTSModel
-    tts = Qwen3TTSModel.from_pretrained("/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-2",
-        device_map="cuda:0", dtype=torch.bfloat16, attn_implementation="flash_attention_2")
-    wavs, sr = tts.generate_custom_voice(text="She said she would be here by noon.", speaker="@@SPEAKER@@")
-    sf.write("/content/test.wav", wavs[0], sr)
+Checkpoints: /content/drive/MyDrive/@@DRIVE@@/runs/@@SPEAKER@@/<run_id>/checkpoints/checkpoint-epoch-0, -1, -2 ...
+  One folder per finished epoch. Each is a complete model folder (the script copies the whole base model folder into it), so expect
+  several GB per epoch; the timing run and the first synced checkpoint print the exact size and the projected Drive use.
+  KEEP_ALL is on by default (nothing is deleted). With KEEP_ALL=False, KEEP_LAST_N / KEEP_FIRST / KEEP_FINAL delete the other epochs, and only
+  folders this runner verified and recorded.
 
 Resume after a disconnect
   The official sft_12hz.py has NO resume: it saves model weights only (no optimizer state, no epoch counter, no
   resume option) and always starts from --init_model_path. What you can rely on:
     - Every checkpoint-epoch-N that finished before the disconnect is already on Drive and is a usable model.
-    - Rerunning colab_setup.sh re-uses the dataset zip, the cached train_with_codes.jsonl and the Drive folder, but it
-      refuses to run over existing checkpoints (it would restart from the base model and overwrite them). Use another
-      OUTPUT_DIR for a new run, or RESTART=1 to deliberately start over.
+    - Running the runner again re-uses the Drive cache (models, wheels, repo, codes if the dataset hash matches) and the dataset zip, and starts
+      a NEW run folder (a new timestamp), so the earlier run is never touched. Re-using a --run-id that already has checkpoints is refused unless
+      --restart is given.
+    - True resume (optimizer state, mid-epoch) is NOT built: the official script saves weights only.
   Continuing from a saved checkpoint is not offered: the script rewrites each checkpoint as a custom_voice model and
   drops its speaker encoder, which the training code calls, so passing one as --init_model_path is untested and
   probably fails. Use fewer epochs per session instead, or pick the last finished epoch.
 
-Copy the final checkpoint back to your computer
-  It already is on Drive:  My Drive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-N  (download it from drive.google.com
-  or let Google Drive for desktop sync it). From a Colab cell you can also copy it to another Drive folder:
-    !cp -r "/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-2" "/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/final"
+Compute units
+  A runtime uses units while it is connected, including when idle. The runner prints a reminder at the end of every training
+  or timing run. Disconnect and delete the runtime: in the notebook run
+      from google.colab import runtime; runtime.unassign()
+  (announced by the Colab team in 2022; not run here) or use the menu Runtime > Disconnect and delete runtime;
+  from the colab command line: colab stop -s @@SESSION@@
 
------ Route B: the `colab` command-line tool -----
+Copy the final checkpoint elsewhere
+  It already is on Drive. From a Colab cell:
+    !cp -r "/content/drive/MyDrive/@@DRIVE@@/runs/@@SPEAKER@@/<run_id>/checkpoints/checkpoint-epoch-2" "/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@-final"
+
+----- Route C: the `colab` command-line tool -----
 Syntax read from `colab readme` and `colab help <command>`. VoiceStudio did not run any of these. Its README says
 the tool supports Linux and macOS (Windows is not listed): on Windows run it from WSL if a command misbehaves.
 `colab exec` runs PYTHON in the session's kernel and reads code from stdin or -f FILE; its default timeout is 30 s, so
 long jobs are started in the background and followed through a log file on Drive.
 
-    colab new -s @@SESSION@@ --gpu A100              # or L4; needs a Colab plan that offers it
+    colab new -s @@SESSION@@ --gpu A100              # or another GPU your plan offers
     colab drivemount -s @@SESSION@@                  # mounts at /content/drive (a Google sign-in prompt may appear)
-
-  Put the zip on Drive first (drive.google.com, or Google Drive for desktop): colab upload of a multi-GB file is slow.
-  Small files are fine:  colab upload -s @@SESSION@@ colab_setup.sh /content/colab_setup.sh
-
-    colab exec -s @@SESSION@@ --timeout 900 <<'PY'
-    import subprocess
-    print(subprocess.run("mkdir -p /content/@@DIR@@ && unzip -q -o '/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/@@ZIP@@' -d /content/@@DIR@@ && ls /content/@@DIR@@",
-                         shell=True, capture_output=True, text=True).stdout)
-    PY
+    colab upload -s @@SESSION@@ voicestudio_qwen3_colab.py /content/voicestudio_qwen3_colab.py     # a small file
+  (Put the zip on Drive first, in drive.google.com or Google Drive for desktop: uploading multi-GB files is slow.)
 
     colab exec -s @@SESSION@@ --timeout 60 <<'PY'
     import subprocess
-    subprocess.Popen("nohup bash /content/@@DIR@@/colab_setup.sh > /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/train.log 2>&1 &",
+    subprocess.Popen("nohup python3 /content/voicestudio_qwen3_colab.py all @@RUNNER_ARGS@@ > /content/drive/MyDrive/@@DRIVE@@/logs/cli-train.log 2>&1 &",
                      shell=True, start_new_session=True)
     PY
 
   Follow it (the log is on Drive, so it survives too):
     colab exec -s @@SESSION@@ <<'PY'
-    print(open('/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/train.log').read()[-3000:])
+    print(open('/content/drive/MyDrive/@@DRIVE@@/logs/cli-train.log').read()[-3000:])
     PY
-    colab ls -s @@SESSION@@ content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints
+    colab ls -s @@SESSION@@ content/drive/MyDrive/@@DRIVE@@/runs/@@SPEAKER@@
     colab status -s @@SESSION@@
 
   Fetch a checkpoint file to this computer (not needed, the checkpoints are on Drive; each file is large):
-    colab download -s @@SESSION@@ content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-2/model.safetensors ./model.safetensors
+    colab download -s @@SESSION@@ content/drive/MyDrive/@@DRIVE@@/runs/@@SPEAKER@@/<run_id>/checkpoints/checkpoint-epoch-2/model.safetensors ./model.safetensors
 
-  Resume: same limits as above. After a lost session, `colab new` again, `colab drivemount`, and start the setup script
-  with a new OUTPUT_DIR (add --env OUTPUT_DIR=... to colab exec, or put it in the command), or RESTART=1 to overwrite.
-    colab stop -s @@SESSION@@                        # release the GPU when you are done
+  Resume: same limits as above. After a lost session, `colab new` again, `colab drivemount`, and run the same command (a new run folder is made).
+    colab stop -s @@SESSION@@                        # release the GPU when you are done (an idle session keeps using units)
 """
 
 README = r"""Qwen3-TTS training set: @@SPEAKER@@
@@ -320,24 +290,29 @@ Contents
   reference/ref.wav      the one reference clip every row points to (24 kHz, which Qwen's code requires)
   dataset_report.json    counts, durations, original-to-exported mapping, warnings, how the reference was chosen
   rejected_samples.jsonl every clip that was NOT exported, with the reason and its transcript
-  colab_setup.sh         Colab script: unzip, clone Qwen3-TTS, install, preprocess, fine-tune, checkpoints to Drive
+  voicestudio_qwen3_colab.py   the one script that does the Colab work (Drive cache, dependency checks, data checks, training)
+  @@NOTEBOOK@@   Colab notebook with this export's settings; every cell calls the script
+  colab_setup.sh         thin wrapper: bash colab_setup.sh [--smoke-run | other flags]
   colab_commands.txt     the same steps for a notebook and for the `colab` command-line tool, plus resume notes
 
 Facts taken from Qwen's code
   - Rows hold audio, text and ref_audio; no ref_text is used. A row may also carry an optional "language" (not set here).
-  - Paths are opened relative to the working directory, so run prepare_data.py and sft_12hz.py from inside this folder.
+  - Paths are opened relative to the working directory, so the scripts run from inside this folder (the runner does that).
   - prepare_data.py adds "audio_codes" to each row (output: a new JSONL). sft_12hz.py reads that file.
   - There is no validation input and no resume option in the official scripts.
+  - sft_12hz.py hard-codes FlashAttention 2 (Ampere, Ada or Hopper GPUs). The runner uses it there, and a patched SDPA copy
+    only for GPUs it cannot run on (default on Blackwell / G4; opt-in elsewhere), clearly marked unverified.
   - The text is the spoken transcript only: Fish tags such as [calm] are removed; punctuation is kept.
   - The same ref_audio on every row is what Qwen recommends for a stable voice.
 
 Quick start on Colab (details in colab_commands.txt)
-  1. Copy the ZIP to Drive: My Drive/@@DRIVE@@/@@SPEAKER@@/@@ZIP@@
-  2. Colab, GPU runtime (A100, L4 or H100). Cells:
-       from google.colab import drive; drive.mount('/content/drive')
-       !mkdir -p /content/@@DIR@@ && unzip -q -o "/content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/@@ZIP@@" -d /content/@@DIR@@
-       !bash /content/@@DIR@@/colab_setup.sh
-  3. Checkpoints appear in My Drive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-N after every epoch.
+  1. Copy the ZIP to Drive: My Drive/@@DRIVE@@/datasets/@@ZIP@@
+  2. Open @@NOTEBOOK@@ in Colab, pick a GPU runtime, edit the parameters cell, run the cells in order.
+     Or, in a notebook with Drive mounted:
+       !unzip -q -o "/content/drive/MyDrive/@@DRIVE@@/datasets/@@ZIP@@" voicestudio_qwen3_colab.py training_settings.json -d /content/vs
+       !python3 /content/vs/voicestudio_qwen3_colab.py all --settings /content/vs/training_settings.json --data-source "/content/drive/MyDrive/@@DRIVE@@/datasets/@@ZIP@@"
+  3. Checkpoints appear in My Drive/@@DRIVE@@/runs/@@SPEAKER@@/<run_id>/checkpoints/checkpoint-epoch-N after every epoch (verified copies).
+  4. Disconnect and delete the runtime afterwards (an idle session keeps using compute units).
 
 Without the helper, from inside this folder (after cloning and installing Qwen3-TTS):
   python PATH_TO_QWEN/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path @@TOKENIZER@@ --input_jsonl train.jsonl --output_jsonl train_with_codes.jsonl
@@ -351,6 +326,143 @@ This set
 
 Source and terms: the audio is synthetic speech generated by Fish Audio. Check Fish's terms before using it to train a model.
 """
+
+
+# ------------------------------------------------------------------------------------------------ notebook
+def _cell(kind: str, n: int, text: str) -> dict:
+    lines = text.strip("\n").split("\n")
+    source = [line + "\n" for line in lines[:-1]] + [lines[-1]]
+    base = {"cell_type": kind, "id": f"vs-{n:02d}", "metadata": {}, "source": source}
+    if kind == "code":
+        base |= {"execution_count": None, "outputs": []}
+    return base
+
+
+def _py(value) -> str:
+    return json.dumps(value, ensure_ascii=False) if isinstance(value, str) else repr(value)
+
+
+INTRO_MD = """# Qwen3-TTS fine-tuning (VoiceStudio)
+
+Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's official `finetuning/` scripts. Everything reusable is cached on your Google Drive, and every cell below calls one script (`voicestudio_qwen3_colab.py`, shipped with the export). **Nothing here has been run on Colab by its author: treat the first run as the test.**
+
+**Checklist**
+1. **Runtime > Change runtime type > pick the GPU.** A100, H100 and L4 use the original script (FlashAttention 2). The **G4** (RTX PRO 6000 Blackwell) uses a patched SDPA copy by default (unverified). A **T4** cannot run FlashAttention 2 and needs `ATTN_FALLBACK = True` (unverified, may run out of memory).
+2. **Compute units.** A runtime uses units while connected, idle or not, and each GPU type has its own rate (see Colab's runtime menu). Run once with `SMOKE_RUN = True` for a short timing run that projects time and units, then set it back to `False`.
+3. Copy the export zip (or folder) to Drive and set `DATA_SOURCE` below to it.
+4. Run the cells top to bottom. The first run on a new runtime type installs and may build FlashAttention; later runs reuse the Drive cache.
+5. When finished, **disconnect and delete the runtime** (last cell, or Runtime > Disconnect and delete runtime)."""
+
+
+def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAULT_FOLDER_NAME, zip_name: Optional[str] = None,
+                    settings: Optional[TrainSettings] = None) -> str:
+    """The Colab notebook for one export (nbformat 4). Same input, same text."""
+    st = settings or TrainSettings()
+    zip_name = zip_name or folder_name + ".zip"
+    root = drive_root(st)
+    params = "\n".join([
+        "# ---- Edit these, then run the cells below in order. Re-run this cell and the 'mount Drive' cell after changing them. ----",
+        f"DRIVE_ROOT = {_py(root)}  # cache, checkpoints and logs live here",
+        f"DATA_SOURCE = {_py(f'{root}/datasets/{zip_name}')}  # where the training data is: a .zip or a folder on Drive, or an unzipped folder under /content",
+        f"SPEAKER_NAME = {_py(speaker)}  # the name the fine-tuned model answers to",
+        f"EPOCHS = {st.epochs}",
+        f"LR = {st.learning_rate:g}",
+        f"BATCH_SIZE = {st.batch_size}  # a number, or 'auto' for the suggestion for this GPU (untested estimates, see the GPU section of the output)",
+        f"BASE_MODEL = {_py(st.base_model)}",
+        "RUN_ID = ''  # empty: a new timestamped run folder every time, so a second run never overwrites the first",
+        "KEEP_ALL = True  # True keeps every checkpoint (each is several GB). Nothing is ever deleted while this is True",
+        "KEEP_LAST_N = 0  # only with KEEP_ALL = False: keep the newest N epochs (plus KEEP_FIRST / KEEP_FINAL)",
+        "KEEP_FIRST = False",
+        "KEEP_FINAL = True",
+        "ATTN_FALLBACK = 'auto'  # 'auto': FlashAttention 2 on A100/H100/L4, patched SDPA copy on Blackwell/G4; True: force SDPA (unverified); False: force FlashAttention 2",
+        "RESTART = False  # True lets a RUN_ID you re-use replace its own checkpoints (the official script cannot resume)",
+        "SAMPLE_TEXT = " + _py(DEFAULT_SAMPLE_TEXT) + "  # sentence for final.wav after training",
+        "SAMPLE_SEED = 1234",
+        "CACHE_MODELS_ON_DRIVE = True  # False: download models straight to /content (nothing cached on Drive)",
+        "SMOKE_RUN = False  # True: a short timing run (one epoch on the first SMOKE_CLIPS clips, scratch folder) instead of real training",
+        "SMOKE_CLIPS = 40",
+        "UNITS_PER_HOUR = None  # this runtime's compute units per hour; empty = looked up for known GPUs (owner's figures, unverified)",
+        "UNITS_AVAILABLE = 100",
+        "COMPARE_EPOCH_SECONDS = None  # optional: seconds per epoch measured on a different GPU, to compare cost per epoch",
+        "COMPARE_UNITS_PER_HOUR = None  # that other GPU's rate",
+        f"TOKENIZER_MODEL = {_py(st.tokenizer_model)}",
+    ])
+    mount = "\n".join([
+        "from google.colab import drive",
+        "drive.mount('/content/drive')",
+        "",
+        "# Load the one script that does the work: from the export (DATA_SOURCE) if it is there, else the copy cached on Drive.",
+        "import os, sys, zipfile",
+        "SCRIPT = 'voicestudio_qwen3_colab.py'",
+        "CACHE = os.path.join(DRIVE_ROOT, 'cache')",
+        "os.makedirs(CACHE, exist_ok=True)",
+        "cached = os.path.join(CACHE, SCRIPT)",
+        "fresh = None",
+        "if DATA_SOURCE.lower().endswith('.zip') and os.path.isfile(DATA_SOURCE):",
+        "    with zipfile.ZipFile(DATA_SOURCE) as z:",
+        "        fresh = z.read(SCRIPT) if SCRIPT in z.namelist() else None",
+        "elif os.path.isfile(os.path.join(DATA_SOURCE, SCRIPT)):",
+        "    fresh = open(os.path.join(DATA_SOURCE, SCRIPT), 'rb').read()",
+        "if fresh is not None and (not os.path.isfile(cached) or open(cached, 'rb').read() != fresh):",
+        "    open(cached, 'wb').write(fresh)",
+        "if not os.path.isfile(cached):",
+        "    raise FileNotFoundError(SCRIPT + ' not found: check DATA_SOURCE (it must point at the export zip or folder, which contains it).')",
+        "if CACHE not in sys.path:",
+        "    sys.path.insert(0, CACHE)",
+        "import importlib, voicestudio_qwen3_colab as vs",
+        "importlib.reload(vs)",
+        "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LR,",
+        "    batch_size=BATCH_SIZE, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
+        "    keep_first=KEEP_FIRST, keep_final=KEEP_FINAL, sample_text=SAMPLE_TEXT, sample_seed=SAMPLE_SEED, cache_models_on_drive=CACHE_MODELS_ON_DRIVE,",
+        "    attn_fallback=ATTN_FALLBACK, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
+        "    compare_epoch_seconds=COMPARE_EPOCH_SECONDS, compare_units_per_hour=COMPARE_UNITS_PER_HOUR), env={})",
+        "print('Runner', vs.RUNNER_VERSION, 'loaded from', cached)",
+    ])
+    cells = [
+        _cell("markdown", 1, INTRO_MD),
+        _cell("code", 2, "# GPU check: which GPU did Colab give you? (details and the attention path are printed again by the setup cell)\n"
+                         "!nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv"),
+        _cell("markdown", 3, "## Parameters\nEdit the values in the next cell. `DATA_SOURCE` is where the training data is: the export zip or folder on Drive "
+                             "(or an already unzipped folder under `/content`). The cells after it do the work and hold no settings of their own."),
+        _cell("code", 4, params),
+        _cell("markdown", 5, "## 1. Mount Drive and load the script"),
+        _cell("code", 6, mount),
+        _cell("markdown", 7, "## 2. Set up and verify\nCreates the Drive layout, installs what is missing, gets FlashAttention (cached wheel, prebuilt wheel or one build "
+                             "saved to Drive) when the GPU needs it, downloads the models once, and prints a pass/fail table plus the time each step took."),
+        _cell("code", 8, "ok = vs.setup(P)"),
+        _cell("markdown", 9, "## 3. Check the data\nCopies or unzips the dataset to local disk and verifies every `audio` and `ref_audio` path (exists, 24 kHz mono) before any GPU time is spent."),
+        _cell("code", 10, "folder = vs.data_check(P)"),
+        _cell("markdown", 11, "## 4. Train (or run the timing run)\nWith `SMOKE_RUN = True` this runs one epoch on the first few clips and prints the projected "
+                              "time and compute units; with `False` it trains for real. Checkpoints are written to `/content`, then each finished epoch is copied to "
+                              "`runs/<speaker>/<run_id>/checkpoints` on Drive under a temporary name, verified and renamed, and the output says what is now safe on Drive. "
+                              "Progress lines, a heartbeat when quiet, `metrics.csv` and `status.json` show it is alive. Re-running the cell starts a new run unless you re-use a `RUN_ID`."),
+        _cell("code", 12, "vs.train(P)"),
+        _cell("markdown", 13, "## 5. Results\nLists the checkpoints on Drive with their sizes."),
+        _cell("code", 14, "vs.results(P)"),
+        _cell("markdown", 15, "## 6. Final sample (optional, unverified)\nTraining already makes `samples/final.wav` when it finishes. Run this to make it again (for example with a new `SAMPLE_TEXT`) "
+                              "from the final checkpoint on Drive, using the usage in Qwen's finetuning README."),
+        _cell("code", 16, "vs.final_sample(P)"),
+        _cell("markdown", 17, "## 7. Disconnect\nAn idle runtime keeps using compute units. Uncomment and run the line below, or use Runtime > Disconnect and delete runtime. "
+                              "(`runtime.unassign()` was announced by the Colab team in 2022; it is not run here.)"),
+        _cell("code", 18, "# from google.colab import runtime; runtime.unassign()"),
+    ]
+    nb = {"cells": cells,
+          "metadata": {"accelerator": "GPU", "colab": {"provenance": []},
+                       "kernelspec": {"display_name": "Python 3", "name": "python3"}, "language_info": {"name": "python"}},
+          "nbformat": 4, "nbformat_minor": 5}
+    return json.dumps(nb, ensure_ascii=False, indent=1) + "\n"
+
+
+def write_default_notebook(path: str) -> None:
+    """Refresh the committed copy: ``cd backend && python -c "from engines.fish_api import qwen3_colab as c; c.write_default_notebook('../notebooks/Qwen3_TTS_Colab_Training.ipynb')"``."""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(render_notebook())
+
+
+def runner_source() -> str:
+    """The Colab script, byte for byte as it is in the repo."""
+    with open(runner.__file__, encoding="utf-8", newline="") as fh:
+        return fh.read().replace("\r\n", "\n")
 
 
 def _fill(template: str, values: dict) -> str:
@@ -379,12 +491,16 @@ def render_files(*, speaker: str, folder_name: str, zip_name: str, settings: Tra
     values = {
         "SPEAKER": speaker, "DIR": folder_name, "ZIP": zip_name, "DRIVE": settings.drive_folder, "COMMIT": QWEN_COMMIT,
         "COMMIT_DATE": QWEN_COMMIT_DATE, "BASE": settings.base_model, "BASE_NAME": settings.base_model.split("/")[-1],
-        "TOKENIZER": settings.tokenizer_model, "SESSION": SESSION, "BATCH": str(settings.batch_size),
-        "LR": f"{settings.learning_rate:g}", "EPOCHS": str(settings.epochs),
+        "TOKENIZER": settings.tokenizer_model, "TOKENIZER_NAME": settings.tokenizer_model.split("/")[-1], "SESSION": SESSION,
+        "BATCH": str(settings.batch_size), "LR": f"{settings.learning_rate:g}", "EPOCHS": str(settings.epochs),
+        "REPO": QWEN_REPO, "NOTEBOOK": NOTEBOOK_NAME,
+        "RUNNER_ARGS": runner_args(settings, speaker, f"{drive_root(settings)}/datasets/{zip_name}"),
         "SETTINGS": f"{settings.epochs} epochs, learning rate {settings.learning_rate:g}, batch size {settings.batch_size}, base model {settings.base_model}",
     }
     return {
         "README.txt": _fill(README, values | {"SUMMARY": _summary(report)}),
         "colab_setup.sh": _fill(SETUP, values),
         "colab_commands.txt": _fill(COMMANDS, values),
+        RUNNER_NAME: runner_source(),
+        NOTEBOOK_NAME: render_notebook(speaker=speaker, folder_name=folder_name, zip_name=zip_name, settings=settings),
     }

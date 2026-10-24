@@ -307,37 +307,39 @@ def test_export_refuses_a_non_empty_folder_but_overwrite_replaces_only_a_previou
     assert (foreign / "keep.txt").read_text() == "precious"
 
 
-def test_colab_helper_carries_the_verified_commands_and_the_drive_checkpoint_folder(corpus, tmp_path):
+def test_colab_helper_files_are_thin_callers_of_one_runner_and_carry_the_dialog_settings(corpus, tmp_path):
     out = _export(corpus, tmp_path, training={"drive_folder": "My-Training/run1", "epochs": 7, "learning_rate": 1e-5,
                                               "batch_size": 4})["path"]
-    setup = open(os.path.join(out, "colab_setup.sh"), encoding="utf-8").read()
-    commands = open(os.path.join(out, "colab_commands.txt"), encoding="utf-8").read()
-    readme = open(os.path.join(out, "README.txt"), encoding="utf-8").read()
+    read = lambda n: open(os.path.join(out, n), encoding="utf-8").read()  # noqa: E731
+    setup, commands, readme = read("colab_setup.sh"), read("colab_commands.txt"), read("README.txt")
+    for text in (commands, readme):
+        assert qwen3_colab.QWEN_COMMIT in text and "Qwen/Qwen3-TTS-12Hz-1.7B-Base" in text
     for text in (setup, commands, readme):
-        assert qwen3_colab.QWEN_COMMIT in text and "Qwen/Qwen3-TTS-12Hz-1.7B-Base" in text and "@@" not in text
-    assert "finetuning/prepare_data.py" in setup and "finetuning/sft_12hz.py" in setup
+        assert "@@" not in text
+    # one implementation: the shell file only calls the runner, and the runner shipped in the export is the repo's file
+    assert "voicestudio_qwen3_colab.py" in setup and "pip install" not in setup and len(setup.splitlines()) < 20
+    assert read("voicestudio_qwen3_colab.py") == qwen3_colab.runner_source()
+    assert os.path.isfile(os.path.join(out, qwen3_colab.NOTEBOOK_NAME))
+    # the official commands and flags are spelled out for reading
     for flag in ("--tokenizer_model_path", "--input_jsonl", "--output_jsonl", "--init_model_path", "--output_model_path",
                  "--train_jsonl", "--batch_size", "--lr", "--num_epochs", "--speaker_name"):
-        assert flag in setup
-    assert "Qwen/Qwen3-TTS-Tokenizer-12Hz" in setup and 'DRIVE_DIR="${DRIVE_DIR:-/content/drive/MyDrive/My-Training/run1/${SPEAKER_NAME}}"' in setup
-    # the settings chosen in the dialog reach every helper file, not the defaults
-    assert 'BATCH_SIZE="${BATCH_SIZE:-4}"' in setup and 'LR="${LR:-1e-05}"' in setup and 'EPOCHS="${EPOCHS:-7}"' in setup
+        assert flag in commands
     assert "--batch_size 4 --lr 1e-05 --num_epochs 7" in commands and "--num_epochs 7" in readme
     assert "--num_epochs 3" not in commands + readme
+    # the dialog values reach settings, the notebook parameters and the colab CLI command
     settings = json.load(open(os.path.join(out, "training_settings.json"), encoding="utf-8"))
     assert (settings["epochs"], settings["batch_size"], settings["learning_rate"]) == (7, 4, 1e-5)
-    assert settings["checkpoint_dir"] == "/content/drive/MyDrive/My-Training/run1/Sunny/checkpoints"
+    assert settings["drive_folder"] == "My-Training/run1" and settings["speaker_name"] == "Sunny"
     assert "--num_epochs 7" in settings["commands"]["sft_12hz"] and settings["fixed_in_the_official_script"]["gradient_accumulation_steps"] == 4
     assert settings["estimate"]["updates_per_epoch"] >= 1 and "Not a time or quality prediction" in settings["estimate"]["note"]
-    assert 'OUTPUT_DIR="${OUTPUT_DIR:-${DRIVE_DIR}/checkpoints}"' in setup
-    assert "/content/drive/MyDrive/My-Training/run1/Sunny/checkpoints" in commands
-    assert 'SPEAKER_NAME="${SPEAKER_NAME:-Sunny}"' in setup
+    assert "/content/drive/MyDrive/My-Training/run1/runs/Sunny/<run_id>/checkpoints" in commands
     for cmd in ("colab new", "colab drivemount", "colab exec", "colab ls", "colab download", "colab stop"):
         assert cmd in commands
-    assert "no resume" in commands.lower() and "RESTART=1" in setup  # the honest statement and the overwrite guard
+    assert "--epochs 7" in commands and "--batch-size 4" in commands and "--speaker-name Sunny" in commands
+    assert "no resume" in commands.lower() and "--restart" in commands and "runtime.unassign()" in commands
     assert "checkpoint-epoch-" in commands and "drive.mount" in commands
     bash = shutil.which("bash")
-    if bash:
+    if bash and subprocess.run([bash, "-c", "true"], capture_output=True).returncode == 0:  # a broken WSL launcher is not a bash
         ok = subprocess.run([bash, "-n", os.path.join(out, "colab_setup.sh")], capture_output=True, text=True)
         assert ok.returncode == 0, ok.stderr
 
@@ -381,7 +383,9 @@ def test_the_export_route_takes_the_qwen3_options(client, tmp_path):
     assert data["formats"] == ["qwen3_tts"] and data["qwen3"]["zip"]["path"].endswith("via_api.zip")
     assert data["qwen3"]["reference"]["reason"] and "colab_setup.sh" in data["qwen3"]["files"]
     assert data["qwen3"]["settings"]["epochs"] == 6 and "--num_epochs 6" in data["qwen3"]["commands"]["official"]["train"]
-    assert any("colab_setup.sh" in c for c in data["qwen3"]["commands"]["notebook"]) and data["qwen3"]["commands"]["colab_cli"]
+    assert any("voicestudio_qwen3_colab.py" in c for c in data["qwen3"]["commands"]["notebook"]) and data["qwen3"]["commands"]["colab_cli"]
+    assert data["qwen3"]["commands"]["notebook_file"] == "Qwen3_TTS_Colab_Training.ipynb" and data["qwen3"]["commands"]["drive_layout"]
+    assert "voicestudio_qwen3_colab.py" in data["qwen3"]["files"] and "Qwen3_TTS_Colab_Training.ipynb" in data["qwen3"]["files"]
     bad = client.post("/api/fish/dataset/export", json={**body, "name": "x2", "voice_ids": []})
     assert bad.status_code == 422 and "one speaker" in bad.json()["detail"]
     mixed = client.post("/api/fish/dataset/export", json={**body, "name": "x3", "formats": ["qwen3_tts", "jsonl"]})

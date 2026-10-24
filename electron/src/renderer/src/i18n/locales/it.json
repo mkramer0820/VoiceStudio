@@ -3980,7 +3980,7 @@
     "qtr_drive_folder": "Google Drive folder",
     "qtr_base_model": "Base model",
     "qtr_tokenizer_model": "Audio tokenizer (preprocessing)",
-    "qtr_checkpoint_hint": "Checkpoints are written straight to this Drive folder, one per epoch, so they survive a disconnect. The official script cannot resume a run.",
+    "qtr_checkpoint_hint": "Each epoch is trained on the Colab disk, then copied to this Drive folder only when it is complete and verified, so a disconnect never leaves a broken checkpoint. Every run gets its own run folder and nothing is overwritten. The official script cannot resume a run.",
     "qtr_estimate": "About {{batches}} batches and {{updates}} optimizer updates per epoch, {{total}} in all.",
     "qtr_estimate_note": "An estimate from the script's own loop (batch size, 4 batches per update), not a time or quality prediction.",
     "qtr_fixed": "Fixed inside Qwen's script and not options: gradient accumulation 4, bf16 precision, FlashAttention 2, one checkpoint per epoch.",

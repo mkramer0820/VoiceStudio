@@ -306,7 +306,7 @@ const QWEN_RESULT: Partial<ExportResult> = {
     commands: {
       notebook: ['!bash /content/set/colab_setup.sh'],
       colab_cli: ['colab new -s qwen-train --gpu A100'],
-      official: { prepare: 'python prepare_data.py', train: 'python sft_12hz.py --num_epochs 7', checkpoint_dir: '/content/drive/MyDrive/X/Y/checkpoints' },
+      official: { prepare: 'python prepare_data.py', train: 'python sft_12hz.py --num_epochs 7', checkpoint_dir: '/content/drive/MyDrive/X/Y/runs/Sunny/<run_id>/checkpoints' },
     },
   },
 };
@@ -327,7 +327,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     expect(within(dialog).queryByLabelText('fishDataset.export_val')).not.toBeInTheDocument(); // no validation split
     expect(within(dialog).queryByTestId('tag-row')).not.toBeInTheDocument(); // tags are always removed
     expect(within(dialog).getByLabelText(/fishDataset\.format_jsonl(?!_)/)).toBeDisabled();
-    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/VoiceStudio-training/<speaker>/checkpoints');
+    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/VoiceStudio-training/runs/<speaker>/<run_id>/checkpoints');
   });
 
   it('sends only changed training fields and the Qwen3-TTS options', async () => {
@@ -342,7 +342,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_learning_rate'), { target: { value: '0.00001' } });
     fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_drive_folder'), { target: { value: 'X/Y' } });
     fireEvent.change(within(dialog).getByLabelText('fishDataset.qwen_speaker'), { target: { value: 'Sunny' } });
-    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/X/Y/Sunny/checkpoints');
+    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/X/Y/runs/Sunny/<run_id>/checkpoints');
     fireEvent.click(exportButton(dialog));
     await waitFor(() => expect(onExport).toHaveBeenCalledTimes(2));
     expect(sent(onExport).training).toEqual({ epochs: 7, learning_rate: 0.00001, drive_folder: 'X/Y' });
@@ -387,7 +387,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     expect(status).toHaveTextContent('train.jsonl, training_settings.json, colab_setup.sh');
     expect(within(status).getByTestId('qwen-start-commands')).toHaveTextContent('!bash /content/set/colab_setup.sh');
     expect(within(status).getByTestId('qwen-start-commands')).toHaveTextContent('colab new -s qwen-train');
-    expect(status).toHaveTextContent('/content/drive/MyDrive/X/Y/checkpoints');
+    expect(status).toHaveTextContent('/content/drive/MyDrive/X/Y/runs/Sunny/<run_id>/checkpoints');
     expect(status).toHaveTextContent('--num_epochs 7');
     expect(status).toHaveTextContent('two clips touch full scale');
     expect(within(status).queryByRole('button', { name: /fishTraining\.train_open/ })).not.toBeInTheDocument(); // no local runner
