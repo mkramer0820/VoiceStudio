@@ -1,15 +1,14 @@
 # Fish Audio: handoff (read this first)
 
-The single state-of-the-work document for everything Fish in VoiceStudio: the API engine, the story board, the voice library, the training-data screen, and where the LoRA/training phase should start. User-facing behavior lives in [fish-audio.md](fish-audio.md); this file is for whoever works on the code next. Last updated 2026-10-23.
+The single state-of-the-work document for everything Fish in VoiceStudio: the API engine, the story board, the voice library, the training-data screen, and where the LoRA/training phase should start. User-facing behavior lives in [fish-audio.md](fish-audio.md); this file is for whoever works on the code next. How to work on it (layout, git, checks, delegating) is in [../agents/fish-project-organization.md](../agents/fish-project-organization.md).
 
 ## 1. Branches and status
 
 | Branch | Contents | Status |
 |---|---|---|
 | `main` | none of the Fish work | untouched |
-| `ext/fish-api` | Fish cloud engine, story board, jobs, preview, voices, apply settings, load past runs | pushed, no PR |
-| `ext/fish-training-data` | branches from `ext/fish-api`; voice library, training-data screen, audio measurements, exports, these docs | pushed, no PR |
-| `ext/fish-lora` | branches from `ext/fish-training-data`; OmniVoice export, in-repo LoRA, training runs, Train dialog, evaluation gate | local only, not pushed |
+| `ext/fish-api` | the line that holds all of it: engine, story board, jobs, preview, voices and library, past runs, training-data screen, exports and training bundle, in-repo LoRA and the Train dialog | continue from here; no PR |
+| `ext/fish-training-data` | an earlier name for the same line, kept on the remote at the same commit | do not develop on it |
 
 No release, version bump or tag is involved. Per `CLAUDE.md`, versions only change when the owner asks.
 
@@ -26,7 +25,8 @@ All local unless the Contact column says otherwise.
 | Past runs | Jobs dialog: list, log, resume, **Load into board**, **Listen** per line, open a run folder by path | `story_jobs.{load_run,run_audio_path,open_run_folder}`, `jobs-dialog.tsx` | resume only |
 | Voice library | Saved voices with your character name, Fish name, id, details, notes, usage | `fish_api/library.py`, `/api/fish/library` in `routers/fish_audio.py`, `voice-library.tsx`, `voices-dialog.tsx` | no |
 | Loudness | `prosody.normalize_loudness` always sent explicitly | `client.build_body` | n/a |
-| Training data | Index of render folders, speakers by voice id, filters, character zoom, audio measurements, select all/none, export | `fish_api/{dataset,dataset_quality}.py`, `routers/fish_dataset.py`, `features/fish-dataset/` | never |
+| Training data | Index of render folders, speakers by voice id, filters, character zoom, audio measurements, select all/none, export with a tag dictionary | `fish_api/{dataset,dataset_quality}.py`, `routers/fish_dataset.py`, `features/fish-dataset/` | never |
+| Training bundle | OmniVoice export also writes portable rows, `train_config.json`, `data_config.json`, `train.sh` and `COLAB.md` for training elsewhere (Colab), with every trainer setting configurable and a passes estimate | `fish_api/training_bundle.py`, `export-tags.tsx`, `export-training.tsx` | never |
 | Training (LoRA) | OmniVoice export, loudness matching, opt-in Train dialog, dry run, cancellable and resumable runs, evaluation record | `fish_api/{training,training_eval}.py`, `omnivoice/training/lora.py`, `routers/fish_training.py`, `features/fish-dataset/train-dialog.tsx` | never |
 
 Local data under `<data dir>/fish_stories/`: drafts `*.json`, `voice_library.json`, `clip_stats.json`, and renders in the configured output folder. Each run folder holds `job.json`, `manifest.json`, `story.json`, `settings.json`, `requests.jsonl`, `run.log` and the WAVs.
@@ -70,10 +70,11 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 - `fish_api/story.py`: draft schema, explicit nullable `request_mode`, request validation, planning.
 - `fish_api/story_jobs.py`: request grouping, speaker mapping, preview, render/resume, logging, joining, past-run loading and audio, voice-use recording.
 - `fish_api/library.py`: the voice library store.
-- `fish_api/dataset.py`: corpus index, filters, facets, export. `fish_api/dataset_quality.py`: per-clip audio measurements, cached by sha256.
-- `backend/api/routers/{fish_audio,fish_story,fish_dataset}.py`: the HTTP surface.
+- `fish_api/dataset.py`: corpus index, filters, facets, tag dictionary, export. `fish_api/dataset_quality.py`: per-clip audio measurements, cached by sha256.
+- `fish_api/training_bundle.py`: the config, script and guide written with an OmniVoice export. `fish_api/training.py` and `training_eval.py`: the opt-in local training runner and its evaluation record. `omnivoice/training/lora.py`: the in-repo LoRA.
+- `backend/api/routers/{fish_audio,fish_story,fish_dataset,fish_training}.py`: the HTTP surface.
 - `electron/src/renderer/src/features/{fish-story,fish-dataset}/`: UI, hooks and tests. Navigation entries are in `components/app-shell/workspace-menu.tsx`, `use-workspace-sidebar.ts`, `command-palette.tsx` and `routes/index.ts`.
-- Tests: `tests/backend/engines/test_fish_{api,story,story_jobs,collection,dataset}.py`, `tests/backend/api/test_fish_audio_route.py`, and the two feature folders' `*.test.ts(x)`. No live Fish call is needed and no key belongs in fixtures, logs, commits or docs.
+- Tests: `tests/backend/engines/test_fish_{api,story,story_jobs,collection,dataset,training}.py`, `tests/backend/test_omnivoice_lora.py`, `tests/backend/api/test_fish_audio_route.py`, and the two feature folders' `*.test.ts(x)`. No live Fish call is needed and no key belongs in fixtures, logs, commits or docs.
 
 ## 5. Rules from the repo that apply
 
@@ -93,7 +94,7 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 
 `bun run typecheck` and `bun run locale:check` (from `electron/`; use these, not `npx tsc`), `python -m pytest tests/test_locale_parity.py tests/test_changelog_style.py tests/test_changelog_parse.py`, `python -m pytest tests/backend/engines tests/backend/api/test_fish_audio_route.py -q -k fish`, and `npx vitest run src/renderer/src/features/fish-story src/renderer/src/features/fish-dataset`.
 
-## 8. Facts about the data (2026-10-23, `D:\fish_tts\input`)
+## 8. Facts about the data (`D:\fish_tts\input` when this was written)
 
 - 32 runs, 31 chapters, about 3,370 usable clips, all `s2.1-pro-free`, 44.1 kHz mono WAV.
 - Only **SS_Narrator** has hours of audio (about 4 h). Noctis (about 34 min) and sun_2 (about 26 min) are borderline; every other speaker is under about 8 min.
@@ -112,7 +113,7 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 - Input it expects: JSONL with `{"id", "audio_path", "text", "language_id"}` per line, audio resampled to **24 kHz**. `omnivoice.scripts.extract_audio_tokens` (needs `eustlb/higgs-audio-v2-tokenizer`) turns that into WebDataset tar shards plus a `data.lst`, which the data config points at.
 - **Quick win (now built):** the `omnivoice` export format, so the export dialog feeds the existing tokenizer with no manual conversion. See "What the LoRA phase built" below.
 
-### Research findings (read from the code, 2026-10-23; nothing was downloaded or run)
+### Research findings (read from the code; nothing was downloaded or run)
 
 **Model structure** (`omnivoice/models/omnivoice.py`, `training/builder.py`):
 
@@ -132,7 +133,7 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 
 **Non-verbal tags OmniVoice knows** (`_NONVERBAL_PATTERN`): `[laughter] [sigh] [confirmation-en] [question-en] [question-ah] [question-oh] [question-ei] [question-yi] [surprise-ah] [surprise-oh] [surprise-wa] [surprise-yo] [dissatisfaction-hnn]`. So for the narrator, `laughing=laughter` and `sighing=sigh` are the only Fish tags with a direct equivalent; `chuckling` has none and is best dropped.
 
-### What the LoRA phase built (branch `ext/fish-lora`, 2026-10-23)
+### What the LoRA phase built
 
 | Piece | Where | Notes |
 |---|---|---|
@@ -147,7 +148,7 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 
 **Run folder layout** (`fish_training/run_<time>_<id>/`): `job.json`, `run.log`, `train_config.json`, `data_config.json`, `tokens/{train,dev}/` (skipped on resume when `data.lst` exists), `output/` (checkpoints, `eval_history.jsonl`), `adapter/` (final adapter, `adapter.json`, `evaluation.json`), `heldout.jsonl`, `dry_run.json` for dry runs.
 
-### Owner decisions (answered 2026-10-24)
+### Owner decisions (answered)
 
 - **Where training runs:** mostly outside this machine (Google Colab), because of GPU limits. The dataset is transferred there, so the export must be self-contained: relative paths, the configs and a script. This is the `training` option of the export (`fish_api/training_bundle.py`, `train.sh`, `COLAB.md`). The in-app Train button stays for a machine that can train.
 - **`peft` vs in-repo LoRA:** depends on the model that gets trained and will be settled out of this repo. The exported config uses the in-repo `lora_*` fields; the guide says how to carry the hyper-parameters over to another library.

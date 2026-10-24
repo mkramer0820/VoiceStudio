@@ -35,13 +35,13 @@ VoiceStudio/
 ├── backend/                     ⟵ FastAPI server
 │   ├── main.py                  the one entry point; its boot order is load-bearing —
 │   │                            read the comments before reordering anything
-│   ├── api/routers/             42 routers, auto-included; thin HTTP/WS surface
+│   ├── api/routers/             46 routers, auto-included; thin HTTP/WS surface
 │   │   └── setup/               first-run wizard, model download
 │   ├── core/                    config, db, job queue, event bus, auth/CSRF, path security,
 │   │                            opt-in analytics, version, diagnostics
 │   ├── services/                100 modules of business logic — TTS, dubbing pipeline,
 │   │                            audio DSP, GPU gateway, engine routing, model lifecycle
-│   ├── engines/                 per-engine adapters: indextts, supertonic3, confucius4,
+│   ├── engines/                 per-engine adapters: fish_api, indextts, supertonic3, confucius4,
 │   │                            dots_tts, moss_tts_v15, pockettts, audiocpp,
 │   │                            omnivoice_gguf, omnivoice_subprocess, _asr_sidecar, _echo,
 │   │                            voxcpm2_subprocess, moss_tts_nano_subprocess, cosyvoice_subprocess
@@ -72,11 +72,11 @@ VoiceStudio/
 │
 ├── omnivoice/                   ⟵ the underlying TTS model package
 │   ├── models/
-│   ├── cli/                     CLI entry points (omnivoice-infer, etc.)
+│   ├── cli/                     CLI entry points (omnivoice-infer, train, etc.)
 │   ├── data/                    data utilities used by the model
 │   ├── eval/                    evaluation scripts
 │   ├── scripts/                 one-off utilities that ship with the package
-│   ├── training/
+│   ├── training/                trainer, checkpoints, and the in-repo LoRA (lora.py)
 │   └── utils/
 │
 ├── tests/                       ⟵ the main pytest session (testpaths in pyproject.toml)
@@ -117,7 +117,8 @@ VoiceStudio/
 │   ├── RELEASING.md             the release checklist — every deployment channel
 │   ├── features.yaml            canonical feature inventory (drives docs-drift.yml)
 │   ├── adr/                     architecture decision records
-│   ├── agents/                  agent-facing docs (issue tracker, triage labels, domain)
+│   ├── agents/                  agent-facing docs (issue tracker, triage labels, domain,
+│   │                            Fish pipeline organization and session guidance)
 │   ├── engines/, dubbing/, install/, setup/, migration/, features/, playbooks/, specs/
 │   ├── media/, screenshot-*.png, preview.png, logo.*
 │   └── languages.md, training.md, data_preparation.md, evaluation.md, voice-design.md

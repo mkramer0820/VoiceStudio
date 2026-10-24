@@ -123,4 +123,4 @@ Single-context: `docs/adr/` plus a root `CONTEXT.md` that is created lazily and 
 
 ### Fish Audio integration
 
-When changing the Fish API or Story Studio paths on `ext/fish-api`, read `docs/engines/fish-audio-handoff.md` first. It records the required remote-audio preservation and explicit single/multi-speaker request-mode behavior.
+When changing the Fish API or Story Studio paths on `ext/fish-api`, read `docs/engines/fish-audio-handoff.md` first. It records the required remote-audio preservation and explicit single/multi-speaker request-mode behavior, the current state of the Fish work, and what not to change. `docs/agents/fish-project-organization.md` covers layout, git, checks and how to delegate.
