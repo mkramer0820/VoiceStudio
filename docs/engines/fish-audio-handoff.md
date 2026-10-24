@@ -1,14 +1,14 @@
 # Fish Audio: handoff (read this first)
 
-The single state-of-the-work document for everything Fish in VoiceStudio: the API engine, the story board, the voice library, the training-data screen, and where the LoRA/training phase should start. User-facing behavior lives in [fish-audio.md](fish-audio.md); this file is for whoever works on the code next. How to work on it (layout, git, checks, delegating) is in [../agents/fish-project-organization.md](../agents/fish-project-organization.md).
+The single state-of-the-work document for everything Fish in VoiceStudio: the API engine, the story board, the voice library, the training-data screen, and where the LoRA/training phase should start. User-facing behavior lives in [fish-audio.md](fish-audio.md); this file is for whoever works on the code next. Start with [../agents/README.md](../agents/README.md) and [../agents/SESSION_STATE.md](../agents/SESSION_STATE.md) (short, current); this file is the deep reference. How to work on it (layout, git, checks, delegating) is in [../agents/fish-project-organization.md](../agents/fish-project-organization.md).
 
 ## 1. Branches and status
 
 | Branch | Contents | Status |
 |---|---|---|
 | `main` | none of the Fish work | untouched |
-| `ext/fish-api` | the line that holds all of it: engine, story board, jobs, preview, voices and library, past runs, training-data screen, exports and training bundle, in-repo LoRA and the Train dialog | continue from here; no PR |
-| `ext/fish-training-data` | an earlier name for the same line, kept on the remote at the same commit | do not develop on it |
+| `ext/fish-qwen3-export` | **the active line**: everything below, plus the Qwen3-TTS export, loudness matching, reference chooser, Colab runner and notebook, and the staged Explorer with the chapter checklist | local only, not pushed; no PR |
+| `ext/fish-api`, `ext/fish-training-data` | the same work up to the training bundle and LoRA path (they point at the same commit) | pushed; older than the active line |
 
 No release, version bump or tag is involved. Per `CLAUDE.md`, versions only change when the owner asks.
 
@@ -29,6 +29,10 @@ All local unless the Contact column says otherwise.
 | Training bundle | OmniVoice export also writes portable rows, `train_config.json`, `data_config.json`, `train.sh` and `COLAB.md` for training elsewhere (Colab), with every trainer setting configurable and a passes estimate | `fish_api/training_bundle.py`, `export-tags.tsx`, `export-training.tsx` | never |
 | Qwen3-TTS export | `qwen3_tts` format: official-format folder, report, rejected list, Colab and Drive helper; its settings live in the same Training setup section as OmniVoice's | `fish_api/{qwen3_export,qwen3_colab}.py`, `export-qwen.tsx`, `export-training.tsx` (`QwenTrainingSection`), `scripts/export_qwen3_tts.py` | never |
 | Training (LoRA) | OmniVoice export, loudness matching, opt-in Train dialog, dry run, cancellable and resumable runs, evaluation record | `fish_api/{training,training_eval}.py`, `omnivoice/training/lora.py`, `routers/fish_training.py`, `features/fish-dataset/train-dialog.tsx` | never |
+| Qwen3-TTS export | One-speaker folder in the official fine-tuning format (24 kHz mono, plain text), report, rejected list, reference clip, ZIP | `fish_api/qwen3_export.py`, `scripts/export_qwen3_tts.py` | never |
+| Loudness matching, reference chooser | Match loudness (default -22 dB) with a per-chapter report; star shortlist, ranked Suggest, one reference | `dataset.py` `apply_loudness`, `qwen3_export.rank_references`, `export-loudness.tsx`, `export-reference.tsx` | never |
+| Colab runner and notebook | One standard-library runner and a generated notebook: Drive cache, GPU-aware attention path, safe checkpoint copy, progress, timing run | `fish_api/qwen3_colab_runner.py`, `qwen3_colab.py`, `notebooks/` | on Colab only (Hugging Face, the public Qwen repo) |
+| Staged Explorer | Chapter checklist with level columns, tags with Any/All, several length bars, one Apply; each facet ignores its own filter | `dataset-explorer.tsx`, `chapter-picker.tsx`, `explorer-staging.ts`, `dataset.facets` | never |
 
 Local data under `<data dir>/fish_stories/`: drafts `*.json`, `voice_library.json`, `clip_stats.json`, and renders in the configured output folder. Each run folder holds `job.json`, `manifest.json`, `story.json`, `settings.json`, `requests.jsonl`, `run.log` and the WAVs.
 

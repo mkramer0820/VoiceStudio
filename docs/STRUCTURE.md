@@ -117,8 +117,8 @@ VoiceStudio/
 │   ├── RELEASING.md             the release checklist — every deployment channel
 │   ├── features.yaml            canonical feature inventory (drives docs-drift.yml)
 │   ├── adr/                     architecture decision records
-│   ├── agents/                  agent-facing docs (issue tracker, triage labels, domain,
-│   │                            Fish pipeline organization and session guidance)
+│   ├── agents/                  agent-facing docs (index in README.md; issue tracker, triage labels,
+│   │                            domain, Fish session state, worker briefing and prompts)
 │   ├── engines/, dubbing/, install/, setup/, migration/, features/, playbooks/, specs/
 │   ├── media/, screenshot-*.png, preview.png, logo.*
 │   └── languages.md, training.md, data_preparation.md, evaluation.md, voice-design.md

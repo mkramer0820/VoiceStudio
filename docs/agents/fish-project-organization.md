@@ -41,7 +41,7 @@ Local data (never committed): drafts, `voice_library.json`, `clip_stats.json` un
 
 ## Your first ten minutes
 
-1. Read `CLAUDE.md`, then `docs/engines/fish-audio-handoff.md` (sections on what not to change come first for a reason).
+1. Read `AGENTS.md` (`CLAUDE.md` mirrors it), then `docs/agents/README.md` and `docs/agents/SESSION_STATE.md`. Open the sections of `docs/engines/fish-audio-handoff.md` you need (the "do not change" section first).
 2. `git status`, `git log --oneline -10`, and confirm which branch you are on and that it matches what the handoff says.
 3. Run the quick checks below once, so you know the baseline before you change anything. The failures listed in the handoff (the torchaudio test and the CJK test) are known; anything else is yours.
 4. Look at the real shape of the data before designing for it: `D:\fish_tts\input` holds the owner's renders. Read it; never write to it, rename or delete anything in it.
@@ -86,15 +86,15 @@ Ask first (write the options and your recommendation, then continue with work th
 
 ## Delegating to a subagent
 
-- Give each agent its own git worktree and a branch name, and a written brief that stands alone: what to read first, the exact job, the limits (no push, no downloads, no network, no real training), the commands to run, and what the report must contain. Agents start with no memory of this session.
+- Use [SUBAGENT_PROMPT_TEMPLATE.md](SUBAGENT_PROMPT_TEMPLATE.md) and point the worker at [SUBAGENT_BRIEF.md](SUBAGENT_BRIEF.md) instead of pasting the rules again. Give each agent its own git worktree and a branch name, and a written brief that stands alone: what to read first, the exact job, the limits (no push, no downloads, no network, no real training), the commands to run, and what the report must contain. Agents start with no memory of this session.
 - A worktree's `node_modules` may be junctions to the main checkout's. Unlink them (`cmd /c rmdir <path>` on each junction) **before** removing the worktree, then confirm the real `node_modules` still has its contents. Removing a worktree with live junctions can delete the real packages.
 - Verify a report before relaying it: check the branch, the commits (author, no attribution lines), the diff size, and re-run the checks yourself. Treat what the agent says it did as a claim.
 - Merge in a straight line where you can (fast-forward) and delete merged branches and worktrees afterwards.
 
 ## Shell and tooling pitfalls seen here
 
-- Large or quote-heavy shell heredocs fail in this environment; write the script to a file with the file tool and run that.
-- The Windows shell reports a command that outlives its two-minute limit as moved to the background; wait for the notification instead of polling.
+- Large or quote-heavy shell heredocs fail in this environment; write the script to a file and run that.
+- Some agent tools move a long command to the background after a time limit; wait for it to finish instead of polling or rerunning it.
 - Do not run two things that rewrite the same files at once (for example a script and an editor), and do not rely on line numbers across edits.
 - `npx tsc` is not the TypeScript compiler in this repo; use `bun run typecheck`.
 
