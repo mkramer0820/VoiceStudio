@@ -332,14 +332,42 @@ def capture(cmd: list, **kw) -> tuple:
         return 127, str(exc)
 
 
+def stop_process(proc) -> None:
+    """Stop a child process (and anything it started) that is still running. An interrupted or failed cell must never
+    leave training running on the GPU, because a connected runtime keeps using compute units."""
+    if proc is None or proc.poll() is not None:
+        return
+    posix = os.name == "posix"
+    for sig_name, wait in (("SIGTERM", 15), ("SIGKILL", 10)):
+        try:
+            if posix:
+                import signal
+
+                os.killpg(proc.pid, getattr(signal, sig_name))  # the child runs in its own session: signal its whole group
+            elif sig_name == "SIGTERM":
+                proc.terminate()
+            else:
+                proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            proc.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def run_stream(cmd: list, *, cwd: Optional[str] = None, env: Optional[dict] = None, log_path: Optional[str] = None,
                on_line: Optional[Callable] = None) -> int:
-    """Run a command, echo its output and append it to a log file (on Drive). Returns the exit code."""
+    """Run a command, echo its output and append it to a log file (on Drive). Returns the exit code. If the caller is
+    interrupted (the notebook's stop button) or raises, the command is stopped too."""
     say("$ " + " ".join(cmd))
     log = open(log_path, "a", encoding="utf-8") if log_path else None
+    proc = None
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **(env or {})}, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+                                stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                **({"start_new_session": True} if os.name == "posix" else {}))
         for line in proc.stdout:  # type: ignore[union-attr]
             handled = bool(on_line(line)) if on_line else False  # True: the caller printed its own, richer line instead
             if not handled:
@@ -350,6 +378,7 @@ def run_stream(cmd: list, *, cwd: Optional[str] = None, env: Optional[dict] = No
                 log.flush()
         return proc.wait()
     finally:
+        stop_process(proc)
         if log:
             log.close()
 

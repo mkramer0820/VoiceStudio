@@ -351,7 +351,8 @@ Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's offici
 2. **Compute units.** A runtime uses units while connected, idle or not, and each GPU type has its own rate (see Colab's runtime menu). Run once with `SMOKE_RUN = True` for a short timing run that projects time and units, then set it back to `False`.
 3. Copy the export zip (or folder) to Drive and set `DATA_SOURCE` below to it.
 4. Run the cells top to bottom. The first run on a new runtime type installs and may build FlashAttention; later runs reuse the Drive cache.
-5. When finished, **disconnect and delete the runtime** (last cell, or Runtime > Disconnect and delete runtime)."""
+5. When finished, **disconnect and delete the runtime** (last cell, or Runtime > Disconnect and delete runtime).
+6. **To cancel fast:** press the stop button on the running cell (it stops the training and first saves the epochs that already finished), then **Runtime > Disconnect and delete runtime**. Compute units are used while the runtime is connected, not while a cell is running, so disconnecting is what stops the spending. Finished epochs stay on Drive; the epoch in progress is lost, because the official script cannot resume. If anything looks stuck, go straight to Disconnect and delete runtime."""
 
 
 def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAULT_FOLDER_NAME, zip_name: Optional[str] = None,

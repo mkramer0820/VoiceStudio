@@ -234,6 +234,8 @@ A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gend
 
 **Owner decisions.** Whether Blackwell should keep SDPA as the default or try FlashAttention 2 first (one parameter, `ATTN_FALLBACK`); whether the first real run should be the timing run (recommended); the H100 rate; whether to keep `KEEP_ALL=True` once Drive space is known.
 
+**Cancelling a run.** `run_stream` starts the training in its own process group and `stop_process` ends it (SIGTERM, then SIGKILL) when the caller is interrupted or fails, so the notebook's stop button no longer leaves `sft_12hz.py` running on the GPU (an earlier build did). `train()` also syncs the epochs that already finished. Compute units are used while the runtime is connected, so the notebook checklist says to follow the stop button with *Runtime > Disconnect and delete runtime*. Covered by `test_interrupting_a_run_stops_the_child_process_too`; not tried on Colab.
+
 ## 11. Not verified
 
 No live Fish call was made while building the later features, so voice-library details rely on the fields the existing voice listing already returns. The screens were tested with component tests, not driven by hand in the running app. LoRA on Fish S2 or Qwen3-TTS is unresearched.

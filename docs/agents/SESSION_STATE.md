@@ -50,6 +50,7 @@ Checked means automated tests pass (backend pytest, frontend vitest, typecheck, 
 - **The UI has never been viewed.** Layout, wording and the Explorer/export dialog were checked by component tests with mocked text.
 - Compute-unit rates in the notebook are the owner's figures, not confirmed. Batch sizes and memory numbers are estimates.
 - Qwen's inference call used for the final sample is taken from its README and unconfirmed.
+- **Cancelling:** the runner now stops the training process when the cell is interrupted (tested with a fake process), but this has not been tried on Colab. Billing stops only when the runtime is disconnected and deleted; finished epochs are already on Drive, the epoch in progress is lost (no resume).
 
 ## Not built (on purpose)
 True resume with optimizer state (the official script saves weights only), per-epoch sample audio, TensorBoard, a per-file hash manifest, loading a trained Qwen model into the app, Fish S2 local, Qwen validation split (the official scripts have none).

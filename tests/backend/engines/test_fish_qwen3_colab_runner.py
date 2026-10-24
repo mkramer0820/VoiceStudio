@@ -1149,6 +1149,38 @@ def test_an_interrupt_still_syncs_the_epochs_that_finished(tmp_path, monkeypatch
     assert json.load(open(e.lay.status))["status"] == "interrupted"
 
 
+def test_interrupting_a_run_stops_the_child_process_too(tmp_path):
+    """The notebook's stop button raises in the cell; the training process must not keep running (and billing) after it."""
+    import time
+
+    beat = tmp_path / "beat.txt"
+    script = tmp_path / "loop.py"
+    script.write_text(
+        "import sys, time\n"
+        "open(sys.argv[1], 'w').write(str(time.time()))\n"
+        "print('started', flush=True)\n"
+        "while True:\n"
+        "    open(sys.argv[1], 'w').write(str(time.time()))\n"
+        "    time.sleep(0.05)\n")
+
+    def stop_button(line):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        vs.run_stream([sys.executable, str(script), str(beat)], log_path=str(tmp_path / "x.log"), on_line=stop_button)
+    time.sleep(0.6)
+    first = beat.read_text()
+    time.sleep(0.6)
+    assert beat.read_text() == first  # nothing is writing any more: the child is gone
+
+
+def test_a_finished_command_is_left_alone_by_the_stop_helper(tmp_path):
+    script = tmp_path / "done.py"
+    script.write_text("print('ok')\n")
+    assert vs.run_stream([sys.executable, str(script)], log_path=str(tmp_path / "y.log")) == 0
+    vs.stop_process(None)  # harmless
+
+
 def test_progress_lines_replace_the_raw_step_lines_on_screen(tmp_path, capsys):
     import io
 
