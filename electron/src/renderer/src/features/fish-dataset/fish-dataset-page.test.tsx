@@ -314,7 +314,7 @@ it('strips all tags by default and keeps, or rewrites, only the ones chosen in t
   expect(lastBody('/api/fish/dataset/export').keep_tags).toEqual([]);
 });
 
-const lastLines = () => lastBody('/api/fish/dataset/lines');
+const lastLines = () => lastBody('/api/fish/dataset/lines?offset=0&limit=50');
 
 it('zooms into one character and back out', async () => {
   render(<FishDatasetPage />);
@@ -471,6 +471,64 @@ describe('shortlist and reference', () => {
       loudness_db: -22,
       qwen3: { reference_key: 'r1:c2' },
     });
+  });
+});
+
+describe('view options never change what is exported', () => {
+  const callsTo = (path: string) =>
+    mock.api.mock.calls.filter(([p]) => String(p).startsWith(path)).map(([, init]) => JSON.parse(init.body));
+
+  it.each([
+    ['shortlist', 2],
+    ['excluded', 1],
+  ])('with the %s view, the dialog count, Suggest and the export use the ticked matching clips', async (view, ticked) => {
+    render(<FishDatasetPage />);
+    fireEvent.click((await screen.findAllByTestId('speaker-row'))[0]);
+    await screen.findAllByTestId('clip-row');
+    if (view === 'excluded') fireEvent.click(screen.getByLabelText('fishDataset.include {"index":1}')); // leave clip 1 out
+    fireEvent.click(star(1));
+    fireEvent.change(screen.getByLabelText('fishDataset.view'), { target: { value: view } });
+    await waitFor(() => expect(lastLines().only_keys).toBeDefined());
+    await waitFor(() => expect(screen.getAllByTestId('clip-row').length).toBeLessThan(3));
+
+    // two matching clips; the excluded view left one or two out, the shortlist view lists one or two
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /fishDataset\.export_open/ }).textContent).toContain(`"count":${ticked}`),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/fishDataset\.export_desc/).textContent).toContain(`"clips":${ticked}`);
+    fireEvent.click(within(dialog).getByLabelText(/fishDataset\.format_qwen3_tts(?!_)/));
+    await within(dialog).findAllByTestId('reference-suggestion');
+    for (const body of callsTo('/api/fish/dataset/reference-candidates')) expect(body.only_keys).toBeUndefined();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
+    await within(dialog).findByText(/fishDataset\.export_done/);
+    const sent = lastBody('/api/fish/dataset/export');
+    expect(sent.only_keys).toBeUndefined();
+    expect(sent.exclude_keys).toEqual(view === 'excluded' ? ['r1:c1'] : []);
+  });
+
+  it('in the left-out view the export still excludes exactly the unticked clips and counts the ticked ones', async () => {
+    render(<FishDatasetPage />);
+    fireEvent.click((await screen.findAllByTestId('speaker-row'))[0]);
+    await screen.findAllByTestId('clip-row');
+    fireEvent.click(screen.getByLabelText('fishDataset.include {"index":1}'));
+    fireEvent.change(screen.getByLabelText('fishDataset.view'), { target: { value: 'excluded' } });
+    await waitFor(() => expect(lastLines()).toMatchObject({ only_keys: ['r1:c1'], exclude_keys: [] }));
+    // the view lists the 1 left-out clip, but 1 of the 2 matching clips is still ticked
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /fishDataset\.export_open/ }).textContent).toContain('"count":1'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/fishDataset\.export_desc/).textContent).toContain('"clips":1');
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
+    await within(dialog).findByText(/fishDataset\.export_done/);
+    const sent = lastBody('/api/fish/dataset/export');
+    expect(sent.only_keys).toBeUndefined();
+    expect(sent.exclude_keys).toEqual(['r1:c1']);
   });
 });
 

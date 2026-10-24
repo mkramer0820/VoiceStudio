@@ -281,7 +281,9 @@ export function useFishDataset() {
   const [tick, setTick] = useState(0);
   const request = useRef(0);
 
-  const spec = useMemo(
+  // The real filters. A view option ("only clips I left out", "only my shortlist") changes what is
+  // listed, never what is exported, so everything that is about the export uses `selectionSpec`.
+  const baseSpec = useMemo(
     () => ({
       voice_ids: [...voices],
       chapters: filters.chapters,
@@ -303,14 +305,28 @@ export function useFishDataset() {
       max_tail_ms: num(filters.maxTail),
       max_pauses: num(filters.maxPauses),
       max_gap_ms: num(filters.maxGap),
-      ...(filters.excludedOnly
-        ? { only_keys: [...excluded], exclude_keys: [] as string[] }
-        : filters.shortlistOnly
-          ? { only_keys: [...shortlist.keys()], exclude_keys: [...excluded] }
-          : { exclude_keys: [...excluded] }),
     }),
-    [voices, filters, excluded, shortlist],
+    [voices, filters],
   );
+  /** Every clip matching the real filters that is still ticked: what Export, Suggest and the dialog counts use. */
+  const selectionSpec = useMemo(() => ({ ...baseSpec, exclude_keys: [...excluded] }), [baseSpec, excluded]);
+  /** What the list shows: the selection, or only the left-out / shortlisted clips in a view option. */
+  const spec = useMemo(
+    () =>
+      filters.excludedOnly
+        ? { ...baseSpec, only_keys: [...excluded], exclude_keys: [] as string[] }
+        : filters.shortlistOnly
+          ? { ...baseSpec, only_keys: [...shortlist.keys()], exclude_keys: [...excluded] }
+          : selectionSpec,
+    [baseSpec, selectionSpec, filters.excludedOnly, filters.shortlistOnly, excluded, shortlist],
+  );
+  const viewOnly = filters.excludedOnly || filters.shortlistOnly;
+  const [viewSelection, setViewSelection] = useState<{
+    selected: number;
+    seconds: number;
+    total: number;
+    levels: LevelSummary | null;
+  } | null>(null);
 
   const refresh = useCallback(async (rescan = false) => {
     setScanning(true);
@@ -364,6 +380,39 @@ export function useFishDataset() {
     }, 250);
     return () => clearTimeout(timer);
   }, [overview?.exists, overview?.root, spec, page, tick]);
+
+  // In a view option the list is not the selection: count the selection itself.
+  useEffect(() => {
+    if (!viewOnly || !overview?.exists) {
+      setViewSelection(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      const body = JSON.stringify(selectionSpec);
+      Promise.all([
+        apiJson<{ total: number; selected?: number; selected_seconds?: number }>('/api/fish/dataset/lines?offset=0&limit=1', {
+          method: 'POST',
+          body,
+        }),
+        apiJson<DatasetFacets>('/api/fish/dataset/facets', { method: 'POST', body }),
+      ])
+        .then(([r, f]) => {
+          if (live)
+            setViewSelection({
+              selected: r.selected ?? r.total,
+              seconds: r.selected_seconds ?? 0,
+              total: r.total,
+              levels: f?.levels ?? null,
+            });
+        })
+        .catch((reason) => live && setError(describeError(reason)));
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [viewOnly, overview?.exists, selectionSpec, tick]);
 
   // Audio measurements: read the saved status once, and follow a running analysis until it ends.
   const loadAnalysis = useCallback(async () => {
@@ -467,9 +516,9 @@ export function useFishDataset() {
     (limit: number, minDuration: number, maxDuration: number) =>
       apiJson<ReferenceSuggestion>('/api/fish/dataset/reference-candidates', {
         method: 'POST',
-        body: JSON.stringify({ ...spec, limit, min_duration: minDuration, max_duration: maxDuration }),
+        body: JSON.stringify({ ...selectionSpec, limit, min_duration: minDuration, max_duration: maxDuration }),
       }),
-    [spec],
+    [selectionSpec],
   );
 
   /** Leave out (or put back) every clip the current filters match, not just the visible page. */
@@ -506,14 +555,14 @@ export function useFishDataset() {
       try {
         return await apiJson<ExportResult>('/api/fish/dataset/export', {
           method: 'POST',
-          body: JSON.stringify({ ...spec, ...options }),
+          body: JSON.stringify({ ...selectionSpec, ...options }),
         });
       } catch (reason) {
         setError(describeError(reason));
         return null;
       }
     },
-    [spec],
+    [selectionSpec],
   );
 
   return {
@@ -547,6 +596,10 @@ export function useFishDataset() {
     seconds,
     selected,
     selectedSeconds,
+    /** The numbers for Export: always the ticked clips matching the real filters, whatever the view shows. */
+    exportSelection: viewOnly
+      ? (viewSelection ?? { selected: 0, seconds: 0, total: 0, levels: null })
+      : { selected, seconds: selectedSeconds, total, levels: facets?.levels ?? null },
     loading,
     analysis,
     startAnalysis,

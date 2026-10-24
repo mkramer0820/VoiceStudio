@@ -372,13 +372,13 @@ export function FishDatasetPage() {
             </Button>
             <Button
               className="w-full"
-              disabled={!overview?.exists || ds.selected === 0}
+              disabled={!overview?.exists || ds.exportSelection.selected === 0}
               onClick={() => {
                 player.stop();
                 setExportOpen(true);
               }}
             >
-              <DownloadIcon /> {t('fishDataset.export_open', { count: ds.selected })}
+              <DownloadIcon /> {t('fishDataset.export_open', { count: ds.exportSelection.selected })}
             </Button>
             <Button className="w-full" variant="outline" onClick={() => setTrainOpen(true)}>
               <CpuIcon /> {t('fishTraining.runs_open')}
@@ -694,9 +694,9 @@ export function FishDatasetPage() {
       <ExportDialog
         open={exportOpen}
         onOpenChange={setExportOpen}
-        clips={ds.selected}
-        seconds={ds.selectedSeconds}
-        excluded={ds.total - ds.selected}
+        clips={ds.exportSelection.selected}
+        seconds={ds.exportSelection.seconds}
+        excluded={ds.exportSelection.total - ds.exportSelection.selected}
         knownTags={overview?.tags ?? facets?.tags ?? []}
         omnivoiceTags={overview?.omnivoice_tags}
         reference={reference}
@@ -707,7 +707,7 @@ export function FishDatasetPage() {
           if (reference && keys.includes(reference.key)) setReference(null);
         }}
         onSuggestReferences={ds.suggestReferences}
-        levels={facets?.levels ?? null}
+        levels={ds.exportSelection.levels}
         analysis={analysis}
         onMeasure={() => void ds.startAnalysis()}
         speakerId={speakerId}
