@@ -9,6 +9,7 @@ The single state-of-the-work document for everything Fish in VoiceStudio: the AP
 | `main` | none of the Fish work | untouched |
 | `ext/fish-api` | Fish cloud engine, story board, jobs, preview, voices, apply settings, load past runs | pushed, no PR |
 | `ext/fish-training-data` | branches from `ext/fish-api`; voice library, training-data screen, audio measurements, exports, these docs | pushed, no PR |
+| `ext/fish-lora` | branches from `ext/fish-training-data`; OmniVoice export, in-repo LoRA, training runs, Train dialog, evaluation gate | local only, not pushed |
 
 No release, version bump or tag is involved. Per `CLAUDE.md`, versions only change when the owner asks.
 
@@ -26,6 +27,7 @@ All local unless the Contact column says otherwise.
 | Voice library | Saved voices with your character name, Fish name, id, details, notes, usage | `fish_api/library.py`, `/api/fish/library` in `routers/fish_audio.py`, `voice-library.tsx`, `voices-dialog.tsx` | no |
 | Loudness | `prosody.normalize_loudness` always sent explicitly | `client.build_body` | n/a |
 | Training data | Index of render folders, speakers by voice id, filters, character zoom, audio measurements, select all/none, export | `fish_api/{dataset,dataset_quality}.py`, `routers/fish_dataset.py`, `features/fish-dataset/` | never |
+| Training (LoRA) | OmniVoice export, loudness matching, opt-in Train dialog, dry run, cancellable and resumable runs, evaluation record | `fish_api/{training,training_eval}.py`, `omnivoice/training/lora.py`, `routers/fish_training.py`, `features/fish-dataset/train-dialog.tsx` | never |
 
 Local data under `<data dir>/fish_stories/`: drafts `*.json`, `voice_library.json`, `clip_stats.json`, and renders in the configured output folder. Each run folder holds `job.json`, `manifest.json`, `story.json`, `settings.json`, `requests.jsonl`, `run.log` and the WAVs.
 
@@ -108,7 +110,7 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 - Code: `omnivoice/training/` (`trainer.py`, `builder.py`, `config.py`, `checkpoint.py`) and `omnivoice/cli/train.py`. Docs: `docs/training.md` (`accelerate launch -m omnivoice.cli.train --train_config … --data_config … --output_dir …`) and `docs/data_preparation.md`. Example configs: `examples/config/`.
 - It does **full fine-tuning** from a checkpoint (`init_from_checkpoint`, `resume_from_checkpoint`; backbone `Qwen/Qwen3-0.6B` via `llm_name_or_path`). A repo-wide search finds **no LoRA or `peft` code**, so LoRA means adding an adapter path to the trainer, and checking `peft` against `pyproject.toml` / `uv tree` before adding a dependency.
 - Input it expects: JSONL with `{"id", "audio_path", "text", "language_id"}` per line, audio resampled to **24 kHz**. `omnivoice.scripts.extract_audio_tokens` (needs `eustlb/higgs-audio-v2-tokenizer`) turns that into WebDataset tar shards plus a `data.lst`, which the data config points at.
-- **Quick win to build first:** an `omnivoice` export format in `dataset.py` that writes exactly that JSONL (24 kHz mono WAVs, tags stripped except the OmniVoice tags you keep, `language_id: "en"`), so the export dialog feeds the existing tokenizer with no manual conversion.
+- **Quick win (now built):** the `omnivoice` export format, so the export dialog feeds the existing tokenizer with no manual conversion. See "What the LoRA phase built" below.
 
 ### Research findings (read from the code, 2026-10-23; nothing was downloaded or run)
 
@@ -130,6 +132,30 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 
 **Non-verbal tags OmniVoice knows** (`_NONVERBAL_PATTERN`): `[laughter] [sigh] [confirmation-en] [question-en] [question-ah] [question-oh] [question-ei] [question-yi] [surprise-ah] [surprise-oh] [surprise-wa] [surprise-yo] [dissatisfaction-hnn]`. So for the narrator, `laughing=laughter` and `sighing=sigh` are the only Fish tags with a direct equivalent; `chuckling` has none and is best dropped.
 
+### What the LoRA phase built (branch `ext/fish-lora`, 2026-10-23)
+
+| Piece | Where | Notes |
+|---|---|---|
+| `omnivoice` export format + loudness matching | `fish_api/dataset.py` (`export`, `OMNIVOICE_TAGS`, `loudness_gain`), export dialog | Always 24 kHz mono, plain text plus only OmniVoice tags you keep (unknown target tags are refused), `language_id` default `en`. Loudness target is a whole-clip RMS in dBFS (the number `dataset_quality.measure` reports), peaks capped at 0.97, so a spiky clip can land a little below target. |
+| In-repo LoRA | `omnivoice/training/lora.py`; `lora_*` and `eval_at_start` fields in `TrainingConfig`; wiring in `cli/train.py`, `checkpoint.py`, `trainer.py` | Plain torch, no `peft`. Wraps `model.llm` linears, `B` starts at zero, adapter saved as `checkpoint-N/adapter/` (safetensors + json), `merge_adapter` folds it back. Full fine-tuning is unchanged when `lora_enabled` is false. |
+| Training-run module | `fish_api/training.py` | Background run with `job.json` + `run.log` under `<data dir>/fish_training/run_*/`; tokenise and train are child processes through a `Launcher` interface (`spawn_owned`, killed on cancel); dry run; hardware gate from a probe of the training Python; resume from the last complete checkpoint; interrupted detection; one real run at a time; unloads resident speech models first. |
+| Evaluation gate | `fish_api/training_eval.py` | See below. |
+| API | `routers/fish_training.py` (`/api/fish/training`, admin-protected, GETs behind `reject_cross_site_get`) | `GET /`, `PUT /enabled`, `POST /dry-run`, `POST /runs` (needs `confirm`), `GET /runs[/id[/log]]`, `POST /runs/id/cancel`, `POST /runs/id/resume`. |
+| UI | `features/fish-dataset/{train-dialog,use-fish-training}`; button in the sidebar and in the export dialog after an OmniVoice export | Off until the user turns it on; dry-run report; runs list with progress, log, cancel, resume. i18n namespace `fishTraining`. |
+
+**Evaluation gate (what exists, what is missing).** `select_heldout` writes a fixed sample of `omnivoice_val.jsonl` to `heldout.jsonl` in the run. The trainer (with `eval_at_start`) appends `{step, eval_loss}` to `output/eval_history.jsonl`, step 0 being the untouched base model (LoRA `B` is zero). `loss_check` requires at least a 2% relative drop in held-out loss. `wer`, `wer_check` and `similarity_check` are the arithmetic for the generation-based checks. `build_record` stores `evaluation.json` next to the adapter; **`ship_ready` is true only when all four checks (`heldout_loss`, `asr_wer`, `speaker_similarity`, `listening_test`) ran and passed**, so today a finished run is `incomplete` by design. Still needs a real GPU run: (1) generate the `heldout.jsonl` lines with the base model and with the adapter (needs adapter loading in the synthesis engine, not built), (2) transcribe both with an ASR model and feed `wer_check`, (3) embed generated and real clips with a speaker-embedding model and feed `similarity_check`, (4) a person listens. The thresholds (2% loss drop, 0.02 WER regression, 0 similarity gain) are placeholders to tune on a real run. Caveat: the trainer's eval loss is a masked-token cross-entropy with random masking, so compare with several evaluations, not one number.
+
+**Run folder layout** (`fish_training/run_<time>_<id>/`): `job.json`, `run.log`, `train_config.json`, `data_config.json`, `tokens/{train,dev}/` (skipped on resume when `data.lst` exists), `output/` (checkpoints, `eval_history.jsonl`), `adapter/` (final adapter, `adapter.json`, `evaluation.json`), `heldout.jsonl`, `dry_run.json` for dry runs.
+
+### Owner decisions needed
+
+1. **`peft` dependency.** Options: (a) keep the in-repo LoRA (~250 lines, no lockfile change, adapter format is this repo's own); (b) add `peft` to the training environment (standard adapter format, `merge_and_unload`, DoRA/rsLoRA for free, but a new dependency in `pyproject.toml`/`uv.lock` and a CI/Docker check, and a version pin against `transformers>=5.10`). Recommendation: stay with (a) until a second adapter consumer needs the PEFT format; switching later only touches `lora.py` and the adapter loader.
+2. **Which base checkpoint.** The default is `k2-fsa/OmniVoice` (what `examples/config/train_config_finetune.json` uses). It is a Hugging Face download and the licence/terms are the model's. Options: that one, or the checkpoint the app's own OmniVoice engine loads (so the adapter matches what synthesis runs). Recommendation: use whatever the engine loads, once adapter loading in synthesis exists; confirm they are the same revision first.
+3. **Tag policy.** The export keeps only tags the user lists and refuses ones OmniVoice does not know. Open: whether `[slow]` (on 99% of narrator clips) should be dropped (current behavior: always dropped from the text, so the model will not learn to be told "slow" but will still speak slowly) or re-rendered without it. Recommendation: drop it, and warn in the UI that a narrator trained on slow clips speaks slowly.
+4. **Minimum data per speaker.** Current guidance: block under 20 clips, warn under 300 clips or 30 minutes (constants `MIN_CLIPS_BLOCK`, `MIN_CLIPS_WARN`, `MIN_MINUTES_WARN` in `training.py`). These are guesses. Only SS_Narrator (about 4 h) clears them; Noctis (34 min) and sun_2 (26 min) are borderline.
+5. **Defaults.** 2000 steps, lr 1e-4, rank 16, alpha 32, `batch_tokens` 4096, backbone-only LoRA (`audio_heads` frozen). All unmeasured; a real run decides. `lora_train_modules: ["audio_heads"]` is a UI checkbox.
+6. **Platform reach.** The trainer needs Triton for flex attention: native Windows needs `triton-windows` in the training Python (or WSL), and Apple Silicon/CPU are reported as unable to train. Per the CLAUDE.md parity clarification this is a host-capability limit, not a behavior divergence, but it is the owner's call whether to ship the Train button visible on such hosts (it is, with the reason shown) or hide it.
+
 ### Other targets
 
 - **Fish S2 local:** not in the repo (only the cloud engine exists). The `fish_lab` export (WAV + `.lab`) matches Fish's own fine-tuning layout, but a local engine has to come first. The S2 Pro config shared during design shows a 36-layer text model plus a 4-layer audio decoder with 10 codebooks; which modules to target with LoRA was not investigated.
@@ -138,26 +164,30 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 ### Infrastructure to reuse
 
 - **Long jobs with progress, logs and resume:** `story_jobs.py` (background thread, `job.json` + `run.log`, interrupted-run detection, resume) and the smaller `dataset_quality.py` job.
-- **Run training as a killable subprocess:** `backend/services/subprocess_backend.py`, `backend/core/contained_subprocess.py`, and [omnivoice-subprocess.md](omnivoice-subprocess.md) for why a wedged GPU job must be killable. Training will need its own venv for torch, accelerate and peft.
+- **Run training as a killable subprocess:** `backend/services/subprocess_backend.py`, `backend/core/contained_subprocess.py`, and [omnivoice-subprocess.md](omnivoice-subprocess.md) for why a wedged GPU job must be killable. Training needs a Python with CUDA torch, accelerate, webdataset, tensorboard, Triton and OmniVoice; the run's *Python for training* option points at it (default: the interpreter VoiceStudio runs with).
 - **GPU and VRAM gating:** `backend/services/model_manager.py` (GPU pool, execution budgets, "abandoned worker") and `backend/services/gpu_sandbox.py`. Unload the resident TTS model before a run.
 - **API and UI pattern:** `routers/fish_dataset.py` and `features/fish-dataset/`. A natural home is a *Train* step reached from the export dialog, with a runs list like the Jobs dialog.
 
 ### Constraints
 
-- `docs/ROADMAP.md` (the on-device learning rows) says LoRA **ships only with an automatic evaluation gate**. Plan a before/after listening test and a metric (for example speaker similarity or an ASR word-error check on held-out `val.jsonl` clips) in the first version.
+- `docs/ROADMAP.md` (the on-device learning rows) says LoRA **ships only with an automatic evaluation gate**. The gate's record and loss check exist; the generation-based checks do not (see above), so nothing is marked ship-ready yet.
 - `val.jsonl` uses a stable hash split, so re-exporting never leaks a validation clip into training.
 - Local-first: no network for training.
 
 ### Data decisions needed before training
 
-- One loudness level (filter chapters 3193–3199 or add normalization on export).
+- One loudness level: now available as the export's loudness option (use it for any set that includes chapters 3193–3199).
 - Whether `[slow]` stays in the narrator's text or those clips are re-rendered without it.
-- Tag policy per target: Fish keeps its tags; OmniVoice only its non-verbal tags (verify its exact list first).
+- Tag policy per target: Fish keeps its tags; OmniVoice only its non-verbal tags (list verified in the code, see the research findings).
 
 ## 10. Not built yet
 
-A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gender); the training step itself. Done in the LoRA phase: the `omnivoice` export format (`dataset.export`, `OMNIVOICE_TAGS`) and optional loudness matching (`loudness_db`, RMS target with a 0.97 peak ceiling).
+A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gender); loading a finished adapter into the synthesis engine; the generation-based evaluation checks (ASR word error rate, speaker similarity, listening test); Fish S2 local and Qwen3-TTS trainers; deleting a training run from the UI; a `peft`-format adapter export.
 
 ## 11. Not verified
 
-No live Fish call was made while building the later features, so voice-library details rely on the fields the existing voice listing already returns. The screens were tested with component tests, not driven by hand in the running app. OmniVoice's exact non-verbal tag list, and LoRA on Fish S2 or Qwen3-TTS, are unresearched.
+No live Fish call was made while building the later features, so voice-library details rely on the fields the existing voice listing already returns. The screens were tested with component tests, not driven by hand in the running app. LoRA on Fish S2 or Qwen3-TTS is unresearched.
+
+**LoRA phase, sanity-checked on real data:** a 50-clip OmniVoice export from `D:\fish_tts\input` (25 hot-chapter and 25 quiet-chapter narrator clips) came out at 24 kHz mono with every clip measuring -24.0 dB RMS after loudness matching, and `validate_export` accepted it (read-only on the source, written to a temp folder and deleted).
+
+**LoRA phase, not verified (needs a GPU or a model, none was available or allowed):** a real training run end to end; that `OmniVoice.from_pretrained(..., train=True)` followed by `apply_lora` trains under `accelerate` with flex attention and bf16 (the LoRA module is tested on tiny CPU models and a fake process launcher, the trainer edits only by compilation); the `accelerate.commands.launch` command line and the tokenizer flags (checked against the scripts' argument definitions, not run); memory use (estimates only); whether `accelerator.save_state`/`load_state` round-trips the wrapped model on resume; the Qwen3 layer names against a real Qwen3 backbone (that test is skipped on this machine because `torchaudio` fails to load; it runs where torchaudio works); the Train dialog in the running Electron app (component tests only); and the real `SubprocessLauncher.spawn` through `spawn_owned` (the probe is tested for real, the spawn is not). On this machine the training Python probe reports no GPU, no Triton, no `webdataset`/`tensorboard` and a broken `torchaudio`.
