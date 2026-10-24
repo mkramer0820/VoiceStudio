@@ -106,10 +106,10 @@ def corpus(root):
     return dataset.load(root, refresh=True)
 
 
-def _export(corpus, tmp_path, name="qwen_set", spec=None, **options):
+def _export(corpus, tmp_path, name="qwen_set", spec=None, training=None, **options):
     spec = {"voice_ids": [NARR], **(spec or {})}
     return dataset.export(corpus, spec, str(tmp_path / "out"), formats=["qwen3_tts"], name=name,
-                          qwen3={"speaker_name": "Sunny", **options})
+                          qwen3={"speaker_name": "Sunny", **options}, training=training)
 
 
 def _jsonl(path):
@@ -253,11 +253,25 @@ def test_format_cannot_be_mixed_and_has_no_validation_split(corpus, tmp_path):
                        sample_rate=16000)
 
 
-@pytest.mark.parametrize("opts", [{"speaker_name": "bad name; rm -rf"}, {"drive_folder": "a/b"},
-                                  {"drive_folder": "$(x)"}, {"min_duration": 9, "max_duration": 3}, {"nope": 1}])
+@pytest.mark.parametrize("opts", [{"speaker_name": "bad name; rm -rf"}, {"min_duration": 9, "max_duration": 3}, {"nope": 1}])
 def test_options_are_validated_because_they_reach_a_shell_script(opts):
     with pytest.raises(ValueError):
         qwen3_export.options_from(opts)
+
+
+@pytest.mark.parametrize("bad", [{"drive_folder": "../x"}, {"drive_folder": "$(x)"}, {"drive_folder": "a b"},
+                                 {"epochs": 0}, {"epochs": 2.5}, {"batch_size": 1000}, {"learning_rate": 1.0},
+                                 {"base_model": "x; ls"}, {"tokenizer_model": "nope"}, {"seed": 1}])
+def test_training_settings_accept_only_what_the_official_script_takes(bad):
+    with pytest.raises(ValueError):
+        qwen3_colab.settings_from(bad)
+    ok = qwen3_colab.settings_from({"epochs": 5, "drive_folder": "A/b-c"})
+    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 2, 2e-5)  # the script's own defaults
+
+
+def test_the_estimate_follows_the_scripts_loop_not_an_audio_rate():
+    est = qwen3_colab.estimate(qwen3_colab.settings_from({"batch_size": 4, "epochs": 2}), 100)
+    assert est["batches_per_epoch"] == 25 and est["updates_per_epoch"] == 7 and est["total_updates"] == 14
 
 
 def test_zip_keeps_the_hierarchy_and_unzips_to_a_working_dataset(corpus, tmp_path):
@@ -294,7 +308,8 @@ def test_export_refuses_a_non_empty_folder_but_overwrite_replaces_only_a_previou
 
 
 def test_colab_helper_carries_the_verified_commands_and_the_drive_checkpoint_folder(corpus, tmp_path):
-    out = _export(corpus, tmp_path, drive_folder="My-Training")["path"]
+    out = _export(corpus, tmp_path, training={"drive_folder": "My-Training/run1", "epochs": 7, "learning_rate": 1e-5,
+                                              "batch_size": 4})["path"]
     setup = open(os.path.join(out, "colab_setup.sh"), encoding="utf-8").read()
     commands = open(os.path.join(out, "colab_commands.txt"), encoding="utf-8").read()
     readme = open(os.path.join(out, "README.txt"), encoding="utf-8").read()
@@ -304,9 +319,18 @@ def test_colab_helper_carries_the_verified_commands_and_the_drive_checkpoint_fol
     for flag in ("--tokenizer_model_path", "--input_jsonl", "--output_jsonl", "--init_model_path", "--output_model_path",
                  "--train_jsonl", "--batch_size", "--lr", "--num_epochs", "--speaker_name"):
         assert flag in setup
-    assert "Qwen/Qwen3-TTS-Tokenizer-12Hz" in setup and 'DRIVE_DIR="${DRIVE_DIR:-/content/drive/MyDrive/My-Training/${SPEAKER_NAME}}"' in setup
+    assert "Qwen/Qwen3-TTS-Tokenizer-12Hz" in setup and 'DRIVE_DIR="${DRIVE_DIR:-/content/drive/MyDrive/My-Training/run1/${SPEAKER_NAME}}"' in setup
+    # the settings chosen in the dialog reach every helper file, not the defaults
+    assert 'BATCH_SIZE="${BATCH_SIZE:-4}"' in setup and 'LR="${LR:-1e-05}"' in setup and 'EPOCHS="${EPOCHS:-7}"' in setup
+    assert "--batch_size 4 --lr 1e-05 --num_epochs 7" in commands and "--num_epochs 7" in readme
+    assert "--num_epochs 3" not in commands + readme
+    settings = json.load(open(os.path.join(out, "training_settings.json"), encoding="utf-8"))
+    assert (settings["epochs"], settings["batch_size"], settings["learning_rate"]) == (7, 4, 1e-5)
+    assert settings["checkpoint_dir"] == "/content/drive/MyDrive/My-Training/run1/Sunny/checkpoints"
+    assert "--num_epochs 7" in settings["commands"]["sft_12hz"] and settings["fixed_in_the_official_script"]["gradient_accumulation_steps"] == 4
+    assert settings["estimate"]["updates_per_epoch"] >= 1 and "Not a time or quality prediction" in settings["estimate"]["note"]
     assert 'OUTPUT_DIR="${OUTPUT_DIR:-${DRIVE_DIR}/checkpoints}"' in setup
-    assert "/content/drive/MyDrive/My-Training/Sunny/checkpoints" in commands
+    assert "/content/drive/MyDrive/My-Training/run1/Sunny/checkpoints" in commands
     assert 'SPEAKER_NAME="${SPEAKER_NAME:-Sunny}"' in setup
     for cmd in ("colab new", "colab drivemount", "colab exec", "colab ls", "colab download", "colab stop"):
         assert cmd in commands
@@ -349,12 +373,15 @@ def client(root, monkeypatch):
 
 def test_the_export_route_takes_the_qwen3_options(client, tmp_path):
     body = {"dest": str(tmp_path / "api"), "name": "via_api", "formats": ["qwen3_tts"], "voice_ids": [NARR],
-            "qwen3": {"speaker_name": "Sunny", "make_zip": True, "min_duration": 1.0, "drive_folder": "Drive-A"}}
+            "qwen3": {"speaker_name": "Sunny", "make_zip": True, "min_duration": 1.0},
+            "training": {"epochs": 6, "drive_folder": "Drive-A"}}
     res = client.post("/api/fish/dataset/export", json=body)
     assert res.status_code == 200, res.text
     data = res.json()
     assert data["formats"] == ["qwen3_tts"] and data["qwen3"]["zip"]["path"].endswith("via_api.zip")
     assert data["qwen3"]["reference"]["reason"] and "colab_setup.sh" in data["qwen3"]["files"]
+    assert data["qwen3"]["settings"]["epochs"] == 6 and "--num_epochs 6" in data["qwen3"]["commands"]["official"]["train"]
+    assert any("colab_setup.sh" in c for c in data["qwen3"]["commands"]["notebook"]) and data["qwen3"]["commands"]["colab_cli"]
     bad = client.post("/api/fish/dataset/export", json={**body, "name": "x2", "voice_ids": []})
     assert bad.status_code == 422 and "one speaker" in bad.json()["detail"]
     mixed = client.post("/api/fish/dataset/export", json={**body, "name": "x3", "formats": ["qwen3_tts", "jsonl"]})

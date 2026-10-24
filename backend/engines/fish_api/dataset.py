@@ -499,10 +499,11 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
             raise ValueError(f"The qwen3_tts format is always {qwen3_export.RATE} Hz; leave the sample rate unset.")
         if val_fraction:
             raise ValueError("The official Qwen3-TTS scripts have no validation input; leave the validation share at 0.")
-        if training is not None:
-            raise ValueError("A training configuration is written with the omnivoice format only.")
+        from . import qwen3_colab
+
+        # ``training`` is the same Training setup field the omnivoice format uses, read with Qwen's own settings.
         return qwen3_export.export(corpus, f, dest, name=name, loudness_db=loudness_db,
-                                   options=qwen3_export.options_from(qwen3))
+                                   options=qwen3_export.options_from(qwen3), settings=qwen3_colab.settings_from(training))
     kept = normalize_tags(keep_tags)
     if len(kept) > 100:
         raise ValueError("Keep at most 100 tags.")

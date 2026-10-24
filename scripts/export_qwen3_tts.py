@@ -34,7 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--validation-ratio", type=float, default=0.0,
                    help="not supported: Qwen's scripts have no validation input (only 0 is accepted)")
     p.add_argument("--loudness-db", type=float, default=None, help="optional: match every clip to this RMS level (dBFS)")
-    p.add_argument("--drive-folder", default="VoiceStudio-training", help="Google Drive folder used by the Colab helper")
+    p.add_argument("--drive-folder", default="VoiceStudio-training",
+                   help="Google Drive folder under My Drive; checkpoints go to <folder>/<speaker>/checkpoints")
+    p.add_argument("--epochs", type=int, help="sft_12hz.py --num_epochs (default 3)")
+    p.add_argument("--learning-rate", type=float, help="sft_12hz.py --lr (default 2e-5)")
+    p.add_argument("--batch-size", type=int, help="sft_12hz.py --batch_size (default 2)")
+    p.add_argument("--base-model", help="sft_12hz.py --init_model_path (default Qwen/Qwen3-TTS-12Hz-1.7B-Base)")
     return p
 
 
@@ -72,8 +77,9 @@ def run(argv: list[str] | None = None) -> int:
     if args.chapter:
         spec["chapters"] = args.chapter
     options: dict = {"speaker_name": args.speaker_name, "make_zip": args.zip, "overwrite": args.overwrite,
-                     "min_duration": args.min_duration, "max_duration": args.max_duration,
-                     "drive_folder": args.drive_folder}
+                     "min_duration": args.min_duration, "max_duration": args.max_duration}
+    training = {"drive_folder": args.drive_folder, "epochs": args.epochs, "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size, "base_model": args.base_model}
     if args.reference:
         if os.path.isfile(args.reference):
             options["reference_file"] = os.path.abspath(args.reference)
@@ -83,7 +89,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         result = dataset.export(
             corpus, spec, os.path.dirname(output), formats=["qwen3_tts"], name=os.path.basename(output),
-            loudness_db=args.loudness_db, qwen3=options)
+            loudness_db=args.loudness_db, qwen3=options, training=training)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -92,6 +98,7 @@ def run(argv: list[str] | None = None) -> int:
     print(f"Exported {q['accepted']} clips ({result['hours']} h), rejected {q['rejected']} {q['rejected_by_reason'] or ''}")
     print(f"Folder: {result['path']}")
     print(f"Reference: {ref.get('source')} ({ref.get('duration')} s): {ref.get('reason')}")
+    print("Checkpoints on Drive: " + q["commands"]["official"]["checkpoint_dir"])
     if q["zip"]:
         print(f"ZIP: {q['zip']['path']}")
     for w in q["warnings"]:

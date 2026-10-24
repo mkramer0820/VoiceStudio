@@ -70,7 +70,6 @@ class _Qwen3(BaseModel):
     overwrite: bool = False
     min_duration: float = Field(0.8, ge=0.1, le=120)
     max_duration: float = Field(30.0, ge=0.2, le=120)
-    drive_folder: str = Field("VoiceStudio-training", min_length=1, max_length=60)
 
 
 class _Export(_Filter):
@@ -84,8 +83,8 @@ class _Export(_Filter):
     loudness_db: Optional[float] = Field(None, ge=-60, le=-3, description="Bring every clip to this RMS level (dBFS); null leaves levels alone")
     language_id: str = Field("en", min_length=2, max_length=12, description="language_id written by the omnivoice format")
     strict_tags: bool = Field(True, description="omnivoice format: refuse tags OmniVoice does not know")
-    training: Optional[dict] = Field(None, description="omnivoice format: also write train_config.json, data_config.json, train.sh and COLAB.md using these settings")
-    qwen3: Optional[_Qwen3] = Field(None, description="qwen3_tts format: reference clip, ZIP, duration limits and the Drive folder for the Colab helper")
+    training: Optional[dict] = Field(None, description="omnivoice format: also write train_config.json, data_config.json, train.sh and COLAB.md using these settings. qwen3_tts format: epochs, learning_rate, batch_size, base_model, tokenizer_model, drive_folder for the Colab run")
+    qwen3: Optional[_Qwen3] = Field(None, description="qwen3_tts format: speaker name, reference clip, ZIP and duration limits")
 
 
 def _corpus(refresh: bool = False):

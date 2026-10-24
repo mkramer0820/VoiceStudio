@@ -7,7 +7,10 @@ they are validated to be shell-safe before they reach a script.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
 import re
+from typing import Optional
 
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -18,8 +21,85 @@ TOKENIZER = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
 SAMPLE_RATE = 24000  # dataset.py: extract_mels asserts "Only support 24kHz audio" for ref_audio
 DEFAULT_DRIVE_FOLDER = "VoiceStudio-training"
 SPEAKER_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
-FOLDER_RE = re.compile(r"[A-Za-z0-9._-]{1,60}")
+FOLDER_RE = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")  # a folder under My Drive, may be nested
+MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")  # a Hugging Face model id
+ACCUMULATION = 4  # sft_12hz.py: Accelerator(gradient_accumulation_steps=4), not an option
 SESSION = "qwen-train"
+
+
+@dataclasses.dataclass
+class TrainSettings:
+    """What the official scripts take as arguments. Gradient accumulation (4), bf16 precision, FlashAttention 2 and
+    saving once per epoch are fixed inside ``sft_12hz.py`` and are not options, so they are not offered here."""
+
+    epochs: int = 3  # sft_12hz.py --num_epochs (default 3)
+    learning_rate: float = 2e-5  # --lr (default 2e-5; the README's step 3 example uses 2e-6)
+    batch_size: int = 2  # --batch_size (default 2; the README example uses 32)
+    base_model: str = BASE_MODEL  # --init_model_path
+    tokenizer_model: str = TOKENIZER  # prepare_data.py --tokenizer_model_path
+    drive_folder: str = DEFAULT_DRIVE_FOLDER  # checkpoints go to My Drive/<drive_folder>/<speaker>/checkpoints
+
+    _RANGES = {"epochs": (1, 100), "learning_rate": (1e-7, 1e-3), "batch_size": (1, 256)}
+
+
+def settings_from(spec: Optional[dict]) -> TrainSettings:
+    """Validated settings; unknown keys, bad ranges and unsafe names raise ``ValueError``."""
+    data = {k: v for k, v in dict(spec or {}).items() if v is not None}
+    unknown = sorted(set(data) - {f.name for f in dataclasses.fields(TrainSettings)})
+    if unknown:
+        raise ValueError("Unknown Qwen3-TTS training setting(s): " + ", ".join(unknown) + ".")
+    out = TrainSettings(**data)
+    for key, (low, high) in TrainSettings._RANGES.items():
+        value = getattr(out, key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise ValueError(f"{key} must be between {low:g} and {high:g}.")
+    if int(out.epochs) != out.epochs or int(out.batch_size) != out.batch_size:
+        raise ValueError("epochs and batch_size must be whole numbers.")
+    out.epochs, out.batch_size, out.learning_rate = int(out.epochs), int(out.batch_size), float(out.learning_rate)
+    for key in ("base_model", "tokenizer_model"):
+        if not MODEL_RE.fullmatch(getattr(out, key) or ""):
+            raise ValueError(f"{key} must be a Hugging Face model id such as {BASE_MODEL}.")
+    folder = (out.drive_folder or "").strip("/")
+    if not FOLDER_RE.fullmatch(folder) or len(folder) > 120 or any(p in (".", "..") for p in folder.split("/")):
+        raise ValueError("The Drive folder is a folder name under My Drive (letters, digits, '.', '_', '-', and '/' to nest).")
+    out.drive_folder = folder
+    return out
+
+
+def estimate(settings: TrainSettings, clips: int) -> dict:
+    """Batches and optimizer updates implied by the script's own loop; an estimate (no time or quality claim)."""
+    batches = math.ceil(clips / settings.batch_size)
+    return {"batches_per_epoch": batches, "updates_per_epoch": math.ceil(batches / ACCUMULATION),
+            "total_updates": math.ceil(batches / ACCUMULATION) * settings.epochs,
+            "note": f"Estimated from the script's loop: one batch per {settings.batch_size} clips, one optimizer update per "
+                    f"{ACCUMULATION} batches (fixed in sft_12hz.py). Not a time or quality prediction."}
+
+
+def commands(settings: TrainSettings, speaker: str, folder_name: str) -> dict:
+    """The two official commands with this export's values (what colab_setup.sh runs)."""
+    drive = f"/content/drive/MyDrive/{settings.drive_folder}/{speaker}"
+    return {
+        "checkpoint_dir": f"{drive}/checkpoints",
+        "prepare": (f"python /content/Qwen3-TTS/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path "
+                    f"{settings.tokenizer_model} --input_jsonl train.jsonl --output_jsonl {drive}/train_with_codes.jsonl"),
+        "train": (f"python /content/Qwen3-TTS/finetuning/sft_12hz.py --init_model_path /content/models/{settings.base_model.split('/')[-1]} "
+                  f"--output_model_path {drive}/checkpoints --train_jsonl {drive}/train_with_codes.jsonl "
+                  f"--batch_size {settings.batch_size} --lr {settings.learning_rate:g} --num_epochs {settings.epochs} "
+                  f"--speaker_name {speaker}"),
+    }
+
+
+def start_commands(speaker: str, folder_name: str, zip_name: str, settings: TrainSettings) -> dict:
+    """How to start the run: notebook cells and the `colab` command-line route (also in colab_commands.txt)."""
+    d = f"/content/drive/MyDrive/{settings.drive_folder}/{speaker}"
+    return {
+        "notebook": ["from google.colab import drive; drive.mount('/content/drive')",
+                     f"!mkdir -p /content/{folder_name} && unzip -q -o \"{d}/{zip_name}\" -d /content/{folder_name}",
+                     f"!bash /content/{folder_name}/colab_setup.sh"],
+        "colab_cli": [f"colab new -s {SESSION} --gpu A100", f"colab drivemount -s {SESSION}",
+                      f"# unzip, then start in the background: see colab_commands.txt, Route B",
+                      f"colab exec -s {SESSION} --timeout 60 (starts: nohup bash /content/{folder_name}/colab_setup.sh > {d}/train.log &)"],
+    }
 
 
 def verified_facts() -> dict:
@@ -50,10 +130,10 @@ QWEN_REPO="${QWEN_REPO:-/content/Qwen3-TTS}"
 QWEN_COMMIT="${QWEN_COMMIT:-@@COMMIT@@}"
 BASE_MODEL="@@BASE@@"
 TOKENIZER_MODEL="@@TOKENIZER@@"
-MODEL_DIR="${MODEL_DIR:-/content/models/Qwen3-TTS-12Hz-1.7B-Base}"
-BATCH_SIZE="${BATCH_SIZE:-2}"      # the values of the official one-click example
-LR="${LR:-2e-5}"
-EPOCHS="${EPOCHS:-3}"
+MODEL_DIR="${MODEL_DIR:-/content/models/@@BASE_NAME@@}"
+BATCH_SIZE="${BATCH_SIZE:-@@BATCH@@}"      # set in the VoiceStudio export dialog (the script defaults are 2, 2e-5, 3)
+LR="${LR:-@@LR@@}"
+EPOCHS="${EPOCHS:-@@EPOCHS@@}"
 
 echo "== 0/6 checks"
 [ -d /content/drive/MyDrive ] || { echo "Google Drive is not mounted. Mount it first (colab_commands.txt)."; exit 1; }
@@ -140,7 +220,7 @@ Cell 3: clone, install, preprocess and train (everything in colab_setup.sh)
     !bash /content/@@DIR@@/colab_setup.sh
 
   Change the speaker, epochs and so on with variables in front of the command:
-    !SPEAKER_NAME=@@SPEAKER@@ EPOCHS=5 BATCH_SIZE=2 LR=2e-5 bash /content/@@DIR@@/colab_setup.sh
+    !SPEAKER_NAME=@@SPEAKER@@ EPOCHS=@@EPOCHS@@ BATCH_SIZE=@@BATCH@@ LR=@@LR@@ bash /content/@@DIR@@/colab_setup.sh
   Skip the FlashAttention install if it is already present:  SKIP_FLASH_ATTN=1
   Keep the notebook tab open; a disconnect ends the run (see Resume below).
 
@@ -150,14 +230,14 @@ The steps colab_setup.sh runs, written out (DATASET_DIR=/content/@@DIR@@, OUTPUT
     pip install -e /content/Qwen3-TTS
     pip install accelerate tensorboard librosa soundfile safetensors huggingface_hub
     MAX_JOBS=4 pip install -U flash-attn --no-build-isolation
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('@@BASE@@', local_dir='/content/models/Qwen3-TTS-12Hz-1.7B-Base')"
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('@@BASE@@', local_dir='/content/models/@@BASE_NAME@@')"
     cd /content/@@DIR@@
     python /content/Qwen3-TTS/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path @@TOKENIZER@@ \
         --input_jsonl train.jsonl --output_jsonl /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/train_with_codes.jsonl
-    python /content/Qwen3-TTS/finetuning/sft_12hz.py --init_model_path /content/models/Qwen3-TTS-12Hz-1.7B-Base \
+    python /content/Qwen3-TTS/finetuning/sft_12hz.py --init_model_path /content/models/@@BASE_NAME@@ \
         --output_model_path /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints \
         --train_jsonl /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/train_with_codes.jsonl \
-        --batch_size 2 --lr 2e-5 --num_epochs 3 --speaker_name @@SPEAKER@@
+        --batch_size @@BATCH@@ --lr @@LR@@ --num_epochs @@EPOCHS@@ --speaker_name @@SPEAKER@@
   (Plain python, not torchrun: sft_12hz.py creates its own accelerate Accelerator and was written for one process.)
 
 Checkpoints: /content/drive/MyDrive/@@DRIVE@@/@@SPEAKER@@/checkpoints/checkpoint-epoch-0, -1, -2 ...
@@ -261,8 +341,10 @@ Quick start on Colab (details in colab_commands.txt)
 
 Without the helper, from inside this folder (after cloning and installing Qwen3-TTS):
   python PATH_TO_QWEN/finetuning/prepare_data.py --device cuda:0 --tokenizer_model_path @@TOKENIZER@@ --input_jsonl train.jsonl --output_jsonl train_with_codes.jsonl
-  python PATH_TO_QWEN/finetuning/sft_12hz.py --init_model_path LOCAL_COPY_OF_@@BASE_NAME@@ --output_model_path OUTPUT_DIR --train_jsonl train_with_codes.jsonl --batch_size 2 --lr 2e-5 --num_epochs 3 --speaker_name @@SPEAKER@@
+  python PATH_TO_QWEN/finetuning/sft_12hz.py --init_model_path LOCAL_COPY_OF_@@BASE_NAME@@ --output_model_path OUTPUT_DIR --train_jsonl train_with_codes.jsonl --batch_size @@BATCH@@ --lr @@LR@@ --num_epochs @@EPOCHS@@ --speaker_name @@SPEAKER@@
   (init_model_path must be a local folder: the script copies it into every checkpoint.)
+
+Training settings (training_settings.json): @@SETTINGS@@
 
 This set
 @@SUMMARY@@
@@ -292,12 +374,14 @@ def _summary(report: dict) -> str:
     return "\n".join(rows)
 
 
-def render_files(*, speaker: str, folder_name: str, zip_name: str, drive_folder: str, report: dict) -> dict:
+def render_files(*, speaker: str, folder_name: str, zip_name: str, settings: TrainSettings, report: dict) -> dict:
     """The helper files for one export, as ``{file name: text}``."""
     values = {
-        "SPEAKER": speaker, "DIR": folder_name, "ZIP": zip_name, "DRIVE": drive_folder, "COMMIT": QWEN_COMMIT,
-        "COMMIT_DATE": QWEN_COMMIT_DATE, "BASE": BASE_MODEL, "BASE_NAME": BASE_MODEL.split("/")[-1],
-        "TOKENIZER": TOKENIZER, "SESSION": SESSION,
+        "SPEAKER": speaker, "DIR": folder_name, "ZIP": zip_name, "DRIVE": settings.drive_folder, "COMMIT": QWEN_COMMIT,
+        "COMMIT_DATE": QWEN_COMMIT_DATE, "BASE": settings.base_model, "BASE_NAME": settings.base_model.split("/")[-1],
+        "TOKENIZER": settings.tokenizer_model, "SESSION": SESSION, "BATCH": str(settings.batch_size),
+        "LR": f"{settings.learning_rate:g}", "EPOCHS": str(settings.epochs),
+        "SETTINGS": f"{settings.epochs} epochs, learning rate {settings.learning_rate:g}, batch size {settings.batch_size}, base model {settings.base_model}",
     }
     return {
         "README.txt": _fill(README, values | {"SUMMARY": _summary(report)}),
