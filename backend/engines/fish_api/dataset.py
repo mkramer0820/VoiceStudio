@@ -202,7 +202,7 @@ def _scan(root: str, manifests: list[str]) -> Corpus:
         rel_run = os.path.relpath(run_dir, root)
         chapter = rel_run.split(os.sep)[0]
         run_id = str(man.get("id") or os.path.basename(run_dir))
-        done = failed = missing = 0
+        done = failed = missing = no_text = 0
         for chunk in man["chunks"]:
             if chunk.get("status") != "done" or not chunk.get("file"):
                 failed += 1
@@ -214,6 +214,7 @@ def _scan(root: str, manifests: list[str]) -> Corpus:
             raw = chunk.get("text") or story_text.get(chunk.get("id"), "")
             plain = strip_tags(raw)
             if not plain or not chunk.get("duration_s"):
+                no_text += 1
                 continue
             done += 1
             lines.append({
@@ -238,7 +239,7 @@ def _scan(root: str, manifests: list[str]) -> Corpus:
             })
         runs.append({"run_id": run_id, "chapter": chapter, "run": os.path.basename(run_dir),
                      "started_at": man.get("started_at") or 0, "model": man.get("model"),
-                     "lines": done, "failed": failed, "missing": missing})
+                     "lines": done, "failed": failed, "missing": missing, "no_text": no_text})
     # The same words by the same voice rendered again (a re-run): only the newest copy counts.
     newest: dict[tuple, dict] = {}
     for line in sorted(lines, key=lambda l: (l["started_at"], l["index"])):
@@ -418,7 +419,7 @@ def facets(lines: list[dict]) -> dict:
 
 
 # ── export ──
-FORMATS = ("jsonl", "ljspeech", "fish_lab", "omnivoice")
+FORMATS = ("jsonl", "ljspeech", "fish_lab", "omnivoice", "qwen3_tts")
 OMNIVOICE_RATE = 24000  # what OmniVoice's audio tokenizer reads
 OMNIVOICE_TAGS = (  # non-verbal tags OmniVoice understands (omnivoice.models.omnivoice._NONVERBAL_PATTERN)
     "laughter", "sigh", "confirmation-en", "question-en", "question-ah", "question-oh", "question-ei",
@@ -471,7 +472,8 @@ def _in_validation(sha: str, fraction: float) -> bool:
 def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode: str = "keep",
            sample_rate: Optional[int] = None, val_fraction: float = 0.0, name: str = "fish-dataset",
            keep_tags: Optional[list[str]] = None, loudness_db: Optional[float] = None,
-           language_id: str = "en", strict_tags: bool = True, training: Optional[dict] = None) -> dict:
+           language_id: str = "en", strict_tags: bool = True, training: Optional[dict] = None,
+           qwen3: Optional[dict] = None) -> dict:
     """Write the selected clips under ``dest/<name>/<speaker>/`` plus metadata. Never overwrites."""
     import numpy as np
     import soundfile as sf
@@ -487,6 +489,20 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
         raise ValueError("val_fraction must be between 0 and 0.5.")
     if loudness_db is not None and not -60.0 <= loudness_db <= -3.0:
         raise ValueError("loudness_db must be between -60 and -3 (dBFS RMS).")
+    if "qwen3_tts" in formats:
+        # A folder of its own (one speaker, Qwen's layout): text is always plain speech, audio always 24 kHz.
+        from . import qwen3_export
+
+        if formats != ["qwen3_tts"]:
+            raise ValueError("The qwen3_tts format writes a complete folder of its own; untick the other formats.")
+        if sample_rate not in (None, qwen3_export.RATE):
+            raise ValueError(f"The qwen3_tts format is always {qwen3_export.RATE} Hz; leave the sample rate unset.")
+        if val_fraction:
+            raise ValueError("The official Qwen3-TTS scripts have no validation input; leave the validation share at 0.")
+        if training is not None:
+            raise ValueError("A training configuration is written with the omnivoice format only.")
+        return qwen3_export.export(corpus, f, dest, name=name, loudness_db=loudness_db,
+                                   options=qwen3_export.options_from(qwen3))
     kept = normalize_tags(keep_tags)
     if len(kept) > 100:
         raise ValueError("Keep at most 100 tags.")

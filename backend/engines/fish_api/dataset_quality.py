@@ -65,11 +65,16 @@ def reset_for_tests() -> None:
 
 def measure(path: str) -> dict:
     """Peak, level, clipping and silence measurements of one WAV."""
-    import numpy as np
     import soundfile as sf
 
     data, rate = sf.read(path, dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)
+    return measure_data(data.mean(axis=1), rate)
+
+
+def measure_data(mono, rate: int) -> dict:
+    """The same measurements for samples already in memory (mono float32)."""
+    import numpy as np
+
     if len(mono) == 0:
         raise ValueError("empty audio")
     peak = float(np.abs(mono).max())

@@ -62,10 +62,21 @@ class _Filter(BaseModel):
     max_gap_ms: Optional[int] = Field(None, ge=0, le=60000)
 
 
+class _Qwen3(BaseModel):
+    speaker_name: str = Field("", max_length=40, description="Name the fine-tuned model answers to; empty uses the voice name")
+    reference_key: Optional[str] = Field(None, max_length=120, description="Clip to use as the reference; null chooses automatically")
+    reference_file: Optional[str] = Field(None, max_length=400, description="A local audio file to use as the reference instead")
+    make_zip: bool = False
+    overwrite: bool = False
+    min_duration: float = Field(0.8, ge=0.1, le=120)
+    max_duration: float = Field(30.0, ge=0.2, le=120)
+    drive_folder: str = Field("VoiceStudio-training", min_length=1, max_length=60)
+
+
 class _Export(_Filter):
     dest: str = Field(..., min_length=3, max_length=400)
     name: str = Field("fish-dataset", min_length=1, max_length=60)
-    formats: list[str] = Field(default_factory=lambda: ["jsonl"], max_length=4)
+    formats: list[str] = Field(default_factory=lambda: ["jsonl"], max_length=5)
     text_mode: str = Field("keep", pattern="^(keep|strip)$")
     sample_rate: Optional[int] = Field(None, ge=8000, le=96000)
     val_fraction: float = Field(0.0, ge=0.0, lt=0.5)
@@ -74,6 +85,7 @@ class _Export(_Filter):
     language_id: str = Field("en", min_length=2, max_length=12, description="language_id written by the omnivoice format")
     strict_tags: bool = Field(True, description="omnivoice format: refuse tags OmniVoice does not know")
     training: Optional[dict] = Field(None, description="omnivoice format: also write train_config.json, data_config.json, train.sh and COLAB.md using these settings")
+    qwen3: Optional[_Qwen3] = Field(None, description="qwen3_tts format: reference clip, ZIP, duration limits and the Drive folder for the Colab helper")
 
 
 def _corpus(refresh: bool = False):
@@ -170,7 +182,8 @@ async def export(body: _Export):
             lambda: ds.export(corpus, spec, body.dest, formats=body.formats, text_mode=body.text_mode,
                               sample_rate=body.sample_rate, val_fraction=body.val_fraction, name=body.name,
                               keep_tags=body.keep_tags, loudness_db=body.loudness_db, language_id=body.language_id,
-                              strict_tags=body.strict_tags, training=body.training))
+                              strict_tags=body.strict_tags, training=body.training,
+                              qwen3=body.qwen3.model_dump() if body.qwen3 else None))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except OSError as exc:
