@@ -72,6 +72,12 @@ class _Qwen3(BaseModel):
     max_duration: float = Field(30.0, ge=0.2, le=120)
 
 
+class _ReferenceQuery(_Filter):
+    limit: int = Field(5, ge=1, le=20, description="How many ranked candidates to return")
+    min_duration: float = Field(0.8, ge=0.1, le=120)
+    max_duration: float = Field(30.0, ge=0.2, le=120)
+
+
 class _Export(_Filter):
     dest: str = Field(..., min_length=3, max_length=400)
     name: str = Field("fish-dataset", min_length=1, max_length=60)
@@ -148,7 +154,40 @@ async def facets(body: _Filter):
     ds = _ds()
     corpus = _corpus()
     matched = await run_in_threadpool(ds.select, corpus, {**body.model_dump(), "exclude_keys": []})
-    return await run_in_threadpool(ds.facets, matched)
+    result = await run_in_threadpool(ds.facets, matched)
+    # The level spread of what would be exported (unticked clips are not in it), for the loudness target.
+    left_out = set(body.exclude_keys)
+    result["levels"] = await run_in_threadpool(ds.level_summary, [l for l in matched if l["key"] not in left_out])
+    return result
+
+
+@router.post("/reference-candidates")
+async def reference_candidates(body: _ReferenceQuery):
+    """The best reference-clip candidates (Qwen3-TTS) among the clips the export would hold, ranked by the
+    same rules the exporter uses when no reference is chosen. Uses the cached audio measurements only."""
+    from engines.fish_api import qwen3_export
+
+    corpus = _corpus()
+    spec = {k: v for k, v in body.model_dump().items() if k in _Filter.model_fields}
+
+    def rank():
+        lines, voice_id, voice_name = qwen3_export.speaker_lines(corpus, spec)
+        clips, unmeasured = qwen3_export.candidate_clips(lines, body.min_duration, body.max_duration)
+        ranked = qwen3_export.rank_references(clips, body.limit)
+        keep = ("key", "chapter", "index")
+        return {
+            "speaker": {"voice_id": voice_id, "name": voice_name},
+            "considered": len(clips), "unmeasured": unmeasured, "clips": len(lines),
+            "candidates": [{**{k: r["clip"]["line"][k] for k in keep}, "text": r["clip"]["text"],
+                            "duration_s": round(r["clip"]["duration"], 2), "stats": r["clip"]["stats"],
+                            "score": round(r["score"], 3), "reasons": r["reasons"], "cautions": r["cautions"],
+                            "relaxed": r["note"] or None} for r in ranked],
+        }
+
+    try:
+        return await run_in_threadpool(rank)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/analyze", dependencies=[Depends(reject_cross_site_get)])

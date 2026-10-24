@@ -404,7 +404,157 @@ def test_cli_calls_the_same_exporter(root, tmp_path, capsys):
     assert code == 0
     assert (out / "train.jsonl").is_file() and (tmp_path / "cli_out.zip").is_file()
     printed = capsys.readouterr().out
-    assert "Reference:" in printed and "WARNING [inconsistent_loudness]" in printed
+    assert "Reference:" in printed and "Level matching to -22 dB" in printed
+    assert "WARNING [inconsistent_loudness]" not in printed  # matched by default
+    raw = tmp_path / "cli_raw"
+    assert cli.run(["--input", root, "--output", str(raw), "--voice", "Narrator", "--no-loudness-match", "--min-duration", "1"]) == 0
+    assert "WARNING [inconsistent_loudness]" in capsys.readouterr().out
+    assert json.load(open(raw / "dataset_report.json", encoding="utf-8"))["loudness_matching"] is None
+    other = tmp_path / "cli_m18"
+    assert cli.run(["--input", root, "--output", str(other), "--voice", "Narrator", "--loudness-db", "-18", "--min-duration", "1"]) == 0
+    assert json.load(open(other / "dataset_report.json", encoding="utf-8"))["loudness_matching"]["target_rms_db"] == -18.0
     assert cli.run(["--input", root, "--output", str(out), "--voice", "Narrator"]) == 2  # exists, no --overwrite
     assert cli.run(["--input", root, "--output", str(tmp_path / "o2")]) == 2  # two speakers, none chosen
     assert cli.run(["--input", root, "--output", str(tmp_path / "o3"), "--voice", NARR, "--validation-ratio", "0.05"]) == 2
+
+
+# ---- loudness default behaviour, per-chapter report ----
+def _spiky(path, seconds, freq, rate=44100):
+    """Quiet tone with one loud click: its peak stops the gain long before -22 dB."""
+    t = np.linspace(0, seconds, int(rate * seconds), endpoint=False)
+    data = np.sin(2 * np.pi * freq * t) * 0.02
+    data[len(t) // 2] = 0.9
+    sf.write(path, data.astype("float32"), rate, subtype="PCM_16")
+
+
+def _wavs(root, chapter):
+    import glob
+
+    return sorted(glob.glob(os.path.join(root, chapter, "*", "run-*", "*.wav")))
+
+
+def _level_set(tmp_path):
+    r = str(tmp_path / "levels")
+    _run(r, "3001_quiet", 100, [(f"q{i}", NARR, "Narrator", f"Quiet line number {i}.", 6.0, "tone") for i in range(4)])
+    for path in _wavs(r, "3001_quiet"):  # make this chapter quiet (about -25 dB)
+        data, rate = sf.read(path, dtype="float32")
+        sf.write(path, data * 0.45, rate, subtype="PCM_16")
+    _run(r, "3193_hot", 200, [(f"h{i}", NARR, "Narrator", f"Hot line number {i}.", 6.0, "loud") for i in range(4)],
+         run="run-001_20261002-000000_bbbb")
+    return dataset.load(r, refresh=True)
+
+
+def test_every_exported_clip_lands_within_a_decibel_of_the_target_and_the_report_says_so(tmp_path):
+    corpus = _level_set(tmp_path)
+    result = dataset.export(corpus, {"voice_ids": [NARR]}, str(tmp_path / "out"), formats=["qwen3_tts"], name="lv",
+                            loudness_db=-22.0, qwen3={"speaker_name": "Sunny"})
+    out = result["path"]
+    measured = [dataset_quality.measure(os.path.join(out, "audio", f"{n:06d}.wav")) for n in range(1, result["clips"] + 1)]
+    assert len(measured) == 8
+    assert max(m["rms_db"] for m in measured) - min(m["rms_db"] for m in measured) < 1.0
+    assert all(abs(m["rms_db"] + 22.0) < 0.6 for m in measured)
+    rep = json.load(open(os.path.join(out, "dataset_report.json"), encoding="utf-8"))
+    lm = rep["loudness_matching"]
+    assert lm["target_rms_db"] == -22.0 and lm["adjusted"] == 8 and lm["peak_limited"] == 0
+    assert lm["chapters"]["3193_hot"]["median_before_db"] > lm["chapters"]["3001_quiet"]["median_before_db"] + 6
+    for ch in lm["chapters"].values():
+        assert abs(ch["median_after_db"] + 22.0) < 0.6 and ch["worst_shortfall_db"] == 0
+    assert "inconsistent_loudness" not in {w["code"] for w in rep["warnings"]}
+    assert result["loudness"] == lm and all("level_after_db" in m for m in rep["mapping"])
+    raw = dataset.export(corpus, {"voice_ids": [NARR]}, str(tmp_path / "out"), formats=["qwen3_tts"], name="raw",
+                         qwen3={"speaker_name": "Sunny"})
+    assert raw["loudness"] is None
+    assert "inconsistent_loudness" in {w["code"] for w in raw["qwen3"]["warnings"]}
+
+
+def test_clips_the_peak_cap_stops_are_counted_with_their_shortfall_and_warned_about(tmp_path):
+    r = str(tmp_path / "spiky")
+    _run(r, "3001_a", 100, [(f"s{i}", NARR, "Narrator", f"Spiky line number {i}.", 6.0, "tone") for i in range(4)])
+    for i, path in enumerate(_wavs(r, "3001_a")):
+        _spiky(path, 6.0, 200 + 25 * i)
+    result = dataset.export(dataset.load(r, refresh=True), {"voice_ids": [NARR]}, str(tmp_path / "out"),
+                            formats=["qwen3_tts"], name="sp", loudness_db=-22.0, qwen3={"speaker_name": "Sunny"})
+    lm = result["loudness"]
+    assert lm["peak_limited"] == 4 and lm["worst_shortfall_db"] > 5
+    assert lm["chapters"]["3001_a"]["peak_limited"] == 4
+    assert "loudness_peak_limited" in {w["code"] for w in result["qwen3"]["warnings"]}
+
+
+# ---- reference ranking and the endpoint ----
+def _measure_all(corpus):
+    for line in corpus.lines:
+        try:
+            dataset_quality._stats[line["sha256"]] = dataset_quality.measure(os.path.join(corpus.root, line["file"]))
+        except Exception:  # the undecodable fixture clip
+            pass
+    dataset_quality._loaded = True
+
+
+def test_the_ranking_is_deterministic_and_the_exporter_takes_its_first_entry(corpus, tmp_path):
+    lines, _, _ = qwen3_export.speaker_lines(corpus, {"voice_ids": [NARR]})
+    _measure_all(corpus)
+    clips, unmeasured = qwen3_export.candidate_clips(lines)
+    assert unmeasured == 1  # the undecodable fixture clip
+    first = qwen3_export.rank_references(clips)
+    again = qwen3_export.rank_references(list(reversed(clips)))
+    assert [r["clip"]["number"] for r in first] == [r["clip"]["number"] for r in again]
+    assert [r["tier"] for r in first] == sorted(r["tier"] for r in first)
+    assert "clipped" in {c for r in first if r["clip"]["text"].startswith("A clipped") for c in r["cautions"]}
+    assert first[-1]["tier"] >= first[0]["tier"] and len(qwen3_export.rank_references(clips, 2)) == 2
+    exported = _export(corpus, tmp_path)["qwen3"]["reference"]
+    assert exported["source"] == first[0]["clip"]["line"]["file"]
+
+
+def test_unmeasured_clips_are_counted_not_guessed(corpus):
+    lines, _, _ = qwen3_export.speaker_lines(corpus, {"voice_ids": [NARR]})
+    clips, unmeasured = qwen3_export.candidate_clips(lines)
+    assert clips == [] and unmeasured > 0
+
+
+def test_the_candidates_route_ranks_the_current_selection(client, corpus):
+    _measure_all(corpus)
+    body = {"voice_ids": [NARR], "limit": 3}
+    res = client.post("/api/fish/dataset/reference-candidates", json=body)
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert len(data["candidates"]) == 3 and data["unmeasured"] == 1 and data["speaker"]["name"] == "Narrator"
+    top = data["candidates"][0]
+    assert {"key", "text", "duration_s", "stats", "score", "reasons", "cautions"} <= set(top)
+    assert client.post("/api/fish/dataset/reference-candidates", json=body).json() == data  # same every time
+    only = client.post("/api/fish/dataset/reference-candidates", json={**body, "only_keys": [top["key"]]}).json()
+    assert [c["key"] for c in only["candidates"]] == [top["key"]]
+    assert client.post("/api/fish/dataset/reference-candidates", json={"limit": 3}).status_code == 422  # two speakers
+    assert client.post("/api/fish/dataset/reference-candidates", json={**body, "q": "zzzz"}).status_code == 422
+
+
+def test_the_candidates_route_reports_unmeasured_clips(client):
+    data = client.post("/api/fish/dataset/reference-candidates", json={"voice_ids": [NARR]}).json()
+    assert data["candidates"] == [] and data["unmeasured"] > 0
+
+
+def test_a_reference_from_another_speaker_or_outside_the_corpus_is_refused(corpus, tmp_path):
+    other = next(l["key"] for l in corpus.lines if l["voice_id"] == SIDE)
+    with pytest.raises(ValueError, match="Noctis.*one speaker"):
+        _export(corpus, tmp_path, name="other", reference_key=other)
+    with pytest.raises(ValueError, match="not in the corpus"):
+        _export(corpus, tmp_path, name="ghost", reference_key="nope/none")
+    assert not (tmp_path / "out" / "other").exists()
+
+
+def test_exactly_one_reference_is_written_and_it_is_24k_mono(corpus, tmp_path):
+    key = next(l["key"] for l in corpus.lines if l["plain"].startswith("Another calm"))
+    out = _export(corpus, tmp_path, name="one", reference_key=key)["path"]
+    assert os.listdir(os.path.join(out, "reference")) == ["ref.wav"]
+    info = sf.info(os.path.join(out, "reference", "ref.wav"))
+    assert (info.samplerate, info.channels) == (24000, 1)
+    assert {r["ref_audio"] for r in _jsonl(os.path.join(out, "train.jsonl"))} == {"reference/ref.wav"}
+
+
+def test_facets_carry_the_level_spread_of_the_selection(client, corpus):
+    res = client.post("/api/fish/dataset/facets", json={"voice_ids": [NARR]}).json()
+    assert res["levels"]["total"] > 0 and res["levels"]["measured"] == 0 and res["levels"]["median"] is None
+    _measure_all(corpus)
+    res = client.post("/api/fish/dataset/facets", json={"voice_ids": [NARR]}).json()
+    lv = res["levels"]
+    assert lv["measured"] == lv["total"] - 1 and lv["min"] <= lv["median"] <= lv["max"]
+    assert sum(n for _, n in lv["counts"]) == lv["measured"]

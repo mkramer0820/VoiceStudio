@@ -19,6 +19,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
 
+DEFAULT_LOUDNESS_DB = -22.0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", required=True, help="the Fish render root (the folder that holds the chapter folders)")
@@ -33,7 +36,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-duration", type=float, default=30.0, help="reject clips longer than this (seconds)")
     p.add_argument("--validation-ratio", type=float, default=0.0,
                    help="not supported: Qwen's scripts have no validation input (only 0 is accepted)")
-    p.add_argument("--loudness-db", type=float, default=None, help="optional: match every clip to this RMS level (dBFS)")
+    p.add_argument("--loudness-db", type=float, default=DEFAULT_LOUDNESS_DB,
+                   help=f"match every clip to this whole-clip RMS level in dBFS (default {DEFAULT_LOUDNESS_DB:g}; "
+                        "-19 to -23 is the usual range)")
+    p.add_argument("--no-loudness-match", action="store_true", help="leave every clip at its own level")
     p.add_argument("--drive-folder", default="VoiceStudio-training",
                    help="Google Drive folder under My Drive; checkpoints go to <folder>/<speaker>/checkpoints")
     p.add_argument("--epochs", type=int, help="sft_12hz.py --num_epochs (default 3)")
@@ -89,7 +95,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         result = dataset.export(
             corpus, spec, os.path.dirname(output), formats=["qwen3_tts"], name=os.path.basename(output),
-            loudness_db=args.loudness_db, qwen3=options, training=training)
+            loudness_db=None if args.no_loudness_match else args.loudness_db, qwen3=options, training=training)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -97,6 +103,10 @@ def run(argv: list[str] | None = None) -> int:
     ref = q["reference"]
     print(f"Exported {q['accepted']} clips ({result['hours']} h), rejected {q['rejected']} {q['rejected_by_reason'] or ''}")
     print(f"Folder: {result['path']}")
+    lv = result.get("loudness")
+    if lv:
+        print(f"Level matching to {lv['target_rms_db']:g} dB: {lv['adjusted']} of {lv['clips']} clips adjusted, "
+              f"{lv['peak_limited']} limited by the peak cap (worst {lv['worst_shortfall_db']:.1f} dB short)")
     print(f"Reference: {ref.get('source')} ({ref.get('duration')} s): {ref.get('reason')}")
     print("Checkpoints on Drive: " + q["commands"]["official"]["checkpoint_dir"])
     if q["zip"]:

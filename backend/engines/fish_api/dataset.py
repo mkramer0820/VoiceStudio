@@ -464,6 +464,79 @@ def loudness_gain(data, target_db: float) -> tuple[float, bool]:
     return gain, False
 
 
+def rms_db(data) -> float:
+    """Whole-clip RMS in dBFS, the same number ``dataset_quality.measure`` reports as ``rms_db``."""
+    import numpy as np
+
+    return 20 * math.log10(float(np.sqrt(np.mean(data ** 2))) + 1e-9) if len(data) else -180.0
+
+
+def apply_loudness(mono, target_db: float):
+    """``mono`` brought to ``target_db`` (peak capped). Returns the new samples and what happened:
+    level before and after, the gain in dB and whether the peak cap kept it from reaching the target."""
+    import numpy as np
+
+    before = rms_db(mono)
+    gain, limited = loudness_gain(mono, target_db)
+    out = np.clip(mono * gain, -1.0, 1.0)
+    return out, {"before_db": before, "after_db": rms_db(out) if gain != 1.0 or limited else before,
+                 "gain_db": 20 * math.log10(gain) if gain > 0 else 0.0, "peak_limited": limited}
+
+
+class LevelReport:
+    """Collects what level matching did to each clip and sums it up per chapter for the export report."""
+
+    MIN_GAIN_DB = 0.05  # a smaller change does not count as "adjusted"
+
+    def __init__(self, target_db: float):
+        self.target = target_db
+        self._rows: list[tuple[str, dict]] = []
+
+    def add(self, chapter: str, info: dict) -> None:
+        self._rows.append((chapter, info))
+
+    def chapter_levels(self, key: str) -> dict[str, float]:
+        by: dict[str, list[float]] = collections.defaultdict(list)
+        for chapter, info in self._rows:
+            by[chapter].append(info[key])
+        return {c: round(statistics.median(v), 1) for c, v in sorted(by.items())}
+
+    def summary(self) -> dict:
+        def shortfall(info: dict) -> float:
+            return max(0.0, self.target - info["after_db"]) if info["peak_limited"] else 0.0
+
+        chapters: dict[str, dict] = {}
+        for chapter, info in self._rows:
+            c = chapters.setdefault(chapter, {"clips": 0, "adjusted": 0, "peak_limited": 0, "worst_shortfall_db": 0.0})
+            c["clips"] += 1
+            c["adjusted"] += int(abs(info["gain_db"]) >= self.MIN_GAIN_DB)
+            c["peak_limited"] += int(info["peak_limited"])
+            c["worst_shortfall_db"] = max(c["worst_shortfall_db"], round(shortfall(info), 1))
+        before, after = self.chapter_levels("before_db"), self.chapter_levels("after_db")
+        for chapter, c in chapters.items():
+            c["median_before_db"], c["median_after_db"] = before[chapter], after[chapter]
+        return {
+            "target_rms_db": self.target, "clips": len(self._rows),
+            "adjusted": sum(c["adjusted"] for c in chapters.values()),
+            "peak_limited": sum(c["peak_limited"] for c in chapters.values()),
+            "worst_shortfall_db": max((c["worst_shortfall_db"] for c in chapters.values()), default=0.0),
+            "chapters": dict(sorted(chapters.items())),
+        }
+
+
+def level_summary(lines: list[dict]) -> dict:
+    """Min, median and max measured clip level of ``lines`` plus a count per 0.1 dB, so the export dialog can
+    say how many clips sit above or below a chosen target. Clips not measured yet are only counted."""
+    from . import dataset_quality
+
+    levels = [st["rms_db"] for st in (dataset_quality.get(l) for l in lines) if st]
+    counts = collections.Counter(levels)
+    return {"measured": len(levels), "total": len(lines),
+            "min": min(levels) if levels else None, "max": max(levels) if levels else None,
+            "median": round(statistics.median(levels), 1) if levels else None,
+            "counts": sorted(counts.items())}
+
+
 def _in_validation(sha: str, fraction: float) -> bool:
     """A stable split: the same clip always lands on the same side, whatever else is selected."""
     return fraction > 0 and int(hashlib.sha256((sha or "").encode()).hexdigest()[:8], 16) / 0xFFFFFFFF < fraction
@@ -549,7 +622,7 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
     rows: list[dict] = []
     csv_rows: dict[str, list[list[str]]] = collections.defaultdict(list)
     seconds = 0.0
-    adjusted = peak_limited = 0
+    levels = LevelReport(loudness_db) if loudness_db is not None else None
     omni_rows: list[tuple[bool, dict]] = []
     portable_rows: list[tuple[bool, dict]] = []  # same rows, audio paths relative to the export folder
     for line in lines:
@@ -567,10 +640,8 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
             out_rate = sample_rate or src_rate
             mono = resample_mono(data, src_rate, out_rate)
             if loudness_db is not None:
-                gain, limited = loudness_gain(mono, loudness_db)
-                mono = mono * gain
-                adjusted += 1
-                peak_limited += int(limited)
+                mono, info = apply_loudness(mono, loudness_db)
+                levels.add(line["chapter"], info)
             sf.write(target, np.clip(mono, -1.0, 1.0), out_rate, subtype="PCM_16")
             rate, duration = out_rate, len(mono) / out_rate
         else:
@@ -626,8 +697,7 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
         "name": name, "clips": len(rows), "hours": round(seconds / 3600, 3), "speakers": per_speaker,
         "formats": formats, "text_mode": text_mode, "kept_tags": kept if text_mode == "strip" else {}, "sample_rate": sample_rate or "as rendered",
         "val_fraction": val_fraction,
-        "loudness": {"target_rms_db": loudness_db, "adjusted": adjusted, "peak_limited": peak_limited}
-        if loudness_db is not None else None,
+        "loudness": levels.summary() if levels else None,
         "language_id": language_id if omni else None, "source_root": corpus.root,
         "source": "Synthetic speech generated by Fish Audio (models: "
                   + ", ".join(sorted({l["model"] or "unknown" for l in lines}))

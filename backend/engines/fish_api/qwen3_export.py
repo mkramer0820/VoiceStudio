@@ -6,7 +6,7 @@ commit that was read): a ``train.jsonl`` whose rows hold exactly ``audio``, ``te
 adds the ``audio_codes`` itself; nothing here trains or contacts a network.
 
 Audio handling is deliberately plain: mono, 24 kHz, 16-bit PCM and nothing else (no compression, EQ,
-denoising or per-clip normalisation). The existing optional level matching stays off unless asked for.
+denoising or per-clip normalisation). Level matching to one target is applied when the caller passes a target (the dialog and the CLI default to -22 dB).
 Every clip that is not exported is listed with its reason in ``rejected_samples.jsonl``.
 """
 from __future__ import annotations
@@ -84,18 +84,6 @@ def _clean_error(exc: Exception, src: str, rel: str) -> str:
 
 
 # ---- reading one clip --------------------------------------------------------------------------
-def _noise_floor_db(mono, rate: int) -> float:
-    """Level of the quietest tenth of the 10 ms frames (a rough background-noise figure)."""
-    import numpy as np
-
-    frame = max(1, int(rate * 0.01))
-    n = len(mono) // frame
-    if n < 5:
-        return -90.0
-    env = 20 * np.log10(np.sqrt((mono[: n * frame].reshape(n, frame) ** 2).mean(axis=1)) + 1e-9)
-    return float(np.percentile(env, 10))
-
-
 def _inspect(path: str) -> dict:
     """Decode one clip and measure it. Raises on anything unreadable."""
     import soundfile as sf
@@ -108,12 +96,14 @@ def _inspect(path: str) -> dict:
     if len(mono) == 0:
         return out | {"duration": 0.0}
     stats = dataset_quality.measure_data(mono, rate)
-    return out | {"duration": len(mono) / rate, "stats": stats, "noise_floor_db": _noise_floor_db(mono, rate),
+    return out | {"duration": len(mono) / rate, "stats": stats,
                   "content_sha": hashlib.sha256(mono.tobytes()).hexdigest()}
 
 
 def _convert(path: str, target: str, loudness_db: Optional[float]) -> dict:
-    """Write ``target`` as 24 kHz mono PCM16. A file that already is that is copied byte for byte."""
+    """Write ``target`` as 24 kHz mono PCM16. A file that already is that is copied byte for byte.
+
+    With ``loudness_db`` the result also carries the level before and after (``before_db``, ``after_db``)."""
     import numpy as np
     import soundfile as sf
 
@@ -124,13 +114,11 @@ def _convert(path: str, target: str, loudness_db: Optional[float]) -> dict:
         return {"copied": True, "gain_db": 0.0, "peak_limited": False}
     data, rate = sf.read(path, dtype="float32", always_2d=True)
     mono = dataset.resample_mono(data, rate, RATE)
-    gain_db, limited = 0.0, False
+    level = {"gain_db": 0.0, "peak_limited": False}
     if loudness_db is not None:
-        gain, limited = dataset.loudness_gain(mono, loudness_db)
-        mono = mono * gain
-        gain_db = 20 * float(np.log10(gain)) if gain > 0 else 0.0
+        mono, level = dataset.apply_loudness(mono, loudness_db)
     sf.write(target, np.clip(mono, -1.0, 1.0), RATE, subtype="PCM_16")
-    return {"copied": False, "gain_db": round(gain_db, 2), "peak_limited": limited}
+    return {"copied": False, **level, "gain_db": round(level["gain_db"], 2)}
 
 
 def spoken_text(raw: str) -> str:
@@ -148,41 +136,106 @@ def _expressive(tags: list[str]) -> bool:
     return any(h in t for t in tags for h in EXPRESSIVE_HINTS)
 
 
-def choose_reference(clips: list[dict]) -> tuple[dict, str]:
-    """The best-looking neutral clip among accepted ``clips`` and a sentence saying why.
+# Each tier relaxes the one before it; a clip belongs to the first tier it passes (the tiers are nested).
+REFERENCE_TIERS = (
+    ("", lambda c: 5 <= c["duration"] <= 15 and c["stats"]["pauses"] <= 2 and c["stats"]["lead_ms"] <= 600
+     and c["stats"]["tail_ms"] <= 900 and c["stats"]["noise_floor_db"] <= -40 and not _expressive(c["tags"])
+     and not _is_clipped(c["stats"])),
+    ("relaxed length and pauses", lambda c: 3 <= c["duration"] <= 20 and c["stats"]["noise_floor_db"] <= -40
+     and not _expressive(c["tags"]) and not _is_clipped(c["stats"])),
+    ("allowed an expressive tag", lambda c: 3 <= c["duration"] <= 20 and not _is_clipped(c["stats"])),
+    ("every clip is clipped or off-length; took the closest", lambda c: True),
+)
 
-    Strict pass first (5 to 15 s, not clipped, no expressive tag, quiet background, few pauses, short
-    silences at the edges); each later pass relaxes one thing and the reason says so.
+
+def _reasons(c: dict, middle: float) -> tuple[list[str], list[str]]:
+    """Codes the dialog turns into words: what is good about a candidate and what to be careful about."""
+    s = c["stats"]
+    good: list[str] = []
+    caution: list[str] = []
+    (caution if _is_clipped(s) else good).append("clipped" if _is_clipped(s) else "not_clipped")
+    (good if s["noise_floor_db"] <= -40 else caution).append("clean_background" if s["noise_floor_db"] <= -40 else "noisy")
+    (good if 5 <= c["duration"] <= 15 else caution).append("medium_length" if 5 <= c["duration"] <= 15 else "off_length")
+    (caution if _expressive(c["tags"]) else good).append("expressive_tag" if _expressive(c["tags"]) else "neutral")
+    (good if s["pauses"] <= 2 else caution).append("few_pauses" if s["pauses"] <= 2 else "many_pauses")
+    if abs(s["rms_db"] - middle) <= 3:
+        good.append("typical_level")
+    return good, caution
+
+
+def rank_references(clips: list[dict], limit: Optional[int] = None) -> list[dict]:
+    """Every candidate reference clip, best first. The ONE place the rules live: the exporter takes the
+    first entry when no reference is chosen and the Training data screen lists the top few.
+
+    ``clips`` need ``duration``, ``tags``, ``number`` (a stable order) and ``stats`` (the
+    ``dataset_quality`` numbers including ``noise_floor_db``). Ties go to the lower ``number``, so the
+    result is the same on every run. Each entry: ``clip``, ``score``, ``tier``, ``note``, ``reasons``,
+    ``cautions`` and ``median_db`` (the level of a typical clip of the speaker).
     """
-    levels = [c["stats"]["rms_db"] for c in clips]
-    middle = statistics.median(levels)
-    passes = (
-        ("", lambda c: 5 <= c["duration"] <= 15 and c["stats"]["pauses"] <= 2 and c["stats"]["lead_ms"] <= 600
-         and c["stats"]["tail_ms"] <= 900 and c["noise_floor_db"] <= -40 and not _expressive(c["tags"])
-         and not _is_clipped(c["stats"])),
-        ("relaxed length and pauses", lambda c: 3 <= c["duration"] <= 20 and c["noise_floor_db"] <= -40
-         and not _expressive(c["tags"]) and not _is_clipped(c["stats"])),
-        ("allowed an expressive tag", lambda c: 3 <= c["duration"] <= 20 and not _is_clipped(c["stats"])),
-        ("every clip is clipped or off-length; took the closest", lambda c: True),
-    )
-    for note, ok in passes:
-        pool = [c for c in clips if ok(c)]
-        if pool:
-            break
-
-    def score(c: dict) -> float:
+    if not clips:
+        return []
+    middle = statistics.median(c["stats"]["rms_db"] for c in clips)
+    ranked = []
+    for c in clips:
         s = c["stats"]
-        return (-abs(c["duration"] - 9.0) / 9.0 - 0.5 * abs(s["rms_db"] - middle) / 6.0 - 0.2 * s["pauses"]
-                - (0.3 if c["tags"] else 0.0) - (1.0 if _is_clipped(s) else 0.0))
+        tier = next(i for i, (_, ok) in enumerate(REFERENCE_TIERS) if ok(c))
+        score = (-abs(c["duration"] - 9.0) / 9.0 - 0.5 * abs(s["rms_db"] - middle) / 6.0 - 0.2 * s["pauses"]
+                 - (0.3 if c["tags"] else 0.0) - (1.0 if _is_clipped(s) else 0.0))
+        good, caution = _reasons(c, middle)
+        ranked.append({"clip": c, "score": round(score, 6), "tier": tier, "note": REFERENCE_TIERS[tier][0],
+                       "reasons": good, "cautions": caution, "median_db": middle})
+    ranked.sort(key=lambda r: (r["tier"], -r["score"], r["clip"]["number"]))
+    return ranked if limit is None else ranked[:limit]
 
-    best = max(pool, key=lambda c: (round(score(c), 6), -c["number"]))
-    s = best["stats"]
-    why = (f"{best['duration']:.1f} s, peak {s['peak']:.2f}, "
-           f"{'no clipping' if not _is_clipped(s) else 'some clipping'}, {s['pauses']} pause(s), "
-           f"level {s['rms_db']:.1f} dB (speaker median {middle:.1f} dB), "
-           f"{'no emotion tags' if not _expressive(best['tags']) else 'has an emotion tag'}"
-           f"{'; ' + note if note else ''}")
-    return best, why
+
+def reference_why(entry: dict) -> str:
+    """A sentence about one ranked candidate, for the export report."""
+    best, s, note = entry["clip"], entry["clip"]["stats"], entry["note"]
+    return (f"{best['duration']:.1f} s, peak {s['peak']:.2f}, "
+            f"{'no clipping' if not _is_clipped(s) else 'some clipping'}, {s['pauses']} pause(s), "
+            f"level {s['rms_db']:.1f} dB (speaker median {entry['median_db']:.1f} dB), "
+            f"{'no emotion tags' if not _expressive(best['tags']) else 'has an emotion tag'}"
+            f"{'; ' + note if note else ''}")
+
+
+def choose_reference(clips: list[dict]) -> tuple[dict, str]:
+    """The best-looking neutral clip among accepted ``clips`` and a sentence saying why."""
+    best = rank_references(clips, 1)[0]
+    return best["clip"], reference_why(best)
+
+
+def speaker_lines(corpus, f: dict) -> tuple[list[dict], str, str]:
+    """The selected clips in export order and their one speaker's id and name; refuses an empty or
+    multi-speaker selection (the Qwen3-TTS format trains one speaker)."""
+    lines = dataset.select(corpus, {**f, "sort": "order"})
+    if not lines:
+        raise ValueError("Nothing matches the current filters.")
+    voices = collections.OrderedDict((l["voice_id"], l["voice_name"]) for l in lines)
+    if len(voices) > 1:
+        raise ValueError("The Qwen3-TTS format trains one speaker, and the selection holds "
+                         f"{len(voices)} ({', '.join(sorted(voices.values()))}). Pick one speaker in the filters.")
+    voice_id, voice_name = next(iter(voices.items()))
+    lines.sort(key=lambda l: (l["chapter"], l["started_at"], l["index"], l["key"]))
+    return lines, voice_id, voice_name
+
+
+def candidate_clips(lines: list[dict], min_duration: float = 0.8, max_duration: float = 30.0) -> tuple[list[dict], int]:
+    """Reference candidates from clips already measured (``lines`` in export order), and how many clips
+    could not be judged because they have no cached measurements yet."""
+    clips, unmeasured = [], 0
+    for number, line in enumerate(lines, 1):
+        text = spoken_text(line["text"])
+        if not text or not min_duration <= line["duration_s"] <= max_duration:
+            continue
+        stats = dataset_quality.get(line)
+        if not stats or "noise_floor_db" not in stats:
+            unmeasured += 1
+            continue
+        if stats["rms_db"] < SILENT_DB:
+            continue
+        clips.append({"duration": line["duration_s"], "stats": stats, "tags": line["tags"], "number": number,
+                      "line": line, "text": text})
+    return clips, unmeasured
 
 
 # ---- the export --------------------------------------------------------------------------------
@@ -242,15 +295,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     """Write the selected clips of ONE speaker under ``dest/<name>/`` in Qwen3-TTS's format."""
     opts = options or Options()
     settings = settings or qwen3_colab.TrainSettings()
-    lines = dataset.select(corpus, {**f, "sort": "order"})
-    if not lines:
-        raise ValueError("Nothing matches the current filters.")
-    voices = collections.OrderedDict((l["voice_id"], l["voice_name"]) for l in lines)
-    if len(voices) > 1:
-        raise ValueError("The Qwen3-TTS format trains one speaker, and the selection holds "
-                         f"{len(voices)} ({', '.join(sorted(voices.values()))}). Pick one speaker in the filters.")
-    voice_id, voice_name = next(iter(voices.items()))
-    lines.sort(key=lambda l: (l["chapter"], l["started_at"], l["index"], l["key"]))
+    lines, voice_id, voice_name = speaker_lines(corpus, f)
     raw = (dest or "").strip().strip('"')
     if not raw or not os.path.isabs(raw):
         raise ValueError("Enter the full path of the folder to export into.")
@@ -339,6 +384,12 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
                      "reason": "chosen by you (a file outside the dataset)"}
     else:
         if opts.reference_key:
+            chosen = next((l for l in corpus.lines if l["key"] == opts.reference_key), None)
+            if chosen is None:
+                raise ValueError("The chosen reference clip is not in the corpus (rescan the folder and choose again).")
+            if chosen["voice_id"] != voice_id:
+                raise ValueError(f"The chosen reference clip is spoken by {chosen['voice_name']}, but this export trains "
+                                 f"{voice_name}. Choose a clip of {voice_name} (one speaker per export).")
             picked = next((c for c in accepted if c["line"]["key"] == opts.reference_key), None)
             if picked is None:
                 rej = next((r for r in rejected if r["key"] == opts.reference_key), None)
@@ -356,7 +407,15 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     # Pass 2: write the files.
     os.makedirs(os.path.join(out_dir, "audio"))
     os.makedirs(os.path.join(out_dir, "reference"))
-    converted = copied = limited = 0
+    converted = copied = 0
+    _convert(ref_source, os.path.join(out_dir, "reference", "ref.wav"), loudness_db)
+    import soundfile as sf
+
+    ref_info_wav = sf.info(os.path.join(out_dir, "reference", "ref.wav"))
+    if ref_info_wav.samplerate != RATE or ref_info_wav.channels != 1:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise ValueError(f"The reference clip could not be converted to {RATE} Hz mono; choose another one.")
+    levels = dataset.LevelReport(loudness_db) if loudness_db is not None else None
     mapping: list[dict] = []
     train_rows: list[dict] = []
     for c in accepted:
@@ -364,13 +423,15 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
         result = _convert(os.path.join(corpus.root, c["line"]["file"]), os.path.join(out_dir, *rel.split("/")), loudness_db)
         copied += int(result["copied"])
         converted += int(not result["copied"])
-        limited += int(result["peak_limited"])
+        if levels is not None:
+            levels.add(c["line"]["chapter"], result)
         train_rows.append({"audio": rel, "text": c["text"], "ref_audio": REFERENCE_PATH})
         mapping.append({"original": c["line"]["file"], "exported": rel, "text": c["text"],
                         "duration_s": round(c["duration"], 3), "chapter": c["line"]["chapter"],
                         "tags_removed": c["tags"], "sha256": _file_sha(os.path.join(out_dir, *rel.split("/"))),
-                        "gain_db": result["gain_db"]})
-    _convert(ref_source, os.path.join(out_dir, "reference", "ref.wav"), loudness_db)
+                        "gain_db": result["gain_db"]}
+                       | ({"level_after_db": round(result["after_db"], 1), "peak_limited": result["peak_limited"]}
+                          if levels is not None else {}))
 
     # Warnings.
     warnings: list[dict] = []
@@ -388,15 +449,26 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     for c in accepted:
         by_chapter[c["line"]["chapter"]].append(c["stats"]["rms_db"])
     chapter_levels = {ch: round(statistics.median(v), 1) for ch, v in sorted(by_chapter.items())}
-    if loudness_db is None and len(chapter_levels) > 1:
-        centre = statistics.median(chapter_levels.values())
-        off = {ch: lv for ch, lv in chapter_levels.items() if abs(lv - centre) >= LOUDNESS_SPREAD_DB}
+    level_summary = levels.summary() if levels is not None else None
+    # What the model will actually hear: the matched levels when level matching ran, the source levels otherwise.
+    heard = levels.chapter_levels("after_db") if levels is not None else chapter_levels
+    if len(heard) > 1:
+        centre = statistics.median(heard.values())
+        off = {ch: lv for ch, lv in heard.items() if abs(lv - centre) >= LOUDNESS_SPREAD_DB}
         if off:
+            advice = ("Those chapters are peak-limited, so they stayed quieter than the target; choose a lower target "
+                      "or leave them out." if levels is not None else
+                      "Tick level matching in the export or leave those chapters out.")
             warn("inconsistent_loudness",
-                 f"Chapter levels differ by {max(chapter_levels.values()) - min(chapter_levels.values()):.1f} dB "
+                 f"Chapter levels differ by {max(heard.values()) - min(heard.values()):.1f} dB "
                  f"(median {centre:.1f} dB). Chapters {', '.join(f'{ch} ({lv} dB)' for ch, lv in off.items())} are "
-                 f"{LOUDNESS_SPREAD_DB:g} dB or more away. Tick level matching in the export or leave those chapters out.",
-                 len(off), list(off))
+                 f"{LOUDNESS_SPREAD_DB:g} dB or more away. {advice}", len(off), list(off))
+    if level_summary and level_summary["peak_limited"] > max(2, n * 0.1):
+        warn("loudness_peak_limited",
+             f"{level_summary['peak_limited']} of {n} clip(s) could not reach {loudness_db:g} dB because the peak "
+             f"cap ({dataset.PEAK_CEILING:g}) stopped the gain; the worst is {level_summary['worst_shortfall_db']:.1f} dB "
+             "short. Choose a lower target level if that matters.", level_summary["peak_limited"],
+             [m["original"] for m in mapping if m.get("peak_limited")])
     clipped = [c for c in accepted if _is_clipped(c["stats"])]
     if clipped:
         warn("clipping", f"{len(clipped)} clip(s) touch full scale; the audio was not repaired.", len(clipped),
@@ -448,7 +520,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
                      "longest_s": round(max(durations), 2)},
         "audio": {"sample_rate": RATE, "channels": 1, "format": "WAV PCM16", "copied_unchanged": copied,
                   "converted": converted, "source_sample_rates": rates},
-        "loudness_matching": ({"target_rms_db": loudness_db, "peak_limited": limited} if loudness_db is not None else None),
+        "loudness_matching": level_summary,
         "chapter_levels_db": chapter_levels,
         "reference": ref_info | {"path": REFERENCE_PATH},
         "validation": "None. The official Qwen3-TTS fine-tuning scripts have no validation input, so no validation file is written.",
@@ -484,7 +556,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     logger.info("Qwen3-TTS export: %d accepted, %d rejected -> %s", n, len(rejected), out_dir)
     return {
         "name": name, "clips": n, "hours": round(seconds / 3600, 3), "formats": [FORMAT], "path": out_dir,
-        "speakers": {speaker: {"clips": n, "seconds": round(seconds, 1)}},
+        "speakers": {speaker: {"clips": n, "seconds": round(seconds, 1)}}, "loudness": level_summary,
         "qwen3": {"accepted": n, "rejected": len(rejected), "rejected_by_reason": report["rejected_by_reason"],
                   "reference": ref_info, "warnings": [{"code": w["code"], "message": w["message"]} for w in warnings],
                   "zip": zipped, "files": ["train.jsonl", "dataset_report.json", "rejected_samples.jsonl", "training_settings.json", *helper],

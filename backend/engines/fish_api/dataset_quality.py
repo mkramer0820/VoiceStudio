@@ -71,6 +71,18 @@ def measure(path: str) -> dict:
     return measure_data(data.mean(axis=1), rate)
 
 
+def noise_floor_db(mono, rate: int) -> float:
+    """Level of the quietest tenth of the 10 ms frames (a rough background-noise figure)."""
+    import numpy as np
+
+    frame = max(1, int(rate * 0.01))
+    n = len(mono) // frame
+    if n < 5:
+        return -90.0
+    env = 20 * np.log10(np.sqrt((mono[: n * frame].reshape(n, frame) ** 2).mean(axis=1)) + 1e-9)
+    return float(np.percentile(env, 10))
+
+
 def measure_data(mono, rate: int) -> dict:
     """The same measurements for samples already in memory (mono float32)."""
     import numpy as np
@@ -84,7 +96,8 @@ def measure_data(mono, rate: int) -> dict:
     frame = max(1, int(rate * FRAME_MS / 1000))
     n = len(mono) // frame
     out = {"peak": round(peak, 4), "rms_db": round(rms_db, 1), "clip": round(clip, 5),
-           "lead_ms": 0, "tail_ms": 0, "pauses": 0, "max_gap_ms": 0}
+           "lead_ms": 0, "tail_ms": 0, "pauses": 0, "max_gap_ms": 0,
+           "noise_floor_db": round(noise_floor_db(mono, rate), 1)}
     if n < 2:
         return out
     env = 20 * np.log10(np.sqrt((mono[: n * frame].reshape(n, frame) ** 2).mean(axis=1)) + 1e-9)
@@ -126,7 +139,8 @@ def start(corpus) -> dict:
         _load()
         if _job["running"]:
             return {**_job, "cached": len(_stats)}
-        todo = [l for l in corpus.lines if l.get("sha256") and l["sha256"] not in _stats]
+        # Numbers cached before the noise floor was added are measured again (the reference ranking needs it).
+        todo = [l for l in corpus.lines if l.get("sha256") and "noise_floor_db" not in _stats.get(l["sha256"], {})]
         _job.update(running=True, done=0, total=len(todo), failed=0, started_at=time.time(), finished_at=None)
     threading.Thread(target=_run, args=(corpus, todo), name="fish-dataset-analyze", daemon=True).start()
     return status()

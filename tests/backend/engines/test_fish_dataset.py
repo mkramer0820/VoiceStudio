@@ -413,7 +413,8 @@ def test_loudness_matching_brings_hot_and_quiet_chapters_to_one_level(tmp_path):
     assert len(after) == 4
     assert all(abs(a["rms_db"] - (-24.0)) < 0.6 for a in after), [a["rms_db"] for a in after]
     assert all(a["peak"] <= 0.971 and a["clip"] == 0 for a in after)
-    assert out["loudness"] == {"target_rms_db": -24.0, "adjusted": 4, "peak_limited": 0}
+    assert {k: out["loudness"][k] for k in ("target_rms_db", "adjusted", "peak_limited")} == {"target_rms_db": -24.0, "adjusted": 4, "peak_limited": 0}
+    assert set(out["loudness"]["chapters"]["3193_hot"]) >= {"median_before_db", "median_after_db", "peak_limited", "worst_shortfall_db"}
 
 
 def test_loudness_matching_never_clips_a_peaky_clip(tmp_path):
