@@ -27,6 +27,7 @@ import { SettingsActionError } from '@/features/settings/settings-action-error';
 import { cn } from '@/lib/utils';
 import { useClipPlayer } from './clip-player';
 import { DatasetExplorer } from './dataset-explorer';
+import { describeRanges, NO_CHAPTERS } from './explorer-staging';
 import { ExportDialog } from './export-dialog';
 import type { ReferenceClip } from './export-reference';
 import { TrainDialog } from './train-dialog';
@@ -154,9 +155,26 @@ export function FishDatasetPage() {
     f.tagsNone.forEach((tag) =>
       out.push({ id: `n${tag}`, label: tagLabel(tag, 'none'), clear: () => set({ tagsNone: f.tagsNone.filter((x) => x !== tag) }) }),
     );
-    f.chapters.forEach((c) =>
-      out.push({ id: `c${c}`, label: c, clear: () => set({ chapters: f.chapters.filter((x) => x !== c) }) }),
-    );
+    if (f.tagsAny.length)
+      out.push({
+        id: 'any',
+        label: t('fishDataset.chip_tag_any', { tags: f.tagsAny.map((x) => `[${x}]`).join(' ') }),
+        clear: () => set({ tagsAny: [] }),
+      });
+    if (f.chapters.length)
+      out.push({
+        id: 'chapters',
+        label: f.chapters.every((c) => c === NO_CHAPTERS)
+          ? t('fishDataset.chip_chapters_none')
+          : t('fishDataset.chip_chapters', { count: f.chapters.length }),
+        clear: () => set({ chapters: [] }),
+      });
+    if (f.durRanges.length)
+      out.push({
+        id: 'ranges',
+        label: t('fishDataset.chip_dur_ranges', { ranges: describeRanges(f.durRanges) }),
+        clear: () => set({ durRanges: [] }),
+      });
     if (f.minDur || f.maxDur)
       out.push({
         id: 'dur',
@@ -504,7 +522,15 @@ export function FishDatasetPage() {
                 </div>
               )}
 
-              {facets && <DatasetExplorer facets={facets} filters={filters} onPatch={set} />}
+              {facets && (
+                <DatasetExplorer
+                  facets={facets}
+                  filters={filters}
+                  onApply={set}
+                  onMeasure={() => void ds.startAnalysis()}
+                  measuring={analysis?.running}
+                />
+              )}
 
               <div className="sticky top-0 z-10 space-y-1.5 border-b border-border/50 bg-background/90 px-3 py-2 text-xs backdrop-blur">
                 <div className="flex flex-wrap items-center gap-2">

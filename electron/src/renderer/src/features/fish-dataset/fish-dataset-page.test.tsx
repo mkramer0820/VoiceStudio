@@ -97,6 +97,9 @@ const LINES = {
   ],
 };
 
+const level = (median: number, low: number, high: number) => ({
+  rms_db: median, rms_min: low, rms_max: high, rms_p10: low + 0.5, rms_p90: high - 0.5,
+});
 const FACETS = {
   clips: 2,
   seconds: 9,
@@ -112,8 +115,9 @@ const FACETS = {
     ['calm', 1],
   ],
   chapters: [
-    { chapter: '3203_x', clips: 1, seconds: 4, rms_db: -26, peak: 0.3 },
-    { chapter: '3195_loud', clips: 1, seconds: 5, rms_db: -14, peak: 0.95 },
+    { chapter: '3203_x', clips: 1, seconds: 4, ...level(-26, -27, -25), measured: 1, peak: 0.3 },
+    { chapter: '3195_loud', clips: 1, seconds: 5, ...level(-14, -15, -13), measured: 1, peak: 0.95 },
+    { chapter: '3210_mid', clips: 2, seconds: 6, ...level(-25, -26, -24), measured: 2, peak: 0.4 },
   ],
   words: { min: 2, max: 5, avg: 3.5 },
   quality: { analyzed: 1, total: 2, clipping: 0, loud: 1, quiet: 0, choppy: 0, long_edges: 0 },
@@ -328,31 +332,226 @@ it('zooms into one character and back out', async () => {
   await waitFor(() => expect(lastLines().voice_ids).toEqual([]));
 });
 
-it('narrows by clicking the length chart, tags and chapters, with removable filter chips', async () => {
+const explorer = () => ({
+  length: screen.getByRole('region', { name: 'fishDataset.chart_length' }),
+  tags: screen.getByRole('region', { name: 'fishDataset.chart_tags' }),
+  chapters: screen.getByRole('region', { name: 'fishDataset.chart_chapters' }),
+});
+const bar = (index: number) => within(explorer().length).getAllByRole('button')[index];
+const boxes = () => within(screen.getByRole('list', { name: 'fishDataset.chart_chapters' })).getAllByRole('checkbox');
+const tick = (name: RegExp | string) => within(explorer().chapters).getByRole('checkbox', { name: new RegExp(String(name)) });
+const apply = () => fireEvent.click(screen.getByRole('button', { name: 'fishDataset.explorer_apply' }));
+const requests = () => mock.api.mock.calls.filter(([p]) => String(p).startsWith('/api/fish/dataset/lines')).length;
+const summary = () => screen.getByTestId('chapter-summary').textContent ?? '';
+
+it('stages Explorer clicks and sends them together on Apply, with one chip per kind of choice', async () => {
   render(<FishDatasetPage />);
   await screen.findAllByTestId('clip-row');
-  const length = screen.getByRole('region', { name: 'fishDataset.chart_length' });
-  fireEvent.click(within(length).getAllByRole('button')[3]); // the 3-4 s bar
-  await waitFor(() => expect(lastLines()).toMatchObject({ min_dur: 3, max_dur: 4 }));
-  expect(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_dur/ })).toBeInTheDocument();
+  await waitFor(() => expect(requests()).toBeGreaterThan(0));
+  const before = requests();
 
-  const tags = screen.getByRole('region', { name: 'fishDataset.chart_tags' });
-  fireEvent.click(within(tags).getByRole('button', { name: /tag_off .*calm/ }));
-  await waitFor(() => expect(lastLines().tags_all).toEqual(['calm']));
-  fireEvent.click(within(tags).getByRole('button', { name: /tag_all .*calm/ }));
-  await waitFor(() => expect(lastLines()).toMatchObject({ tags_all: [], tags_none: ['calm'] }));
-  fireEvent.click(within(tags).getByRole('button', { name: /tag_none .*calm/ }));
-  await waitFor(() => expect(lastLines().tags_none).toEqual([]));
+  fireEvent.click(bar(3)); // 3-4 s
+  fireEvent.click(bar(1)); // 1-2 s: not next to the first, picked second
+  fireEvent.click(within(explorer().tags).getByRole('button', { name: /tag_off .*calm/ }));
+  fireEvent.click(within(explorer().tags).getByRole('button', { name: /tag_off .*slow/ }));
+  fireEvent.click(tick('3195_loud'));
+  expect(screen.getByText(/fishDataset\.explorer_pending .*"count":5/)).toBeInTheDocument();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(requests()).toBe(before); // nothing is asked until Apply
 
-  const chapters = screen.getByRole('region', { name: 'fishDataset.chart_chapters' });
-  fireEvent.click(within(chapters).getByRole('button', { name: /3203_x/ }));
-  await waitFor(() => expect(lastLines().chapters).toEqual(['3203_x']));
-  expect(within(chapters).getByRole('status')).toHaveTextContent('fishDataset.level_warning'); // -14 vs -26 dB
+  apply();
+  await waitFor(() =>
+    expect(lastLines()).toMatchObject({
+      dur_ranges: [[1, 2], [3, 4]],
+      tags_any: ['calm', 'slow'],
+      tags_all: [],
+      chapters: ['3203_x', '3210_mid'],
+    }),
+  );
+  expect(requests()).toBe(before + 1); // one request carries every change
+  expect(screen.getByText(/fishDataset\.explorer_in_effect/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_dur_ranges.*1–2, 3–4/ })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_tag_any/ })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_chapters.*count.*2/ })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_dur/ }));
-  await waitFor(() => expect(lastLines()).toMatchObject({ min_dur: null, max_dur: null, chapters: ['3203_x'] }));
-  fireEvent.click(screen.getByRole('button', { name: /fishDataset\.remove_filter .*3203_x/ }));
+  fireEvent.click(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_dur_ranges/ }));
+  await waitFor(() => expect(lastLines().dur_ranges).toEqual([]));
+  fireEvent.click(screen.getByRole('button', { name: /fishDataset\.remove_filter .*chip_chapters/ }));
   await waitFor(() => expect(lastLines().chapters).toEqual([]));
+});
+
+it('Discard puts every staged choice back and sends nothing', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const before = requests();
+  fireEvent.click(bar(2));
+  fireEvent.click(within(explorer().tags).getByRole('button', { name: /tag_off .*calm/ }));
+  fireEvent.click(tick('3195_loud'));
+  expect(bar(2)).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'fishDataset.explorer_discard' }));
+  expect(bar(2)).toHaveAttribute('aria-pressed', 'false');
+  expect(tick('3195_loud')).toBeChecked();
+  expect(within(explorer().tags).getByRole('button', { name: /tag_off .*calm/ })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'fishDataset.explorer_apply' })).toBeDisabled();
+  expect(requests()).toBe(before);
+});
+
+it('cycles tags include, exclude, off and applies Any of or All of as tags_any or tags_all', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const calm = () => within(explorer().tags).getByRole('button', { name: /"tag":"calm"/ });
+  fireEvent.click(calm());
+  expect(calm()).toHaveAttribute('data-state', 'include');
+  fireEvent.click(calm());
+  expect(calm()).toHaveAttribute('data-state', 'exclude');
+  fireEvent.click(calm());
+  expect(calm()).toHaveAttribute('data-state', 'off');
+  fireEvent.click(calm());
+  fireEvent.click(within(explorer().tags).getByRole('button', { name: /"tag":"slow"/ }));
+  fireEvent.click(within(explorer().tags).getByRole('button', { name: 'fishDataset.tag_mode_all' }));
+  expect(screen.getByText(/explorer_pending .*"count":3/)).toBeInTheDocument(); // two tags and the mode
+  apply();
+  await waitFor(() => expect(lastLines()).toMatchObject({ tags_all: ['calm', 'slow'], tags_any: [], tags_none: [] }));
+
+  fireEvent.click(within(explorer().tags).getByRole('button', { name: 'fishDataset.tag_mode_any' }));
+  apply();
+  await waitFor(() => expect(lastLines()).toMatchObject({ tags_any: ['calm', 'slow'], tags_all: [] }));
+  fireEvent.click(calm()); // included -> excluded
+  apply();
+  await waitFor(() => expect(lastLines()).toMatchObject({ tags_any: ['slow'], tags_none: ['calm'] }));
+});
+
+it('keeps every chapter listed after a second filter is applied, and edits it in any order', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const names = () => boxes().map((c) => c.getAttribute('aria-label') ?? '');
+  expect(names()).toHaveLength(3);
+  expect(boxes().every((c) => (c as HTMLInputElement).checked)).toBe(true);
+
+  fireEvent.click(bar(4)); // a length filter first
+  apply();
+  await waitFor(() => expect(lastLines().dur_ranges).toEqual([[4, null]]));
+  expect(names()).toHaveLength(3); // still complete, in the same order
+  expect(names()[0]).toMatch(/3195_loud/); // stable, by name
+
+  fireEvent.click(tick('3203_x')); // untick in one order ...
+  apply();
+  await waitFor(() => expect(lastLines().chapters).toEqual(['3195_loud', '3210_mid']));
+  expect(names()).toHaveLength(3);
+  expect(tick('3203_x')).not.toBeChecked();
+  fireEvent.click(tick('3210_mid')); // ... then another
+  apply();
+  await waitFor(() => expect(lastLines().chapters).toEqual(['3195_loud']));
+  fireEvent.click(tick('3203_x')); // tick one back that was left out
+  fireEvent.click(tick('3210_mid'));
+  apply();
+  await waitFor(() => expect(lastLines().chapters).toEqual([])); // all ticked clears the filter
+  expect(names()).toHaveLength(3);
+});
+
+it('selects all, none and inverts the chapters, and none sends a filter that matches nothing', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const ticked = () => boxes().filter((c) => (c as HTMLInputElement).checked).length;
+  const chap = within(explorer().chapters);
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.chap_none' }));
+  expect(ticked()).toBe(0);
+  apply();
+  await waitFor(() => expect(lastLines().chapters).toEqual(['']));
+  expect(screen.getByRole('button', { name: /remove_filter .*chip_chapters_none/ })).toBeInTheDocument();
+  expect(ticked()).toBe(0);
+  fireEvent.click(tick('3195_loud'));
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.chap_invert' }));
+  expect(ticked()).toBe(2);
+  expect(tick('3195_loud')).not.toBeChecked();
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.chap_all' }));
+  expect(ticked()).toBe(3);
+  apply();
+  await waitFor(() => expect(lastLines().chapters).toEqual([]));
+});
+
+it('ticks the chapters within N dB of the median level, and only the ones a name filter shows', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const chap = within(explorer().chapters);
+  // levels -26, -14 and -25: the median is -25
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.chap_within' }));
+  expect(tick('3203_x')).toBeChecked();
+  expect(tick('3210_mid')).toBeChecked();
+  expect(tick('3195_loud')).not.toBeChecked();
+  expect(summary()).toMatch(/"selected":2,"total":3,"minutes":"0.2","clips":3/);
+
+  fireEvent.change(chap.getByLabelText('fishDataset.chap_within_db'), { target: { value: '0.5' } });
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.chap_within' }));
+  expect(tick('3203_x')).not.toBeChecked(); // 1 dB away
+  expect(tick('3210_mid')).toBeChecked();
+
+  fireEvent.change(chap.getByLabelText('fishDataset.chap_find'), { target: { value: 'loud' } });
+  expect(boxes()).toHaveLength(1);
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.chap_all' }));
+  fireEvent.change(chap.getByLabelText('fishDataset.chap_find'), { target: { value: '' } });
+  expect(tick('3195_loud')).toBeChecked();
+  expect(tick('3210_mid')).toBeChecked(); // not touched while hidden
+  fireEvent.change(chap.getByLabelText('fishDataset.chap_find'), { target: { value: 'nothing' } });
+  expect(chap.getByText(/chap_nothing/)).toBeInTheDocument();
+});
+
+it('summarizes the ticked chapters, flags a level 6 dB or more from the median, and can sort by level', async () => {
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  expect(summary()).toMatch(/"selected":3,"total":3,"minutes":"0.3","clips":4/);
+  fireEvent.click(tick('3195_loud'));
+  expect(summary()).toMatch(/"selected":2,"total":3,"minutes":"0.2","clips":3/);
+  const chap = within(explorer().chapters);
+  expect(chap.getByText(/chap_level .*"median":-14/).textContent).toContain('⚠');
+  expect(chap.getByText(/chap_level .*"median":-26/).textContent).not.toContain('⚠');
+  expect(chap.getByRole('note')).toHaveTextContent('fishDataset.level_warning');
+  fireEvent.click(chap.getByLabelText('fishDataset.chap_sort_level'));
+  const order = boxes().map((c) => c.getAttribute('aria-label') ?? '');
+  expect(order.map((x) => x.match(/3\d+_\w+/)?.[0])).toEqual(['3203_x', '3210_mid', '3195_loud']);
+});
+
+it('says so when chapters are not measured yet and offers to measure them', async () => {
+  const facets = {
+    ...FACETS,
+    chapters: [
+      { chapter: '3203_x', clips: 3, seconds: 90, rms_db: null, rms_min: null, rms_max: null, rms_p10: null, rms_p90: null, measured: 0, peak: null },
+      { chapter: '3204_y', clips: 2, seconds: 60, ...level(-20, -21, -19), measured: 1, peak: 0.3 },
+    ],
+  };
+  const base = mock.api.getMockImplementation()!;
+  mock.api.mockImplementation((path: string, init?: RequestInit) =>
+    path === '/api/fish/dataset/facets' ? Promise.resolve(facets) : base(path, init),
+  );
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const chap = within(explorer().chapters);
+  expect(chap.getByText('fishDataset.chap_unmeasured')).toBeInTheDocument();
+  expect(chap.getByText(/chap_unmeasured_note .*"count":2/)).toBeInTheDocument();
+  fireEvent.click(chap.getByRole('button', { name: 'fishDataset.analyze' }));
+  await waitFor(() => expect(calls()).toContainEqual(['/api/fish/dataset/analyze', 'POST']));
+});
+
+it('keeps a ticked chapter that has no matching clips, dimmed, so it can be unticked', async () => {
+  const base = mock.api.getMockImplementation()!;
+  const facets = {
+    ...FACETS,
+    chapters: [
+      ...FACETS.chapters,
+      { chapter: '3300_empty', clips: 0, seconds: 0, rms_db: null, rms_min: null, rms_max: null, rms_p10: null, rms_p90: null, measured: 0, peak: null },
+    ],
+  };
+  mock.api.mockImplementation((path: string, init?: RequestInit) =>
+    path === '/api/fish/dataset/facets' ? Promise.resolve(facets) : base(path, init),
+  );
+  render(<FishDatasetPage />);
+  await screen.findAllByTestId('clip-row');
+  const row = tick('3300_empty').closest('li')!;
+  expect(row).toHaveClass('opacity-50');
+  expect(within(row).queryByText('fishDataset.chap_unmeasured')).toBeNull();
+  fireEvent.click(tick('3300_empty'));
+  apply();
+  await waitFor(() => expect(lastLines().chapters).toEqual(['3203_x', '3195_loud', '3210_mid']));
 });
 
 it('measures the audio on request and sends quality limits', async () => {

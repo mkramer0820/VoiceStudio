@@ -125,12 +125,31 @@ export interface DatasetLine {
   stats?: ClipStats | null;
 }
 
+/** A length range in seconds, `[from, to)`; `to` null has no upper bound. */
+export type LengthRange = [number, number | null];
+
+export interface ChapterFacet {
+  chapter: string;
+  clips: number;
+  seconds: number;
+  /** Median level of the measured clips, with their spread. */
+  rms_db: number | null;
+  rms_min: number | null;
+  rms_max: number | null;
+  rms_p10: number | null;
+  rms_p90: number | null;
+  /** How many of the clips have audio measurements. */
+  measured: number;
+  peak: number | null;
+}
+
 export interface DatasetFacets {
   clips: number;
   seconds: number;
   duration: Array<{ from: number; to: number | null; clips: number }>;
   tags: Array<[string, number]>;
-  chapters: Array<{ chapter: string; clips: number; seconds: number; rms_db: number | null; peak: number | null }>;
+  /** Per chapter, under every filter except the chapters filter itself (so the list stays complete). */
+  chapters: ChapterFacet[];
   words: { min: number; max: number; avg: number } | null;
   levels?: LevelSummary;
   quality: {
@@ -157,12 +176,16 @@ export type SortKey = 'order' | 'duration_desc' | 'duration_asc' | 'words_desc' 
 export interface DatasetFilters {
   q: string;
   chapters: string[];
+  /** Clips must carry at least one of these tags. */
+  tagsAny: string[];
   /** Clips must carry every one of these tags. */
   tagsAll: string[];
   /** Clips must carry none of these tags. */
   tagsNone: string[];
   minDur: string;
   maxDur: string;
+  /** Length ranges picked on the chart; a clip passes in ANY of them (and the min/max above). */
+  durRanges: LengthRange[];
   minWords: string;
   maxWords: string;
   duplicates: boolean;
@@ -185,10 +208,12 @@ export interface DatasetFilters {
 export const EMPTY_FILTERS: DatasetFilters = {
   q: '',
   chapters: [],
+  tagsAny: [],
   tagsAll: [],
   tagsNone: [],
   minDur: '',
   maxDur: '',
+  durRanges: [],
   minWords: '',
   maxWords: '',
   duplicates: false,
@@ -288,10 +313,12 @@ export function useFishDataset() {
       voice_ids: [...voices],
       chapters: filters.chapters,
       q: filters.q,
+      tags_any: filters.tagsAny,
       tags_all: filters.tagsAll,
       tags_none: filters.tagsNone,
       min_dur: num(filters.minDur),
       max_dur: num(filters.maxDur),
+      dur_ranges: filters.durRanges,
       min_words: num(filters.minWords),
       max_words: num(filters.maxWords),
       duplicates: filters.duplicates,
