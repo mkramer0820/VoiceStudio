@@ -99,10 +99,27 @@ class TrainOptions:
     tokenizer_path: str = "eustlb/higgs-audio-v2-tokenizer"
     python: Optional[str] = None  # interpreter that has torch + accelerate + omnivoice; default: this one
     allow_download: bool = False  # off = child processes run with HF_HUB_OFFLINE=1
+    # Fuller control, used by the exported training bundle (the local runner keeps its defaults).
+    mode: str = "lora"  # "lora" adapter, or "full" fine-tuning of every weight
+    mixed_precision: str = "bf16"  # bf16 | fp16 | no
+    warmup_ratio: float = 0.05
+    weight_decay: float = 0.01
+    max_grad_norm: float = 1.0
+    lr_scheduler_type: str = "cosine"  # cosine | linear | constant
+    save_every: int = 0  # steps between checkpoints; 0 = a fifth of the run
+    eval_every: int = 0  # steps between held-out evaluations; 0 = same as save_every
+    keep_last_n_checkpoints: int = 2  # -1 keeps all
+    num_workers: int = 2
+    lora_target_modules: list = dataclasses.field(default_factory=lambda: [
+        "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
 
     _RANGES = {"steps": (10, 200000), "learning_rate": (1e-6, 1e-2), "batch_tokens": (512, 65536),
                "gradient_accumulation_steps": (1, 64), "lora_r": (1, 256), "lora_alpha": (1, 512),
-               "lora_dropout": (0.0, 0.5), "seed": (0, 2**31 - 1)}
+               "lora_dropout": (0.0, 0.5), "seed": (0, 2**31 - 1), "warmup_ratio": (0.0, 0.5),
+               "weight_decay": (0.0, 1.0), "max_grad_norm": (0.0, 100.0), "save_every": (0, 200000),
+               "eval_every": (0, 200000), "keep_last_n_checkpoints": (-1, 100), "num_workers": (0, 32)}
+    _CHOICES = {"mode": ("lora", "full"), "mixed_precision": ("bf16", "fp16", "no"),
+                "lr_scheduler_type": ("cosine", "linear", "constant")}
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "TrainOptions":
@@ -116,8 +133,16 @@ class TrainOptions:
             value = getattr(opts, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
                 raise ValueError(f"{name} must be a number between {low} and {high}.")
-        for name in ("steps", "batch_tokens", "gradient_accumulation_steps", "lora_r", "seed"):
+        for name in ("steps", "batch_tokens", "gradient_accumulation_steps", "lora_r", "seed", "save_every",
+                     "eval_every", "keep_last_n_checkpoints", "num_workers"):
             setattr(opts, name, int(getattr(opts, name)))
+        for name, allowed in cls._CHOICES.items():
+            if getattr(opts, name) not in allowed:
+                raise ValueError(f"{name} must be one of: {', '.join(allowed)}.")
+        modules = opts.lora_target_modules
+        if (not isinstance(modules, list) or not modules or len(modules) > 32
+                or not all(isinstance(m, str) and re.fullmatch(r"[A-Za-z0-9_.]{1,60}", m) for m in modules)):
+            raise ValueError("lora_target_modules must be a short list of layer names such as q_proj.")
         for name in ("base_checkpoint", "tokenizer_path"):
             value = str(getattr(opts, name)).strip()
             if not value or len(value) > 400 or "\x00" in value:
@@ -252,23 +277,27 @@ def validate_export(export_dir: str, *, check_audio: bool = True) -> dict:
 # ── configs and commands ──
 def build_train_config(opts: TrainOptions, *, has_val: bool, resume_from: Optional[str] = None) -> dict:
     """The OmniVoice ``TrainingConfig`` JSON for a LoRA run. Every key is a real ``TrainingConfig`` field."""
-    save = max(50, opts.steps // 5)
+    save = opts.save_every or max(50, opts.steps // 5)
+    lora = opts.mode == "lora"
     return {
         "llm_name_or_path": "Qwen/Qwen3-0.6B",
         "init_from_checkpoint": opts.base_checkpoint,
         "resume_from_checkpoint": resume_from,
-        "lora_enabled": True, "lora_r": opts.lora_r, "lora_alpha": opts.lora_alpha, "lora_dropout": opts.lora_dropout,
-        "lora_train_modules": ["audio_heads"] if opts.train_heads else [],
+        "lora_enabled": lora, "lora_r": opts.lora_r, "lora_alpha": opts.lora_alpha, "lora_dropout": opts.lora_dropout,
+        "lora_target_modules": list(opts.lora_target_modules),
+        "lora_train_modules": ["audio_heads"] if (lora and opts.train_heads) else [],
         "eval_at_start": has_val,
-        "learning_rate": opts.learning_rate, "steps": opts.steps, "seed": opts.seed,
-        "warmup_type": "ratio", "warmup_ratio": 0.05,
+        "learning_rate": opts.learning_rate, "weight_decay": opts.weight_decay, "max_grad_norm": opts.max_grad_norm,
+        "steps": opts.steps, "seed": opts.seed, "lr_scheduler_type": opts.lr_scheduler_type,
+        "warmup_type": "ratio", "warmup_ratio": opts.warmup_ratio,
         "batch_tokens": opts.batch_tokens, "gradient_accumulation_steps": opts.gradient_accumulation_steps,
-        "num_workers": 2,
-        "mixed_precision": "bf16", "allow_tf32": True,
+        "num_workers": opts.num_workers,
+        "mixed_precision": opts.mixed_precision, "allow_tf32": True,
         # finetune-style sampling (no pinyin / instruct prompts: the export carries plain text only)
         "use_pinyin_ratio": 0.0, "instruct_ratio": 0.0, "only_instruct_ratio": 0.0, "language_ratio": 0.8,
         "logging_steps": min(25, max(1, opts.steps // 10)),
-        "eval_steps": save, "save_steps": save, "keep_last_n_checkpoints": 2,
+        "eval_steps": opts.eval_every or save, "save_steps": save,
+        "keep_last_n_checkpoints": opts.keep_last_n_checkpoints,
     }
 
 

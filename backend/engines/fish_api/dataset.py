@@ -61,27 +61,49 @@ def set_root(path: Optional[str]) -> Optional[str]:
 
 
 # ── text helpers ──
-def normalize_tags(names: Optional[Iterable[str]]) -> dict[str, str]:
-    """Tags to keep, as ``{tag as written in the data: tag to write}``.
+_ENTRY_RE = re.compile(r"^\[?\s*([^\[\]:=]+?)\s*\]?\s*(?:[:=]\s*(.*))?$")
+_BARE_RE = re.compile(r"[\w\- ]{1,40}")
 
-    ``"[Laughter], sigh"`` keeps both as they are. ``"laughing=laughter"`` keeps ``[laughing]`` but
-    writes it as ``[laughter]``, for a model that spells the same sound differently.
+
+def normalize_tags(names: Optional[Iterable[str]]) -> dict[str, str]:
+    """The tag dictionary: ``{tag as written in the data: what to write instead}``.
+
+    Entries are separated by commas, semicolons or new lines. ``[Laughter], sigh`` keeps both as they
+    are. ``laughing=laughter`` and ``[laughing]:[laughter]`` keep the sound under another spelling,
+    and ``[frustrated]:(sad)`` writes the text after the colon exactly as typed, for a model that marks
+    emotion differently. A bare word is written in square brackets; anything with other characters
+    (such as parentheses) is written as given. Tags not in the dictionary are removed.
     """
     out: dict[str, str] = {}
-    for name in names or ():
-        for part in str(name).split(","):
-            source, _, target = part.partition("=")
-            source = source.strip().strip("[]").strip().lower()[:40]
-            target = target.strip().strip("[]").strip().lower()[:40] or source
+    if isinstance(names, str):
+        names = [names]
+    for item in names or ():
+        for part in re.split(r"[,;\n]+", str(item)):
+            match = _ENTRY_RE.match(part.strip())
+            if not match:
+                continue
+            source = match.group(1).strip().lower()[:40]
+            target = (match.group(2) or "").strip()
+            if len(target) > 2 and target.startswith("[") and target.endswith("]") and "[" not in target[1:-1]:
+                target = target[1:-1].strip()  # [sad] and sad both mean the tag [sad]
+            target = "".join(c for c in target if c >= " ")[:40]
+            if _BARE_RE.fullmatch(target):
+                target = target.lower()
             if source:
-                out[source] = target
+                out[source] = target or source
     return out
+
+
+def render_tag(value: str) -> str:
+    """How a dictionary value is written into the text: bare words become ``[word]``."""
+    return f"[{value}]" if _BARE_RE.fullmatch(value) else value
 
 
 def strip_tags(text: str, keep: Optional[Iterable[str]] = None) -> str:
     """Plain speech text: inline ``[emotion]`` / ``[break]`` tags removed, spaces tidied.
 
-    Tags named in ``keep`` stay (renamed if given as ``name=other``); every other tag is dropped.
+    Tags in the dictionary (see ``normalize_tags``) stay, converted where the dictionary says so;
+    every other tag is dropped.
     """
     kept = keep if isinstance(keep, dict) else normalize_tags(keep)
     if kept:
@@ -89,7 +111,7 @@ def strip_tags(text: str, keep: Optional[Iterable[str]] = None) -> str:
             name = m.group(0)[1:-1].strip().lower()
             if name not in kept:
                 return " "
-            return m.group(0) if kept[name] == name else f"[{kept[name]}]"
+            return m.group(0) if kept[name] == name else render_tag(kept[name])
 
         text = TAG_RE.sub(one, text or "")
     else:
@@ -449,7 +471,7 @@ def _in_validation(sha: str, fraction: float) -> bool:
 def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode: str = "keep",
            sample_rate: Optional[int] = None, val_fraction: float = 0.0, name: str = "fish-dataset",
            keep_tags: Optional[list[str]] = None, loudness_db: Optional[float] = None,
-           language_id: str = "en") -> dict:
+           language_id: str = "en", strict_tags: bool = True, training: Optional[dict] = None) -> dict:
     """Write the selected clips under ``dest/<name>/<speaker>/`` plus metadata. Never overwrites."""
     import numpy as np
     import soundfile as sf
@@ -474,13 +496,21 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
             raise ValueError(f"The omnivoice format is always {OMNIVOICE_RATE} Hz; leave the sample rate unset.")
         sample_rate = OMNIVOICE_RATE
         text_mode = "strip"  # OmniVoice reads plain text plus its own tags, never Fish's [slow] / [calm]
-        unknown = sorted({t for t in kept.values() if t not in OMNIVOICE_TAGS})
-        if unknown:
-            raise ValueError("OmniVoice does not know the tag(s) " + ", ".join(f"[{t}]" for t in unknown)
-                             + ". Map them to one of: " + ", ".join(OMNIVOICE_TAGS) + ", or leave them out.")
+        unknown = sorted({render_tag(t) for t in kept.values() if t not in OMNIVOICE_TAGS})
+        if unknown and strict_tags:
+            raise ValueError("OmniVoice does not know the tag(s) " + ", ".join(unknown)
+                             + ". Convert them to one of: " + ", ".join(OMNIVOICE_TAGS) + ", leave them out, "
+                             "or untick 'only tags OmniVoice knows' to write your own.")
         language_id = (language_id or "en").strip()
         if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", language_id):
             raise ValueError("language_id must look like en, de or pt-BR.")
+    train_options = None
+    if training is not None:
+        if not omni:
+            raise ValueError("A training configuration is written with the omnivoice format only.")
+        from . import training_bundle
+
+        train_options = training_bundle.options_from(training)
     lines = select(corpus, {**f, "sort": "order"})
     if not lines:
         raise ValueError("Nothing matches the current filters.")
@@ -504,6 +534,7 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
     seconds = 0.0
     adjusted = peak_limited = 0
     omni_rows: list[tuple[bool, dict]] = []
+    portable_rows: list[tuple[bool, dict]] = []  # same rows, audio paths relative to the export folder
     for line in lines:
         speaker = names[line["voice_id"]]
         counters[speaker] += 1
@@ -539,6 +570,9 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
         if omni:
             omni_rows.append((rows[-1]["validation"], {"id": clip_id, "audio_path": os.path.abspath(target),
                                                        "text": text, "language_id": language_id}))
+            portable_rows.append((rows[-1]["validation"], {
+                "id": clip_id, "audio_path": os.path.relpath(target, out_dir).replace(os.sep, "/"),
+                "text": text, "language_id": language_id}))
         if "fish_lab" in formats:
             with open(os.path.join(folder, clip_id + ".lab"), "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(text + "\n")
@@ -561,8 +595,10 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
         write_omni(os.path.join(out_dir, "omnivoice_train.jsonl"), [r for v, r in omni_rows if not v])
+        write_omni(os.path.join(out_dir, "omnivoice_train.relative.jsonl"), [r for v, r in portable_rows if not v])
         if val_fraction > 0:
             write_omni(os.path.join(out_dir, "omnivoice_val.jsonl"), [r for v, r in omni_rows if v])
+            write_omni(os.path.join(out_dir, "omnivoice_val.relative.jsonl"), [r for v, r in portable_rows if v])
     if "ljspeech" in formats:
         for speaker, items in csv_rows.items():
             with open(os.path.join(out_dir, speaker, "metadata.csv"), "w", encoding="utf-8", newline="") as fh:
@@ -581,6 +617,12 @@ def export(corpus: Corpus, f: dict, dest: str, *, formats: list[str], text_mode:
                   + "). Check Fish's terms before using it to train another model.",
         "filters": {k: v for k, v in f.items() if k != "exclude_keys"} | {"excluded": len(f.get("exclude_keys") or [])},
     }
+    if train_options is not None:
+        train_seconds = sum(r["duration"] for r in rows if not r["validation"])
+        card["training"] = training_bundle.write_bundle(
+            out_dir, train_options, name=os.path.basename(out_dir), has_val=val_fraction > 0,
+            train_clips=sum(1 for r in rows if not r["validation"]), train_seconds=train_seconds,
+            language_id=language_id, speakers=list(per_speaker))
     with open(os.path.join(out_dir, "dataset.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(card, fh, ensure_ascii=False, indent=2)
     return {**card, "path": out_dir}

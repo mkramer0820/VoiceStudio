@@ -72,6 +72,8 @@ class _Export(_Filter):
     keep_tags: list[str] = Field(default_factory=list, max_length=100, description="Tags left in the text when text_mode is strip")
     loudness_db: Optional[float] = Field(None, ge=-60, le=-3, description="Bring every clip to this RMS level (dBFS); null leaves levels alone")
     language_id: str = Field("en", min_length=2, max_length=12, description="language_id written by the omnivoice format")
+    strict_tags: bool = Field(True, description="omnivoice format: refuse tags OmniVoice does not know")
+    training: Optional[dict] = Field(None, description="omnivoice format: also write train_config.json, data_config.json, train.sh and COLAB.md using these settings")
 
 
 def _corpus(refresh: bool = False):
@@ -162,12 +164,13 @@ async def export(body: _Export):
     """Write the selected clips and metadata into a new folder (explicit action; local only)."""
     ds = _ds()
     corpus = _corpus()
-    spec = body.model_dump()
+    spec = {k: v for k, v in body.model_dump().items() if k in _Filter.model_fields}
     try:
         return await run_in_threadpool(
             lambda: ds.export(corpus, spec, body.dest, formats=body.formats, text_mode=body.text_mode,
                               sample_rate=body.sample_rate, val_fraction=body.val_fraction, name=body.name,
-                              keep_tags=body.keep_tags, loudness_db=body.loudness_db, language_id=body.language_id))
+                              keep_tags=body.keep_tags, loudness_db=body.loudness_db, language_id=body.language_id,
+                              strict_tags=body.strict_tags, training=body.training))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except OSError as exc:

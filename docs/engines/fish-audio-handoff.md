@@ -147,7 +147,14 @@ Speakers are grouped by voice id, not name (two names can share one voice). Olde
 
 **Run folder layout** (`fish_training/run_<time>_<id>/`): `job.json`, `run.log`, `train_config.json`, `data_config.json`, `tokens/{train,dev}/` (skipped on resume when `data.lst` exists), `output/` (checkpoints, `eval_history.jsonl`), `adapter/` (final adapter, `adapter.json`, `evaluation.json`), `heldout.jsonl`, `dry_run.json` for dry runs.
 
-### Owner decisions needed
+### Owner decisions (answered 2026-10-24)
+
+- **Where training runs:** mostly outside this machine (Google Colab), because of GPU limits. The dataset is transferred there, so the export must be self-contained: relative paths, the configs and a script. This is the `training` option of the export (`fish_api/training_bundle.py`, `train.sh`, `COLAB.md`). The in-app Train button stays for a machine that can train.
+- **`peft` vs in-repo LoRA:** depends on the model that gets trained and will be settled out of this repo. The exported config uses the in-repo `lora_*` fields; the guide says how to carry the hyper-parameters over to another library.
+- **Tags:** `[slow]` exists only in Fish output, so the owner wants a **user-built tag dictionary** (`[frustrated]:(sad)`: convert to whatever the target model understands; everything not listed is removed) plus plain removal as the default. Most sets have no tags to convert. The export dialog builds the dictionary from the unique tags actually present in the selection, so nothing has to be typed from memory.
+- **Training defaults:** configurable per export (steps, learning rate, batch tokens, rank, precision, checkpoint cadence, base model, LoRA or full). The defaults below are still unmeasured. Steps should be set by passes over the data, not by a fixed number: 2000 steps is about 19 passes of the narrator's 4 hours but over 100 passes of a 30-minute voice (estimate, assuming 25 frames per second); watch the held-out loss and keep the best checkpoint.
+
+### Owner decisions needed (original list)
 
 1. **`peft` dependency.** Options: (a) keep the in-repo LoRA (~250 lines, no lockfile change, adapter format is this repo's own); (b) add `peft` to the training environment (standard adapter format, `merge_and_unload`, DoRA/rsLoRA for free, but a new dependency in `pyproject.toml`/`uv.lock` and a CI/Docker check, and a version pin against `transformers>=5.10`). Recommendation: stay with (a) until a second adapter consumer needs the PEFT format; switching later only touches `lora.py` and the adapter loader.
 2. **Which base checkpoint.** The default is `k2-fsa/OmniVoice` (what `examples/config/train_config_finetune.json` uses). It is a Hugging Face download and the licence/terms are the model's. Options: that one, or the checkpoint the app's own OmniVoice engine loads (so the adapter matches what synthesis runs). Recommendation: use whatever the engine loads, once adapter loading in synthesis exists; confirm they are the same revision first.

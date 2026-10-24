@@ -434,3 +434,109 @@ def test_loudness_option_is_validated_and_off_by_default(root, tmp_path):
         dataset.export(c, {}, str(tmp_path / "o"), formats=["jsonl"], loudness_db=0.0)
     out = dataset.export(c, {}, str(tmp_path / "p"), formats=["jsonl"])
     assert out["loudness"] is None and out["sample_rate"] == "as rendered"
+
+
+# ── tag dictionary, portable rows and the training bundle ──
+def test_the_tag_dictionary_accepts_both_spellings_and_literal_replacements():
+    d = dataset.normalize_tags(["[frustrated]:(sad)", "laughing=laughter", "[Sighing]:[sigh]", "calm", "angry:"])
+    assert d == {"frustrated": "(sad)", "laughing": "laughter", "sighing": "sigh", "calm": "calm", "angry": "angry"}
+    assert dataset.normalize_tags("a=b, c:(d)\n[e]:f; g") == {"a": "b", "c": "(d)", "e": "f", "g": "g"}
+    assert dataset.normalize_tags(["", " , ", "="]) == {}
+
+
+def test_a_dictionary_converts_listed_tags_and_removes_the_rest():
+    text = "[slow][frustrated] No! [laughing] Ha [calm] ok"
+    out = dataset.strip_tags(text, ["[frustrated]:(sad)", "laughing=laughter", "calm"])
+    assert out == "(sad) No! [laughter] Ha [calm] ok"
+    assert dataset.strip_tags(text) == "No! Ha ok"  # an empty dictionary is a plain strip
+    assert dataset.render_tag("sad") == "[sad]" and dataset.render_tag("(sad)") == "(sad)"
+
+
+def test_omnivoice_accepts_only_its_own_tags_unless_told_otherwise(tmp_path):
+    c = dataset.load(_loud_and_quiet(tmp_path))
+    with pytest.raises(ValueError, match=r"does not know the tag.*\(sad\)"):
+        dataset.export(c, {}, str(tmp_path / "a"), formats=["omnivoice"], keep_tags=["laughing:(sad)"])
+    out = dataset.export(c, {}, str(tmp_path / "b"), formats=["omnivoice"], keep_tags=["laughing:(sad)"],
+                         strict_tags=False)
+    texts = [r["text"] for r in _jsonl(os.path.join(out["path"], "omnivoice_train.jsonl"))]
+    assert "(sad) Hot clip one." in texts
+
+
+def test_the_omnivoice_export_also_writes_rows_with_relative_paths(tmp_path):
+    c = dataset.load(_loud_and_quiet(tmp_path))
+    out = dataset.export(c, {}, str(tmp_path / "o"), formats=["omnivoice"], val_fraction=0.25)
+    rel = _jsonl(os.path.join(out["path"], "omnivoice_train.relative.jsonl"))
+    absolute = _jsonl(os.path.join(out["path"], "omnivoice_train.jsonl"))
+    assert [r["id"] for r in rel] == [r["id"] for r in absolute]
+    assert all(not os.path.isabs(r["audio_path"]) and "\\" not in r["audio_path"] for r in rel)
+    assert all(os.path.isfile(os.path.join(out["path"], r["audio_path"])) for r in rel)
+    assert os.path.isfile(os.path.join(out["path"], "omnivoice_val.relative.jsonl"))
+
+
+def test_the_training_bundle_is_complete_valid_and_portable(tmp_path):
+    from engines.fish_api import training
+    from omnivoice.training.config import TrainingConfig
+
+    c = dataset.load(_loud_and_quiet(tmp_path))
+    out = dataset.export(c, {}, str(tmp_path / "o"), formats=["omnivoice"], val_fraction=0.25, name="narr set",
+                         training={"steps": 500, "learning_rate": 2e-4, "lora_r": 8, "lora_alpha": 16,
+                                   "batch_tokens": 2048, "base_checkpoint": "k2-fsa/OmniVoice",
+                                   "mixed_precision": "fp16", "save_every": 100, "keep_last_n_checkpoints": 3})
+    folder = out["path"]
+    for name in ("train_config.json", "data_config.json", "train.sh", "COLAB.md"):
+        assert os.path.isfile(os.path.join(folder, name)), name
+    cfg = json.load(open(os.path.join(folder, "train_config.json"), encoding="utf-8"))
+    assert set(cfg) <= set(TrainingConfig.__annotations__)  # every key is something the trainer reads
+    assert cfg["steps"] == 500 and cfg["learning_rate"] == 2e-4 and cfg["lora_enabled"] is True
+    assert cfg["lora_r"] == 8 and cfg["mixed_precision"] == "fp16" and cfg["save_steps"] == 100
+    assert cfg["keep_last_n_checkpoints"] == 3 and cfg["eval_steps"] == 100
+    data_cfg = json.load(open(os.path.join(folder, "data_config.json"), encoding="utf-8"))
+    assert data_cfg == {"train": [{"manifest_path": ["tokens/train/data.lst"]}],
+                        "dev": [{"manifest_path": ["tokens/dev/data.lst"]}]}
+    script = open(os.path.join(folder, "train.sh"), encoding="utf-8").read()
+    assert "omnivoice_train.relative.jsonl" in script and "omnivoice_val.relative.jsonl" in script
+    assert "--tokenizer_path" in script and "omnivoice.cli.train" in script and "\\" not in script
+    assert str(tmp_path).replace("\\", "/") not in script  # no local paths leak into the script
+    guide = open(os.path.join(folder, "COLAB.md"), encoding="utf-8").read()
+    assert "%cd /content/narr_set" in guide and "has **not been run on Colab" in guide and "passes" in guide and "rank 8" in guide
+    card = json.load(open(os.path.join(folder, "dataset.json"), encoding="utf-8"))
+    assert card["training"]["options"]["steps"] == 500 and "python" not in card["training"]["options"]
+    assert card["training"]["estimate"]["passes"] > 0
+    # the same folder still validates for the local runner
+    assert training.validate_export(folder, check_audio=False)["train_clips"] == len(_jsonl(os.path.join(folder, "omnivoice_train.jsonl")))
+
+
+def test_a_full_fine_tune_bundle_and_bad_settings(tmp_path):
+    c = dataset.load(_loud_and_quiet(tmp_path))
+    out = dataset.export(c, {}, str(tmp_path / "f"), formats=["omnivoice"], training={"mode": "full"})
+    cfg = json.load(open(os.path.join(out["path"], "train_config.json"), encoding="utf-8"))
+    assert cfg["lora_enabled"] is False and cfg["learning_rate"] == 5e-5
+    for bad in ({"steps": 1}, {"mode": "partial"}, {"mixed_precision": "int4"}, {"bogus": 1},
+                {"lora_target_modules": ["q proj!"]}, {"learning_rate": 5}):
+        with pytest.raises(ValueError):
+            dataset.export(c, {}, str(tmp_path / "x"), formats=["omnivoice"], training=bad)
+        assert not os.path.exists(tmp_path / "x")  # refused before anything was written
+    with pytest.raises(ValueError, match="omnivoice format"):
+        dataset.export(c, {}, str(tmp_path / "y"), formats=["jsonl"], training={"steps": 500})
+
+
+def test_the_pass_estimate_scales_with_the_data():
+    from engines.fish_api import training_bundle as tb
+
+    four_hours = tb.estimate(4 * 3600, 2000, 4096)
+    half_hour = tb.estimate(30 * 60, 2000, 4096)
+    assert 15 < four_hours["passes"] < 25 and half_hour["passes"] > 7 * four_hours["passes"]
+    steps = tb.suggest_steps(30 * 60, 4096, 5)
+    assert abs(tb.estimate(30 * 60, steps, 4096)["passes"] - 5) < 0.5
+    assert "not measured" in four_hours["note"]
+
+
+def test_the_export_route_takes_a_dictionary_and_a_training_config(api, root, tmp_path):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    res = api.post("/api/fish/dataset/export", json={
+        "dest": str(tmp_path / "ex2"), "formats": ["omnivoice"], "voice_ids": [NARR], "keep_tags": ["slow:(slow)"],
+        "strict_tags": False, "training": {"steps": 300}})
+    assert res.status_code == 200 and res.json()["training"]["options"]["steps"] == 300
+    bad = api.post("/api/fish/dataset/export", json={
+        "dest": str(tmp_path / "ex3"), "formats": ["omnivoice"], "training": {"steps": 3}})
+    assert bad.status_code == 422
