@@ -13,6 +13,17 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { getBridge } from '@/components/bridge';
+import {
+  EMPTY_TRAINING,
+  invalidKeys,
+  keepTagsOf,
+  trainingBody,
+  unknownTags,
+  type TagActions,
+  type TrainingForm,
+} from './export-options';
+import { TagsSection } from './export-tags';
+import { TrainingSection } from './export-training';
 import type { ExportOptions, ExportResult } from './use-fish-dataset';
 
 const FORMATS = ['jsonl', 'fish_lab', 'ljspeech', 'omnivoice'] as const;
@@ -51,7 +62,10 @@ export function ExportDialog({
   const [textMode, setTextMode] = useState<'keep' | 'strip'>('keep');
   const [rate, setRate] = useState('');
   const [val, setVal] = useState('5');
-  const [keep, setKeep] = useState('');
+  const [tagActions, setTagActions] = useState<TagActions>({});
+  const [strict, setStrict] = useState(true);
+  const [training, setTraining] = useState(true);
+  const [trainingForm, setTrainingForm] = useState<TrainingForm>(EMPTY_TRAINING);
   const [level, setLevel] = useState(false);
   const [levelDb, setLevelDb] = useState('-24');
   const [busy, setBusy] = useState(false);
@@ -64,18 +78,11 @@ export function ExportDialog({
 
   const omni = formats.includes('omnivoice');
   const stripped = omni || textMode === 'strip';
-  const keepList = keep
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const sourceOf = (entry: string) => entry.split('=')[0].replace(/[[\]]/g, '').trim().toLowerCase();
-  const kept = new Set(keepList.map(sourceOf));
-  const toggleKeep = (tag: string) =>
-    setKeep(
-      kept.has(tag)
-        ? keepList.filter((entry) => sourceOf(entry) !== tag).join(', ')
-        : [...keepList, tag].join(', '),
-    );
+  const tagNames = knownTags.map(([tag]) => tag);
+  const unknown = omni && strict ? unknownTags(tagNames, tagActions, omnivoiceTags) : [];
+  const writeTraining = omni && training;
+  const trainSeconds = seconds * (1 - Math.max(0, Math.min(0.49, Number(val) / 100 || 0)));
+  const trainingInvalid = writeTraining && invalidKeys(trainingForm).length > 0;
 
   const run = async () => {
     setBusy(true);
@@ -87,7 +94,9 @@ export function ExportDialog({
       text_mode: stripped ? 'strip' : 'keep',
       sample_rate: omni ? 24000 : rate ? Number(rate) : null,
       val_fraction: Math.max(0, Math.min(0.49, Number(val) / 100 || 0)),
-      keep_tags: stripped ? keepList : [],
+      keep_tags: stripped ? keepTagsOf(tagNames, tagActions) : [],
+      strict_tags: omni ? strict : undefined,
+      training: writeTraining ? trainingBody(trainingForm) : undefined,
       loudness_db: level && Number.isFinite(Number(levelDb)) ? Number(levelDb) : null,
     });
     setBusy(false);
@@ -189,36 +198,20 @@ export function ExportDialog({
             </p>
           )}
           {stripped && (
-            <div className="space-y-1">
-              <label htmlFor="ds-keep" className="text-xs font-medium">
-                {t('fishDataset.keep_tags')}
-              </label>
-              <Input
-                id="ds-keep"
-                className="font-mono text-xs"
-                placeholder="laughing=laughter, sighing=sigh"
-                value={keep}
-                onChange={(e) => setKeep(e.target.value)}
-              />
-              <p className="text-[11px] text-muted-foreground">{t('fishDataset.keep_tags_hint')}</p>
-              {knownTags.length > 0 && (
-                <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto" aria-label={t('fishDataset.known_tags')}>
-                  {knownTags.map(([tag, count]) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      aria-pressed={kept.has(tag)}
-                      onClick={() => toggleKeep(tag)}
-                      className={`rounded-full px-2 py-0.5 text-[10px] ${
-                        kept.has(tag) ? 'bg-primary/20 text-primary' : 'bg-muted/50 text-muted-foreground hover:bg-muted'
-                      }`}
-                    >
-                      [{tag}] {count}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <TagsSection
+              knownTags={knownTags}
+              actions={tagActions}
+              onChange={setTagActions}
+              unknown={unknown}
+              omnivoiceTags={omnivoiceTags}
+              checkKnown={omni && strict}
+            />
+          )}
+          {omni && (
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={strict} onChange={(e) => setStrict(e.target.checked)} />
+              {t('fishDataset.strict_tags')}
+            </label>
           )}
           <div className="space-y-1">
             <label className="flex items-center gap-2 text-xs font-medium">
@@ -255,6 +248,23 @@ export function ExportDialog({
             <p className="text-[11px] text-muted-foreground">{t('fishDataset.export_val_hint')}</p>
           </div>
 
+          {omni && (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-xs font-medium">
+                <input type="checkbox" checked={training} onChange={(e) => setTraining(e.target.checked)} />
+                {t('fishDataset.train_write')}
+              </label>
+              {training && (
+                <details className="rounded-md border border-border/50 p-2">
+                  <summary className="cursor-pointer text-xs font-medium">{t('fishDataset.train_setup')}</summary>
+                  <div className="mt-2">
+                    <TrainingSection form={trainingForm} onChange={setTrainingForm} seconds={trainSeconds} />
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
+
           <p className="rounded-md bg-amber-500/10 p-2 text-[11px] leading-snug text-amber-500">
             {t('fishDataset.terms_note')}
           </p>
@@ -263,6 +273,12 @@ export function ExportDialog({
             <div role="status" className="space-y-1 rounded-md bg-emerald-500/10 p-2 text-xs text-emerald-500">
               <p>{t('fishDataset.export_done', { clips: done.clips, hours: done.hours })}</p>
               <p className="break-all font-mono text-[11px]">{done.path}</p>
+              {done.training && (
+                <>
+                  <p>{t('fishDataset.train_written', { files: done.training.files.join(', ') })}</p>
+                  <p>{t('fishDataset.tr_passes_estimate', { passes: done.training.estimate.passes })}</p>
+                </>
+              )}
               <Button
                 size="xs"
                 variant="outline"
@@ -285,7 +301,9 @@ export function ExportDialog({
 
         <DialogFooter>
           <DialogClose render={<Button variant="outline" />}>{t('fishStory.done')}</DialogClose>
-          <Button disabled={busy || !dest.trim() || formats.length === 0 || clips === 0} onClick={() => void run()}>
+          <Button disabled={
+              busy || !dest.trim() || formats.length === 0 || clips === 0 || unknown.length > 0 || trainingInvalid
+            } onClick={() => void run()}>
             {busy && <LoaderCircleIcon className="animate-spin" />} {t('fishDataset.export_button')}
           </Button>
         </DialogFooter>

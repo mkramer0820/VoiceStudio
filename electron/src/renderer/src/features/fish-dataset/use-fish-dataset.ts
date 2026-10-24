@@ -145,8 +145,12 @@ export interface ExportOptions {
   text_mode: 'keep' | 'strip';
   sample_rate: number | null;
   val_fraction: number;
-  /** With text_mode strip: tags to leave in, each optionally `written=exported`. */
+  /** With text_mode strip: tags to leave in; `tag` keeps it, `[tag]:replacement` writes it another way. */
   keep_tags: string[];
+  /** OmniVoice format: refuse tags OmniVoice does not know (the backend default is on). */
+  strict_tags?: boolean;
+  /** OmniVoice format: also write the training files, with only the settings that differ from the defaults. */
+  training?: Record<string, unknown>;
   /** Bring every clip to this average level (dB RMS); null leaves levels alone. */
   loudness_db: number | null;
 }
@@ -157,6 +161,7 @@ export interface ExportResult {
   hours: number;
   speakers: Record<string, { clips: number; seconds: number }>;
   formats?: string[];
+  training?: { files: string[]; estimate: { passes: number; steps_per_pass: number; note: string } };
 }
 
 export const PAGE_SIZE = 50;

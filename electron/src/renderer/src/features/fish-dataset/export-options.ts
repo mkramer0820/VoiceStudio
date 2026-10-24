@@ -1,0 +1,164 @@
+/** Pure helpers for the export dialog: the tag dictionary and the training settings. */
+
+// ---- tags ------------------------------------------------------------------------------------
+
+export type TagAction = { mode: 'remove' | 'keep' | 'convert'; to: string };
+export type TagActions = Record<string, TagAction>;
+
+const BARE = /^[\w\- ]{1,40}$/;
+
+export const actionOf = (actions: TagActions, tag: string): TagAction =>
+  actions[tag] ?? { mode: 'remove', to: '' };
+
+/** What a Convert row writes: `sad` or `[sad]` mean the tag [sad]; anything else is taken literally. */
+export function replacementOf(raw: string): string {
+  let value = raw.trim();
+  if (value.length > 2 && value.startsWith('[') && value.endsWith(']') && !value.slice(1, -1).includes('[')) {
+    value = value.slice(1, -1).trim();
+  }
+  return BARE.test(value) ? value.toLowerCase() : value;
+}
+
+/** How a written value appears in the text: bare words in square brackets, anything else as typed. */
+export const renderTag = (value: string) => (BARE.test(value) ? `[${value}]` : value);
+
+/** What each kept tag will be written as, or null when the row is removed (an empty Convert is a Remove). */
+export function writtenAs(tag: string, action: TagAction): string | null {
+  if (action.mode === 'keep') return tag;
+  if (action.mode === 'convert') return action.to.trim() ? replacementOf(action.to) : null;
+  return null;
+}
+
+/** The request's `keep_tags`: one entry per tag that is not removed. */
+export function keepTagsOf(tags: string[], actions: TagActions): string[] {
+  const out: string[] = [];
+  for (const tag of tags) {
+    const action = actionOf(actions, tag);
+    if (writtenAs(tag, action) === null) continue;
+    out.push(action.mode === 'keep' ? tag : `[${tag}]:${action.to.trim()}`);
+  }
+  return out;
+}
+
+/** Fill the rows from a pasted `[frustrated]:(sad)` / `laughing=laughter` dictionary; unknown tags are ignored. */
+export function parseDictionary(text: string, tags: string[]): TagActions {
+  const known = new Set(tags);
+  const out: TagActions = {};
+  for (const part of text.split(/[,;\n]+/)) {
+    const match = /^\[?\s*([^[\]:=]+?)\s*\]?\s*(?:[:=]\s*(.*))?$/.exec(part.trim());
+    if (!match) continue;
+    const source = match[1].trim().toLowerCase();
+    if (!known.has(source)) continue;
+    const target = (match[2] ?? '').trim();
+    out[source] = target && replacementOf(target) !== source ? { mode: 'convert', to: target } : { mode: 'keep', to: '' };
+  }
+  return out;
+}
+
+/** Tags in the export that OmniVoice does not know (rendered the way the backend reports them). */
+export function unknownTags(tags: string[], actions: TagActions, known: string[]): string[] {
+  if (known.length === 0) return [];
+  const out: string[] = [];
+  for (const tag of tags) {
+    const written = writtenAs(tag, actionOf(actions, tag));
+    if (written !== null && !known.includes(written)) out.push(tag);
+  }
+  return out;
+}
+
+// ---- training --------------------------------------------------------------------------------
+
+export const FRAMES_PER_SECOND = 25;
+export const TEXT_OVERHEAD = 1.15;
+export const STEP_RANGE = [10, 200000] as const;
+
+const tokensPerPass = (seconds: number) => Math.max(1, seconds * FRAMES_PER_SECOND * TEXT_OVERHEAD);
+
+/** Same formula as the backend's `suggest_steps`. */
+export function suggestSteps(seconds: number, batchTokens: number, passes: number): number {
+  const raw = Math.ceil((passes * tokensPerPass(seconds)) / batchTokens);
+  return Math.min(STEP_RANGE[1], Math.max(STEP_RANGE[0], raw));
+}
+
+/** Same formula as the backend's `estimate`: how often the training clips are seen. */
+export function estimatePasses(seconds: number, steps: number, batchTokens: number): number {
+  return Math.round(((steps * batchTokens) / tokensPerPass(seconds)) * 10) / 10;
+}
+
+export type TrainingMode = 'lora' | 'full';
+export type TrainingKey =
+  | 'steps' | 'learning_rate' | 'batch_tokens' | 'gradient_accumulation_steps' | 'lora_r'
+  | 'lora_alpha' | 'lora_dropout' | 'warmup_ratio' | 'weight_decay' | 'seed' | 'num_workers'
+  | 'save_every' | 'eval_every' | 'keep_last_n_checkpoints';
+export type TrainingChoice = 'mixed_precision' | 'lr_scheduler_type';
+
+/** Defaults and ranges mirror `TrainOptions` in backend/engines/fish_api/training.py. */
+export const NUMBERS: Record<TrainingKey, { def: number; min: number; max: number; step: string; lora?: boolean; advanced?: boolean }> = {
+  steps: { def: 2000, min: 10, max: 200000, step: '1' },
+  learning_rate: { def: 1e-4, min: 1e-6, max: 1e-2, step: 'any' },
+  batch_tokens: { def: 4096, min: 512, max: 65536, step: '1' },
+  gradient_accumulation_steps: { def: 1, min: 1, max: 64, step: '1' },
+  lora_r: { def: 16, min: 1, max: 256, step: '1', lora: true },
+  lora_alpha: { def: 32, min: 1, max: 512, step: 'any', lora: true },
+  lora_dropout: { def: 0.05, min: 0, max: 0.5, step: 'any', lora: true },
+  warmup_ratio: { def: 0.05, min: 0, max: 0.5, step: 'any', advanced: true },
+  weight_decay: { def: 0.01, min: 0, max: 1, step: 'any', advanced: true },
+  seed: { def: 42, min: 0, max: 2 ** 31 - 1, step: '1', advanced: true },
+  num_workers: { def: 2, min: 0, max: 32, step: '1', advanced: true },
+  save_every: { def: 0, min: 0, max: 200000, step: '1', advanced: true },
+  eval_every: { def: 0, min: 0, max: 200000, step: '1', advanced: true },
+  keep_last_n_checkpoints: { def: 2, min: -1, max: 100, step: '1', advanced: true },
+};
+export const CHOICES: Record<TrainingChoice, { def: string; options: string[] }> = {
+  mixed_precision: { def: 'bf16', options: ['bf16', 'fp16', 'no'] },
+  lr_scheduler_type: { def: 'cosine', options: ['cosine', 'linear', 'constant'] },
+};
+export const DEFAULT_CHECKPOINT = 'k2-fsa/OmniVoice';
+export const FULL_LEARNING_RATE = 5e-5;
+
+export interface TrainingForm {
+  mode: TrainingMode;
+  heads: boolean;
+  /** Fields the user typed into, as typed. An untouched field follows the default for the mode. */
+  edits: Partial<Record<TrainingKey | TrainingChoice | 'base_checkpoint', string>>;
+}
+export const EMPTY_TRAINING: TrainingForm = { mode: 'lora', heads: false, edits: {} };
+
+export function defaultFor(key: TrainingKey, mode: TrainingMode): number {
+  return key === 'learning_rate' && mode === 'full' ? FULL_LEARNING_RATE : NUMBERS[key].def;
+}
+
+export const numberOf = (form: TrainingForm, key: TrainingKey): number => {
+  const raw = form.edits[key];
+  return raw === undefined ? defaultFor(key, form.mode) : raw.trim() === '' ? NaN : Number(raw);
+};
+
+export const visibleKeys = (form: TrainingForm) =>
+  (Object.keys(NUMBERS) as TrainingKey[]).filter((key) => form.mode === 'lora' || !NUMBERS[key].lora);
+
+/** Fields with a value the backend would refuse. */
+export function invalidKeys(form: TrainingForm): TrainingKey[] {
+  return visibleKeys(form).filter((key) => {
+    const value = numberOf(form, key);
+    return !Number.isFinite(value) || value < NUMBERS[key].min || value > NUMBERS[key].max;
+  });
+}
+
+/** Only what differs from the backend defaults, so the backend's own defaults apply to the rest. */
+export function trainingBody(form: TrainingForm): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (form.mode === 'full') body.mode = 'full';
+  for (const key of visibleKeys(form)) {
+    if (form.edits[key] === undefined) continue;
+    const value = numberOf(form, key);
+    if (value !== defaultFor(key, form.mode)) body[key] = value;
+  }
+  for (const key of Object.keys(CHOICES) as TrainingChoice[]) {
+    const value = form.edits[key];
+    if (value !== undefined && value !== CHOICES[key].def) body[key] = value;
+  }
+  const checkpoint = form.edits.base_checkpoint?.trim();
+  if (checkpoint && checkpoint !== DEFAULT_CHECKPOINT) body.base_checkpoint = checkpoint;
+  if (form.mode === 'lora' && form.heads) body.train_heads = true;
+  return body;
+}

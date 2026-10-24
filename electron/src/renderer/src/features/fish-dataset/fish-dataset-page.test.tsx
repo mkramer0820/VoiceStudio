@@ -265,27 +265,26 @@ it('asks for a folder first when none is saved', async () => {
   expect(screen.getByRole('button', { name: /fishDataset\.export_open/ })).toBeDisabled();
 });
 
-it('strips all tags by default and keeps only the ones listed, optionally renamed', async () => {
+it('strips all tags by default and keeps, or rewrites, only the ones chosen in the tag table', async () => {
   render(<FishDatasetPage />);
   await screen.findAllByTestId('clip-row');
   fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
   const dialog = await screen.findByRole('dialog');
-  expect(within(dialog).queryByLabelText('fishDataset.keep_tags')).not.toBeInTheDocument(); // text is kept as-is
+  expect(within(dialog).queryByTestId('tag-row')).not.toBeInTheDocument(); // text is kept as-is
   fireEvent.change(within(dialog).getByLabelText('fishDataset.export_text'), { target: { value: 'strip' } });
 
-  const keep = within(dialog).getByLabelText('fishDataset.keep_tags');
-  expect(keep).toHaveValue('');
-  fireEvent.click(within(dialog).getByRole('button', { name: /\[sighing\]/ }));
-  expect(keep).toHaveValue('sighing');
-  fireEvent.change(keep, { target: { value: 'sighing=sigh, laughing=laughter' } });
-  expect(within(dialog).getByRole('button', { name: /\[laughing\]/ })).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(within(dialog).getByRole('button', { name: /\[sighing\]/ })); // un-keep
-  expect(keep).toHaveValue('laughing=laughter');
+  expect(within(dialog).getAllByTestId('tag-row')).toHaveLength(3);
+  fireEvent.change(within(dialog).getByLabelText(/tag_action .*sighing/), { target: { value: 'keep' } });
+  fireEvent.change(within(dialog).getByLabelText(/tag_action .*laughing/), { target: { value: 'convert' } });
+  fireEvent.change(within(dialog).getByLabelText(/tag_convert_to .*laughing/), { target: { value: 'laughter' } });
 
-  fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\out' } });
+  fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
   fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
   await within(dialog).findByText(/fishDataset\.export_done/);
-  expect(lastBody('/api/fish/dataset/export')).toMatchObject({ text_mode: 'strip', keep_tags: ['laughing=laughter'] });
+  expect(lastBody('/api/fish/dataset/export')).toMatchObject({
+    text_mode: 'strip',
+    keep_tags: ['[laughing]:laughter', 'sighing'],
+  });
 
   // Switching back to keeping every tag sends no keep list.
   fireEvent.change(within(dialog).getByLabelText('fishDataset.export_text'), { target: { value: 'keep' } });
@@ -293,7 +292,6 @@ it('strips all tags by default and keeps only the ones listed, optionally rename
   await waitFor(() => expect(lastBody('/api/fish/dataset/export').text_mode).toBe('keep'));
   expect(lastBody('/api/fish/dataset/export').keep_tags).toEqual([]);
 });
-
 
 const lastLines = () => lastBody('/api/fish/dataset/lines');
 
