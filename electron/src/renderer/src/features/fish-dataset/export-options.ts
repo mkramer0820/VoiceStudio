@@ -139,12 +139,18 @@ export const numberOf = (form: TrainingForm, key: TrainingKey): number => {
 export const visibleKeys = (form: TrainingForm) =>
   (Object.keys(NUMBERS) as TrainingKey[]).filter((key) => form.mode === 'lora' || !NUMBERS[key].lora);
 
+export interface NumberSpec {
+  def: number;
+  min: number;
+  max: number;
+  step: string;
+}
+/** A value the backend would refuse. Shared by every Training setup field. */
+export const outOfRange = (spec: NumberSpec, value: number) => !Number.isFinite(value) || value < spec.min || value > spec.max;
+
 /** Fields with a value the backend would refuse. */
 export function invalidKeys(form: TrainingForm): TrainingKey[] {
-  return visibleKeys(form).filter((key) => {
-    const value = numberOf(form, key);
-    return !Number.isFinite(value) || value < NUMBERS[key].min || value > NUMBERS[key].max;
-  });
+  return visibleKeys(form).filter((key) => outOfRange(NUMBERS[key], numberOf(form, key)));
 }
 
 /** Only what differs from the backend defaults, so the backend's own defaults apply to the rest. */
@@ -164,4 +170,106 @@ export function trainingBody(form: TrainingForm): Record<string, unknown> {
   if (checkpoint && checkpoint !== DEFAULT_CHECKPOINT) body.base_checkpoint = checkpoint;
   if (form.mode === 'lora' && form.heads) body.train_heads = true;
   return body;
+}
+
+// ---- Qwen3-TTS -------------------------------------------------------------------------------
+
+export const QWEN_FORMAT = 'qwen3_tts';
+export const QWEN_SPEAKER_RE = /^[A-Za-z0-9_-]{0,40}$/;
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const DRIVE_FOLDER = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/** Reference clip, ZIP and duration limits (the Training setup fields are below). */
+export interface QwenForm {
+  speaker: string;
+  zip: boolean;
+  minDuration: string;
+  maxDuration: string;
+}
+export const EMPTY_QWEN: QwenForm = { speaker: '', zip: true, minDuration: '0.8', maxDuration: '30' };
+
+export function qwenInvalid(form: QwenForm): Array<keyof QwenForm> {
+  const out: Array<keyof QwenForm> = [];
+  const lo = Number(form.minDuration);
+  const hi = Number(form.maxDuration);
+  if (!QWEN_SPEAKER_RE.test(form.speaker.trim())) out.push('speaker');
+  if (form.minDuration.trim() === '' || !Number.isFinite(lo) || lo < 0.1) out.push('minDuration');
+  if (form.maxDuration.trim() === '' || !Number.isFinite(hi) || hi > 120 || (Number.isFinite(lo) && hi <= lo)) {
+    out.push('maxDuration');
+  }
+  return out;
+}
+
+/** The request's `qwen3` object; a null `referenceKey` lets the backend choose the reference clip. */
+export function qwenBody(form: QwenForm, referenceKey: string | null): Record<string, unknown> {
+  return {
+    speaker_name: form.speaker.trim(),
+    reference_key: referenceKey,
+    make_zip: form.zip,
+    min_duration: Number(form.minDuration),
+    max_duration: Number(form.maxDuration),
+  };
+}
+
+/** The numbers sft_12hz.py really takes; defaults are the script's own. Everything else in it is fixed. */
+export type QwenNumberKey = 'epochs' | 'learning_rate' | 'batch_size';
+export type QwenTextKey = 'base_model' | 'tokenizer_model' | 'drive_folder';
+export const QWEN_NUMBERS: Record<QwenNumberKey, NumberSpec & { advanced?: boolean }> = {
+  epochs: { def: 3, min: 1, max: 100, step: '1' },
+  learning_rate: { def: 2e-5, min: 1e-7, max: 1e-3, step: 'any' },
+  batch_size: { def: 2, min: 1, max: 256, step: '1' },
+};
+export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advanced?: boolean }> = {
+  drive_folder: { def: 'VoiceStudio-training', test: DRIVE_FOLDER },
+  base_model: { def: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base', test: MODEL_ID },
+  tokenizer_model: { def: 'Qwen/Qwen3-TTS-Tokenizer-12Hz', test: MODEL_ID, advanced: true },
+};
+/** sft_12hz.py hard-codes Accelerator(gradient_accumulation_steps=4). */
+export const QWEN_ACCUMULATION = 4;
+
+export interface QwenTrainForm {
+  /** Fields the user typed into, as typed. An untouched field follows the script's default. */
+  edits: Partial<Record<QwenNumberKey | QwenTextKey, string>>;
+}
+export const EMPTY_QWEN_TRAIN: QwenTrainForm = { edits: {} };
+
+export const qwenNumber = (form: QwenTrainForm, key: QwenNumberKey): number => {
+  const raw = form.edits[key];
+  return raw === undefined ? QWEN_NUMBERS[key].def : raw.trim() === '' ? NaN : Number(raw);
+};
+export const qwenText = (form: QwenTrainForm, key: QwenTextKey): string => form.edits[key] ?? QWEN_TEXT[key].def;
+
+export function qwenTrainInvalid(form: QwenTrainForm): Array<QwenNumberKey | QwenTextKey> {
+  const bad: Array<QwenNumberKey | QwenTextKey> = [];
+  for (const key of Object.keys(QWEN_NUMBERS) as QwenNumberKey[]) {
+    const value = qwenNumber(form, key);
+    const whole = key === 'learning_rate' || Number.isInteger(value);
+    if (outOfRange(QWEN_NUMBERS[key], value) || !whole) bad.push(key);
+  }
+  for (const key of Object.keys(QWEN_TEXT) as QwenTextKey[]) {
+    const value = qwenText(form, key).trim();
+    if (!QWEN_TEXT[key].test.test(value) || value.split('/').some((part) => part === '.' || part === '..')) bad.push(key);
+  }
+  return bad;
+}
+
+/** Only what differs from the script's defaults, so the backend's defaults apply to the rest. */
+export function qwenTrainBody(form: QwenTrainForm): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const key of Object.keys(QWEN_NUMBERS) as QwenNumberKey[]) {
+    if (form.edits[key] !== undefined && qwenNumber(form, key) !== QWEN_NUMBERS[key].def) body[key] = qwenNumber(form, key);
+  }
+  for (const key of Object.keys(QWEN_TEXT) as QwenTextKey[]) {
+    const value = form.edits[key]?.trim();
+    if (value !== undefined && value !== QWEN_TEXT[key].def) body[key] = value;
+  }
+  return body;
+}
+
+/** What the script's own loop implies for `clips` training clips; an estimate, not a time or quality claim. */
+export function qwenEstimate(clips: number, batchSize: number, epochs: number) {
+  if (!(clips > 0) || !(batchSize >= 1) || !(epochs >= 1)) return null;
+  const batches = Math.ceil(clips / batchSize);
+  const updates = Math.ceil(batches / QWEN_ACCUMULATION);
+  return { batches, updates, total: updates * epochs };
 }

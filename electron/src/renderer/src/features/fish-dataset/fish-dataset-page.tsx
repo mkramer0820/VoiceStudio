@@ -13,6 +13,7 @@ import {
   RefreshCwIcon,
   ShuffleIcon,
   SquareIcon,
+  StarIcon,
   XIcon,
   ZoomInIcon,
 } from 'lucide-react';
@@ -93,6 +94,7 @@ export function FishDatasetPage() {
   const ds = useFishDataset();
   const [folder, setFolder] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
+  const [reference, setReference] = useState<{ key: string; label: string } | null>(null);
   const [trainOpen, setTrainOpen] = useState(false);
   const [trainDir, setTrainDir] = useState('');
   const [auto, setAuto] = useState(true);
@@ -642,6 +644,20 @@ export function FishDatasetPage() {
                         </p>
                       </div>
                       <span className="pt-1.5 tabular-nums text-muted-foreground">{line.duration_s.toFixed(1)}s</span>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        tabIndex={-1}
+                        aria-pressed={reference?.key === line.key}
+                        aria-label={t(reference?.key === line.key ? 'fishDataset.reference_unset' : 'fishDataset.reference_set', { index: line.index })}
+                        title={t('fishDataset.reference_title')}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setReference(reference?.key === line.key ? null : { key: line.key, label: `${line.chapter} #${line.index}` });
+                        }}
+                      >
+                        <StarIcon className={reference?.key === line.key ? 'fill-amber-500 text-amber-500' : undefined} />
+                      </Button>
                       <label className="flex items-center gap-1 pt-1.5 text-muted-foreground">
                         <input
                           type="checkbox"
@@ -672,6 +688,11 @@ export function FishDatasetPage() {
         excluded={ds.total - ds.selected}
         knownTags={overview?.tags ?? facets?.tags ?? []}
         omnivoiceTags={overview?.omnivoice_tags}
+        referenceKey={reference?.key ?? null}
+        referenceLabel={reference?.label ?? null}
+        onClearReference={() => setReference(null)}
+        speakerCount={ds.voices.size || overview?.speakers.length || 1}
+        speakerName={overview?.speakers.find((s) => ds.voices.has(s.voice_id))?.name ?? overview?.speakers[0]?.name ?? ''}
         onExport={ds.runExport}
         onError={ds.setError}
         onTrain={(dir) => {

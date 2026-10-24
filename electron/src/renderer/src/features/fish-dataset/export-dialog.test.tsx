@@ -9,7 +9,10 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { ExportDialog } from './export-dialog';
-import { estimatePasses, keepTagsOf, parseDictionary, suggestSteps, trainingBody, EMPTY_TRAINING } from './export-options';
+import {
+  estimatePasses, keepTagsOf, parseDictionary, suggestSteps, trainingBody, EMPTY_TRAINING,
+  qwenEstimate, qwenTrainBody, qwenTrainInvalid,
+} from './export-options';
 import type { ExportResult } from './use-fish-dataset';
 
 afterEach(cleanup);
@@ -278,5 +281,130 @@ describe('option helpers', () => {
       b: { mode: 'keep', to: '' },
     });
     expect(trainingBody(EMPTY_TRAINING)).toEqual({});
+  });
+});
+
+const qwenOn = (dialog: HTMLElement) => fireEvent.click(within(dialog).getByLabelText(/fishDataset\.format_qwen3_tts(?!_)/));
+const QWEN_RESULT: Partial<ExportResult> = {
+  formats: ['qwen3_tts'],
+  qwen3: {
+    accepted: 90,
+    rejected: 3,
+    reference: { source: 'c/run/001.wav' },
+    warnings: [{ code: 'clipping', message: 'two clips touch full scale' }],
+    zip: { path: 'D:\\out\\set.zip', size: 10 },
+    files: ['train.jsonl', 'training_settings.json', 'colab_setup.sh'],
+    commands: {
+      notebook: ['!bash /content/set/colab_setup.sh'],
+      colab_cli: ['colab new -s qwen-train --gpu A100'],
+      official: { prepare: 'python prepare_data.py', train: 'python sft_12hz.py --num_epochs 7', checkpoint_dir: '/content/drive/MyDrive/X/Y/checkpoints' },
+    },
+  },
+};
+
+describe('Qwen3-TTS in the shared Training setup', () => {
+  it('switches the Training setup fields by format and replaces the other formats', () => {
+    const { dialog } = setup();
+    omniOn(dialog);
+    expect(within(dialog).getByLabelText('fishDataset.tr_steps')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('fishDataset.qtr_epochs')).not.toBeInTheDocument();
+    omniOn(dialog); // untick
+    qwenOn(dialog);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_epochs')).toHaveValue(3);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(2e-5);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_batch_size')).toHaveValue(2);
+    expect(within(dialog).queryByLabelText('fishDataset.tr_steps')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('fishDataset.qtr_colab_only')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('fishDataset.export_val')).not.toBeInTheDocument(); // no validation split
+    expect(within(dialog).queryByTestId('tag-row')).not.toBeInTheDocument(); // tags are always removed
+    expect(within(dialog).getByLabelText(/fishDataset\.format_jsonl(?!_)/)).toBeDisabled();
+    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/VoiceStudio-training/<speaker>/checkpoints');
+  });
+
+  it('sends only changed training fields and the Qwen3-TTS options', async () => {
+    const { dialog, onExport } = setup({}, QWEN_RESULT);
+    qwenOn(dialog);
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+    expect(sent(onExport)).toMatchObject({ formats: ['qwen3_tts'], val_fraction: 0, sample_rate: 24000, keep_tags: [], training: {} });
+    expect(sent(onExport).qwen3).toMatchObject({ speaker_name: '', reference_key: null, make_zip: true, min_duration: 0.8, max_duration: 30 });
+
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_epochs'), { target: { value: '7' } });
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_learning_rate'), { target: { value: '0.00001' } });
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_drive_folder'), { target: { value: 'X/Y' } });
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qwen_speaker'), { target: { value: 'Sunny' } });
+    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/X/Y/Sunny/checkpoints');
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalledTimes(2));
+    expect(sent(onExport).training).toEqual({ epochs: 7, learning_rate: 0.00001, drive_folder: 'X/Y' });
+    expect(sent(onExport).qwen3.speaker_name).toBe('Sunny');
+  });
+
+  it('sends the starred reference clip, and clears it', async () => {
+    const onClear = vi.fn();
+    const { dialog, onExport } = setup({ referenceKey: 'run:c1', referenceLabel: '3001 #4', onClearReference: onClear }, QWEN_RESULT);
+    qwenOn(dialog);
+    expect(within(dialog).getByText(/qwen_ref_clip .*3001 #4/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'fishDataset.qwen_ref_clear' }));
+    expect(onClear).toHaveBeenCalled();
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalled());
+    expect(sent(onExport).qwen3.reference_key).toBe('run:c1');
+  });
+
+  it('shows an estimate from the script loop, not an audio rate', () => {
+    const { dialog } = setup({ clips: 100 });
+    qwenOn(dialog);
+    expect(within(dialog).getByTestId('qwen-estimate')).toHaveTextContent('"batches":50,"updates":13,"total":39');
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_batch_size'), { target: { value: '4' } });
+    expect(within(dialog).getByTestId('qwen-estimate')).toHaveTextContent('"batches":25,"updates":7,"total":21');
+    expect(within(dialog).getByText('fishDataset.qtr_estimate_note')).toBeInTheDocument();
+    expect(within(dialog).queryByTestId('passes-estimate')).not.toBeInTheDocument();
+  });
+
+  it('blocks the export for out-of-range values, a bad folder, or several speakers', () => {
+    const { dialog } = setup();
+    qwenOn(dialog);
+    expect(exportButton(dialog)).toBeEnabled();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_epochs'), { target: { value: '0' } });
+    expect(exportButton(dialog)).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_epochs'), { target: { value: '2.5' } });
+    expect(exportButton(dialog)).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_epochs'), { target: { value: '3' } });
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_drive_folder'), { target: { value: '../x' } });
+    expect(exportButton(dialog)).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_drive_folder'), { target: { value: 'ok' } });
+    expect(exportButton(dialog)).toBeEnabled();
+    cleanup();
+    const again = setup({ speakerCount: 3 });
+    qwenOn(again.dialog);
+    expect(within(again.dialog).getByRole('alert')).toHaveTextContent('qwen_multi');
+    expect(exportButton(again.dialog)).toBeDisabled();
+  });
+
+  it('lists the written files, the start commands and the Drive checkpoint folder afterwards', async () => {
+    const { dialog } = setup({}, QWEN_RESULT);
+    qwenOn(dialog);
+    fireEvent.click(exportButton(dialog));
+    const status = await within(dialog).findByRole('status');
+    expect(status).toHaveTextContent('train.jsonl, training_settings.json, colab_setup.sh');
+    expect(within(status).getByTestId('qwen-start-commands')).toHaveTextContent('!bash /content/set/colab_setup.sh');
+    expect(within(status).getByTestId('qwen-start-commands')).toHaveTextContent('colab new -s qwen-train');
+    expect(status).toHaveTextContent('/content/drive/MyDrive/X/Y/checkpoints');
+    expect(status).toHaveTextContent('--num_epochs 7');
+    expect(status).toHaveTextContent('two clips touch full scale');
+    expect(within(status).queryByRole('button', { name: /fishTraining\.train_open/ })).not.toBeInTheDocument(); // no local runner
+  });
+});
+
+describe('Qwen option helpers', () => {
+  it('sends only values that differ from the official script defaults', () => {
+    expect(qwenTrainBody({ edits: {} })).toEqual({});
+    expect(qwenTrainBody({ edits: { epochs: '3', batch_size: '8', base_model: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base' } })).toEqual({
+      batch_size: 8,
+      base_model: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base',
+    });
+    expect(qwenTrainInvalid({ edits: { base_model: 'x; ls' } })).toEqual(['base_model']);
+    expect(qwenEstimate(0, 2, 3)).toBeNull();
   });
 });

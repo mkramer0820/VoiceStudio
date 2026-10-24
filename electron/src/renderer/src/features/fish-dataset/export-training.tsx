@@ -5,10 +5,18 @@ import {
   CHOICES,
   DEFAULT_CHECKPOINT,
   NUMBERS,
+  QWEN_NUMBERS,
   estimatePasses,
   invalidKeys,
   numberOf,
+  qwenEstimate,
+  qwenNumber,
+  qwenText,
+  qwenTrainInvalid,
   suggestSteps,
+  type QwenNumberKey,
+  type QwenTextKey,
+  type QwenTrainForm,
   type TrainingChoice,
   type TrainingForm,
   type TrainingKey,
@@ -16,6 +24,37 @@ import {
 
 const selectClass =
   'h-8 w-full rounded-md border border-input bg-input/20 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30';
+
+/** One labelled number box with the range the backend accepts; shared by the OmniVoice and Qwen3-TTS fields. */
+function NumberField({
+  id, label, spec, value, invalid, onChange,
+}: {
+  id: string;
+  label: string;
+  spec: { min: number; max: number; step: string };
+  value: string;
+  invalid: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <label htmlFor={id} className="text-xs font-medium">
+        {label}
+      </label>
+      <Input
+        id={id}
+        type="number"
+        min={spec.min}
+        max={spec.max}
+        step={spec.step}
+        aria-invalid={invalid}
+        className={invalid ? 'border-destructive' : ''}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
 
 /** The settings written into train_config.json, with a live estimate of how often the clips are seen. */
 export function TrainingSection({
@@ -40,22 +79,15 @@ export function TrainingSection({
     const spec = NUMBERS[key];
     if (spec.lora && !lora) return null;
     return (
-      <div key={key} className="space-y-1">
-        <label htmlFor={`tr-${key}`} className="text-xs font-medium">
-          {t(`fishDataset.tr_${key}`)}
-        </label>
-        <Input
-          id={`tr-${key}`}
-          type="number"
-          min={spec.min}
-          max={spec.max}
-          step={spec.step}
-          aria-invalid={bad.has(key)}
-          className={bad.has(key) ? 'border-destructive' : ''}
-          value={shown(key)}
-          onChange={(e) => edit(key, e.target.value)}
-        />
-      </div>
+      <NumberField
+        key={key}
+        id={`tr-${key}`}
+        label={t(`fishDataset.tr_${key}`)}
+        spec={spec}
+        value={shown(key)}
+        invalid={bad.has(key)}
+        onChange={(value) => edit(key, value)}
+      />
     );
   };
   const choice = (key: TrainingChoice) => (
@@ -177,3 +209,78 @@ export function TrainingSection({
     </div>
   );
 }
+
+/** Training setup for the Qwen3-TTS format: only what the official sft_12hz.py / prepare_data.py take. */
+export function QwenTrainingSection({
+  form,
+  onChange,
+  clips,
+  speaker,
+}: {
+  form: QwenTrainForm;
+  onChange: (form: QwenTrainForm) => void;
+  /** Clips that will be trained on (an estimate: clips the checks reject are not counted out). */
+  clips: number;
+  speaker: string;
+}) {
+  const { t } = useTranslation();
+  const bad = new Set<string>(qwenTrainInvalid(form));
+  const edit = (key: QwenNumberKey | QwenTextKey, value: string) => onChange({ edits: { ...form.edits, [key]: value } });
+  const number = (key: QwenNumberKey) => (
+    <NumberField
+      key={key}
+      id={`qtr-${key}`}
+      label={t(`fishDataset.qtr_${key}`)}
+      spec={QWEN_NUMBERS[key]}
+      value={form.edits[key] ?? String(QWEN_NUMBERS[key].def)}
+      invalid={bad.has(key)}
+      onChange={(value) => edit(key, value)}
+    />
+  );
+  const text = (key: QwenTextKey) => (
+    <div key={key} className="space-y-1">
+      <label htmlFor={`qtr-${key}`} className="text-xs font-medium">
+        {t(`fishDataset.qtr_${key}`)}
+      </label>
+      <Input
+        id={`qtr-${key}`}
+        className="font-mono text-xs"
+        aria-invalid={bad.has(key)}
+        value={qwenText(form, key)}
+        onChange={(e) => edit(key, e.target.value)}
+      />
+    </div>
+  );
+  const estimate = qwenEstimate(clips, qwenNumber(form, 'batch_size'), qwenNumber(form, 'epochs'));
+  const folder = qwenText(form, 'drive_folder').trim().replace(/^\/+|\/+$/g, '');
+  return (
+    <div className="space-y-3">
+      <p className="rounded-md bg-muted/40 p-2 text-[11px] leading-snug text-muted-foreground">
+        {t('fishDataset.qtr_colab_only')}
+      </p>
+      <div className="grid grid-cols-2 gap-3">{(Object.keys(QWEN_NUMBERS) as QwenNumberKey[]).map(number)}</div>
+      {text('drive_folder')}
+      <p className="break-all font-mono text-[11px] text-muted-foreground" data-testid="qwen-checkpoint-path">
+        My Drive/{folder}/{speaker.trim() || '<speaker>'}/checkpoints
+      </p>
+      <p className="text-[11px] text-muted-foreground">{t('fishDataset.qtr_checkpoint_hint')}</p>
+      {estimate && (
+        <div className="space-y-0.5 text-[11px] leading-snug text-muted-foreground">
+          <p data-testid="qwen-estimate">
+            {t('fishDataset.qtr_estimate', { batches: estimate.batches, updates: estimate.updates, total: estimate.total })}
+          </p>
+          <p>{t('fishDataset.qtr_estimate_note')}</p>
+        </div>
+      )}
+      {text('base_model')}
+      <details className="rounded-md border border-border/50 p-2">
+        <summary className="cursor-pointer text-xs font-medium">{t('fishDataset.tr_advanced')}</summary>
+        <div className="mt-2 space-y-3">
+          {text('tokenizer_model')}
+          <p className="text-[11px] text-muted-foreground">{t('fishDataset.qtr_fixed')}</p>
+        </div>
+      </details>
+    </div>
+  );
+}
+

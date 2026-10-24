@@ -151,6 +151,8 @@ export interface ExportOptions {
   strict_tags?: boolean;
   /** OmniVoice format: also write the training files, with only the settings that differ from the defaults. */
   training?: Record<string, unknown>;
+  /** Qwen3-TTS format: speaker name, reference clip, ZIP and duration limits (its Training setup goes in `training`). */
+  qwen3?: Record<string, unknown>;
   /** Bring every clip to this average level (dB RMS); null leaves levels alone. */
   loudness_db: number | null;
 }
@@ -162,6 +164,15 @@ export interface ExportResult {
   speakers: Record<string, { clips: number; seconds: number }>;
   formats?: string[];
   training?: { files: string[]; estimate: { passes: number; steps_per_pass: number; note: string } };
+  qwen3?: {
+    accepted: number;
+    rejected: number;
+    reference: { source?: string; reason?: string; duration?: number };
+    warnings: Array<{ code: string; message: string }>;
+    zip: { path: string; size: number } | null;
+    files: string[];
+    commands: { notebook: string[]; colab_cli: string[]; official: { prepare: string; train: string; checkpoint_dir: string } };
+  };
 }
 
 export const PAGE_SIZE = 50;
