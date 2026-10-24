@@ -318,7 +318,7 @@ def test_facets_analyze_and_new_filters_over_the_api(api, root):
 
     api.put("/api/fish/dataset/root", json={"path": root})
     facets = api.post("/api/fish/dataset/facets", json={"voice_ids": [NARR], "tags_none": ["calm"]}).json()
-    assert facets["clips"] == 2 and dict(facets["tags"]).get("calm") is None
+    assert facets["clips"] == 2 and dict(facets["tags"])["calm"] == 1  # the tag cloud ignores tag filters
     assert api.post("/api/fish/dataset/lines", json={"sort": "sideways"}).status_code == 422
 
     assert api.post("/api/fish/dataset/analyze").status_code == 200
@@ -541,3 +541,89 @@ def test_the_export_route_takes_a_dictionary_and_a_training_config(api, root, tm
     bad = api.post("/api/fish/dataset/export", json={
         "dest": str(tmp_path / "ex3"), "formats": ["omnivoice"], "training": {"steps": 3}})
     assert bad.status_code == 422
+
+
+# ── facets that ignore their own dimension (chapter, tag and length pickers) ──
+def _measure_all(api):
+    import time
+
+    assert api.post("/api/fish/dataset/analyze").status_code == 200
+    end = time.time() + 15
+    while api.get("/api/fish/dataset/analyze").json()["running"] and time.time() < end:
+        time.sleep(0.02)
+
+
+def _facets(api, **body):
+    return api.post("/api/fish/dataset/facets", json={"voice_ids": [NARR], **body}).json()
+
+
+def _listed(facets):
+    return [(x["chapter"], x["clips"]) for x in facets["chapters"]]
+
+
+def test_chapter_facet_ignores_the_chapter_filter_but_not_the_others(api, root):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    picked = _facets(api, chapters=["3002_two"])
+    assert _listed(picked) == [("3001_one", 2), ("3002_two", 1)]  # the list stays complete
+    assert picked["clips"] == 1  # the header counts still follow the chapter filter
+    assert sum(b["clips"] for b in picked["duration"]) == 1
+    assert dict(picked["tags"])["slow"] == 1
+    assert _listed(_facets(api, chapters=["3002_two"], min_dur=3.8)) == [("3002_two", 1)]  # another filter applies
+    assert _listed(_facets(api, chapters=["3002_two"], q="rain")) == [("3001_one", 1), ("3002_two", 0)]
+
+
+def test_a_ticked_chapter_with_no_matches_is_kept_with_zero_clips(api, root):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    f = _facets(api, chapters=["3001_one", "3002_two"], q="rain")
+    assert _listed(f) == [("3001_one", 1), ("3002_two", 0)]
+    assert f["clips"] == 1
+    none = _facets(api, chapters=[""])  # the "no chapter" marker is not itself listed
+    assert none["clips"] == 0 and _listed(none) == [("3001_one", 2), ("3002_two", 1)]
+
+
+def test_chapter_facet_has_level_statistics(api, root):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    before = _facets(api)["chapters"][0]
+    assert before["measured"] == 0 and before["rms_db"] is None and before["rms_min"] is None
+    _measure_all(api)
+    row = _facets(api, chapters=["3002_two"])["chapters"][0]
+    assert row["chapter"] == "3001_one" and row["measured"] == 2 and row["clips"] == 2
+    assert row["rms_min"] <= row["rms_p10"] <= row["rms_db"] <= row["rms_p90"] <= row["rms_max"]
+    assert row["peak"] > 0
+
+
+def test_tag_facet_ignores_tag_filters_and_length_facet_ignores_length_filters(api, root):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    f = _facets(api, tags_all=["calm"])
+    assert f["clips"] == 1 and dict(f["tags"])["slow"] == 3 and dict(f["tags"])["calm"] == 1  # full tag cloud
+    assert sum(b["clips"] for b in f["duration"]) == 1  # lengths follow the tag filter
+    f = _facets(api, tags_none=["calm"], tags_any=["slow"])
+    assert dict(f["tags"])["calm"] == 1 and f["clips"] == 2
+    f = _facets(api, min_dur=3.8, max_dur=5)
+    assert f["clips"] == 1 and sum(b["clips"] for b in f["duration"]) == 3  # every bar keeps its count
+    assert dict(f["tags"])["slow"] == 1  # tags follow the length filter
+    f = _facets(api, dur_ranges=[[3, 4]])
+    assert f["clips"] == 1 and sum(b["clips"] for b in f["duration"]) == 3
+
+
+def test_dur_ranges_pick_any_listed_range_and_and_with_min_max(root):
+    c = dataset.load(root)
+    secs = lambda f: sorted(l["duration_s"] for l in dataset.select(c, {"voice_ids": [NARR], **f}))
+    assert secs({"dur_ranges": [[0, 2], [4, None]]}) == [1.0, 4.0]  # not contiguous, open-ended last bar
+    assert secs({"dur_ranges": [[1, 2]]}) == [1.0]
+    assert secs({"dur_ranges": [[0, 2], [3, 4]]}) == [1.0, 3.5]
+    assert secs({"dur_ranges": [[0, 2], [4, None]], "min_dur": 2}) == [4.0]
+    assert secs({"dur_ranges": []}) == [1.0, 3.5, 4.0]
+
+
+def test_every_route_honours_dur_ranges_including_a_non_contiguous_export(api, root, tmp_path):
+    api.put("/api/fish/dataset/root", json={"path": root})
+    spec = {"voice_ids": [NARR], "dur_ranges": [[0, 2], [4, None]]}
+    assert api.post("/api/fish/dataset/lines", json=spec).json()["total"] == 2
+    assert api.post("/api/fish/dataset/facets", json=spec).json()["clips"] == 2
+    assert api.post("/api/fish/dataset/reference-candidates", json=spec).status_code == 200
+    out = api.post("/api/fish/dataset/export", json={**spec, "dest": str(tmp_path / "gaps"), "formats": ["jsonl"]})
+    assert out.status_code == 200 and out.json()["clips"] == 2
+    rows = [json.loads(x) for x in open(os.path.join(out.json()["path"], "metadata.jsonl"), encoding="utf-8")]
+    assert sorted(r["text_plain"] for r in rows) == ["Another chapter begins.", "Rain fell."]
+    assert api.post("/api/fish/dataset/lines", json={"dur_ranges": [[1]]}).status_code == 422

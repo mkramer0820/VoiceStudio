@@ -40,6 +40,9 @@ class _Filter(BaseModel):
     tag: str = Field("", max_length=40)
     min_dur: Optional[float] = Field(None, ge=0, le=600)
     max_dur: Optional[float] = Field(None, ge=0, le=600)
+    dur_ranges: list[tuple[float, Optional[float]]] = Field(
+        default_factory=list, max_length=60,
+        description="Length ranges in seconds [from, to) (to null = no limit); a clip passes if it is in ANY of them. ANDed with min_dur/max_dur")
     min_words: Optional[int] = Field(None, ge=0, le=5000)
     max_words: Optional[int] = Field(None, ge=0, le=5000)
     duplicates: bool = False
@@ -153,8 +156,17 @@ async def facets(body: _Filter):
     """Length, tag, chapter and audio-quality breakdown of what the current filters match."""
     ds = _ds()
     corpus = _corpus()
-    matched = await run_in_threadpool(ds.select, corpus, {**body.model_dump(), "exclude_keys": []})
-    result = await run_in_threadpool(ds.facets, matched)
+    spec = {**body.model_dump(), "exclude_keys": []}
+    matched = await run_in_threadpool(ds.select, corpus, spec)
+
+    def pick(facet: str):
+        return ds.select_ignoring(corpus, spec, facet, matched)
+
+    # Chapters, tags and lengths describe the selection without their own filter, so choosing one
+    # never hides the other options.
+    result = await run_in_threadpool(
+        lambda: ds.facets(matched, chapter_lines=pick("chapters"), tag_lines=pick("tags"),
+                          duration_lines=pick("duration"), keep_chapters=body.chapters))
     # The level spread of what would be exported (unticked clips are not in it), for the loudness target.
     left_out = set(body.exclude_keys)
     result["levels"] = await run_in_threadpool(ds.level_summary, [l for l in matched if l["key"] not in left_out])

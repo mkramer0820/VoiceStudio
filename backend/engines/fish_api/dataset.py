@@ -289,6 +289,29 @@ _QUALITY = (  # filter key -> (stat, comparison)
 SORTS = ("order", "duration_desc", "duration_asc", "words_desc", "words_asc", "random")
 
 
+def _ranges(raw) -> list[tuple[float, Optional[float]]]:
+    """``dur_ranges`` as ``(from, to)`` pairs, ``to`` None meaning no upper bound; a clip passes in ANY range."""
+    return [(float(r[0]), None if r[1] is None else float(r[1])) for r in (raw or [])]
+
+
+# Filter keys each facet ignores, so the owner always sees every option for the thing being chosen.
+OWN_KEYS = {
+    "chapters": ("chapters",),
+    "tags": ("tag", "tags_any", "tags_all", "tags_none"),
+    "duration": ("min_dur", "max_dur", "dur_ranges"),
+}
+
+
+def select_ignoring(corpus: Corpus, f: dict, facet: str, matched: Optional[list[dict]] = None) -> list[dict]:
+    """The selection for one facet: every filter except the facet's own dimension.
+
+    ``matched`` (``select(corpus, f)``) is returned as is when the facet's own filter is not set."""
+    own = OWN_KEYS[facet]
+    if matched is not None and not any(f.get(k) not in (None, "", [], ()) for k in own):
+        return matched
+    return select(corpus, {k: v for k, v in f.items() if k not in own})
+
+
 def select(corpus: Corpus, f: dict) -> list[dict]:
     """Lines matching a filter dict. Shared by the browser and the exporter so they agree.
 
@@ -306,6 +329,7 @@ def select(corpus: Corpus, f: dict) -> list[dict]:
     tags_any = set(normalize_tags(f.get("tags_any")))
     tags_none = set(normalize_tags(f.get("tags_none")))
     min_d, max_d = f.get("min_dur"), f.get("max_dur")
+    ranges = _ranges(f.get("dur_ranges"))
     min_w, max_w = f.get("min_words"), f.get("max_words")
     dups = bool(f.get("duplicates", False))
     limits = [(key, stat, how, f[key]) for key, stat, how in _QUALITY if f.get(key) is not None]
@@ -324,6 +348,8 @@ def select(corpus: Corpus, f: dict) -> list[dict]:
         if min_d is not None and line["duration_s"] < min_d:
             continue
         if max_d is not None and line["duration_s"] > max_d:
+            continue
+        if ranges and not any(lo <= line["duration_s"] and (hi is None or line["duration_s"] < hi) for lo, hi in ranges):
             continue
         if min_w is not None and line["words"] < min_w:
             continue
@@ -370,31 +396,49 @@ def _sorted(lines: list[dict], how: str, seed: int) -> list[dict]:
 DURATION_EDGES = (0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30)
 
 
-def facets(lines: list[dict]) -> dict:
-    """What the current selection looks like: lengths, tags, chapters and audio quality."""
+def _spread(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    pos = (len(ordered) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(ordered) - 1)
+    return ordered[lo] + (ordered[hi] - ordered[lo]) * (pos - lo)
+
+
+def facets(lines: list[dict], *, chapter_lines: Optional[list[dict]] = None, tag_lines: Optional[list[dict]] = None,
+           duration_lines: Optional[list[dict]] = None, keep_chapters: Iterable[str] = ()) -> dict:
+    """What the current selection looks like: lengths, tags, chapters and audio quality.
+
+    The chapter, tag and length breakdowns are what you pick FROM, so they describe the selection
+    without their own filter (``chapter_lines`` etc., from ``select_ignoring``) and stay complete
+    after you choose; everything else describes ``lines``. A chapter in ``keep_chapters`` is listed
+    even with no matching clips (``clips`` 0).
+    """
     import collections
 
     from . import dataset_quality
 
     edges = DURATION_EDGES
     counts = [0] * len(edges)
-    for l in lines:
+    for l in lines if duration_lines is None else duration_lines:
         d = l["duration_s"]
         counts[max(i for i, e in enumerate(edges) if d >= e)] += 1
     bins = [{"from": e, "to": edges[i + 1] if i + 1 < len(edges) else None, "clips": counts[i]}
             for i, e in enumerate(edges)]
-    tag_counts = collections.Counter(t for l in lines for t in set(l["tags"]))
+    tag_counts = collections.Counter(t for l in (lines if tag_lines is None else tag_lines) for t in set(l["tags"]))
     per_chapter: dict[str, list] = {}
     levels: dict[str, list] = collections.defaultdict(list)
     peaks: dict[str, float] = {}
     measured = [(l, dataset_quality.get(l)) for l in lines]
-    for l, st in measured:
+    for l, st in [(l, dataset_quality.get(l)) for l in (lines if chapter_lines is None else chapter_lines)]:
         c = per_chapter.setdefault(l["chapter"], [0, 0.0])
         c[0] += 1
         c[1] += l["duration_s"]
         if st:
             levels[l["chapter"]].append(st["rms_db"])
             peaks[l["chapter"]] = max(peaks.get(l["chapter"], 0.0), st["peak"])
+    for c in keep_chapters:
+        if c:  # "" is the "no chapter" marker, not a chapter
+            per_chapter.setdefault(c, [0, 0.0])
     have = [st for _, st in measured if st]
     quality = {
         "analyzed": len(have), "total": len(lines),
@@ -409,13 +453,21 @@ def facets(lines: list[dict]) -> dict:
         "clips": len(lines), "seconds": round(sum(l["duration_s"] for l in lines), 1),
         "duration": bins,
         "tags": tag_counts.most_common(80),
-        "chapters": [{"chapter": c, "clips": n, "seconds": round(sec, 1),
-                      "rms_db": round(statistics.median(levels[c]), 1) if levels.get(c) else None,
-                      "peak": peaks.get(c)}
-                     for c, (n, sec) in sorted(per_chapter.items())],
+        "chapters": [_chapter_row(c, n, sec, levels.get(c), peaks.get(c)) for c, (n, sec) in sorted(per_chapter.items())],
         "words": {"min": min(words), "max": max(words), "avg": round(sum(words) / len(words), 1)} if words else None,
         "quality": quality,
     }
+
+
+def _chapter_row(chapter: str, clips: int, seconds: float, levels: Optional[list[float]], peak: Optional[float]) -> dict:
+    row = {"chapter": chapter, "clips": clips, "seconds": round(seconds, 1), "peak": peak,
+           "measured": len(levels or []), "rms_db": None, "rms_min": None, "rms_max": None,
+           "rms_p10": None, "rms_p90": None}
+    if levels:
+        row |= {"rms_db": round(statistics.median(levels), 1), "rms_min": round(min(levels), 1),
+                "rms_max": round(max(levels), 1), "rms_p10": round(_spread(levels, 0.1), 1),
+                "rms_p90": round(_spread(levels, 0.9), 1)}
+    return row
 
 
 # ── export ──
