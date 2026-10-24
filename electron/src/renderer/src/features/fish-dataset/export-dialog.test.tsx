@@ -95,6 +95,18 @@ describe('tags table', () => {
     expect(sent(onExport).keep_tags).toEqual([]);
   });
 
+  it('blocks the export, with a reason, when more tags are kept than the backend accepts', () => {
+    const many = Array.from({ length: 101 }, (_, i): [string, number] => [`tag${i}`, 1]);
+    const { dialog } = setup({ knownTags: many, omnivoiceTags: [] });
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_text'), { target: { value: 'strip' } });
+    expect(exportButton(dialog)).toBeEnabled(); // everything starts as Remove
+    fireEvent.click(within(dialog).getByRole('button', { name: 'fishDataset.tags_keep_all' }));
+    expect(exportButton(dialog)).toBeDisabled();
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('fishDataset.tags_too_many');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'fishDataset.tags_remove_all' }));
+    expect(exportButton(dialog)).toBeEnabled();
+  });
+
   it('treats an empty Convert as Remove', async () => {
     const { dialog, onExport } = setup();
     fireEvent.change(within(dialog).getByLabelText('fishDataset.export_text'), { target: { value: 'strip' } });

@@ -3927,6 +3927,7 @@
     "tag_convert_to": "Write [{{tag}}] as",
     "tag_unknown_short": "not an OmniVoice tag",
     "tags_unknown": "OmniVoice does not know {{tags}}. Convert to one of: {{known}}, remove it, or untick the box below to write your own.",
+    "tags_too_many": "You are keeping or converting {{count}} tags; at most {{max}} can be listed. Remove some, or use Remove all and keep only the ones you need.",
     "tags_paste": "Paste a dictionary",
     "tags_paste_apply": "Apply to the rows",
     "strict_tags": "Only allow tags OmniVoice knows",

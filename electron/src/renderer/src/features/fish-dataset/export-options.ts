@@ -68,6 +68,9 @@ export function unknownTags(tags: string[], actions: TagActions, known: string[]
 
 // ---- training --------------------------------------------------------------------------------
 
+/** The backend accepts at most this many dictionary entries. */
+export const MAX_KEPT_TAGS = 100;
+
 export const FRAMES_PER_SECOND = 25;
 export const TEXT_OVERHEAD = 1.15;
 export const STEP_RANGE = [10, 200000] as const;

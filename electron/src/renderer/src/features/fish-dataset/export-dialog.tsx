@@ -17,6 +17,7 @@ import {
   EMPTY_TRAINING,
   invalidKeys,
   keepTagsOf,
+  MAX_KEPT_TAGS,
   trainingBody,
   unknownTags,
   type TagActions,
@@ -80,6 +81,8 @@ export function ExportDialog({
   const stripped = omni || textMode === 'strip';
   const tagNames = knownTags.map(([tag]) => tag);
   const unknown = omni && strict ? unknownTags(tagNames, tagActions, omnivoiceTags) : [];
+  const keptEntries = stripped ? keepTagsOf(tagNames, tagActions) : [];
+  const tooManyTags = keptEntries.length > MAX_KEPT_TAGS;
   const writeTraining = omni && training;
   const trainSeconds = seconds * (1 - Math.max(0, Math.min(0.49, Number(val) / 100 || 0)));
   const trainingInvalid = writeTraining && invalidKeys(trainingForm).length > 0;
@@ -94,7 +97,7 @@ export function ExportDialog({
       text_mode: stripped ? 'strip' : 'keep',
       sample_rate: omni ? 24000 : rate ? Number(rate) : null,
       val_fraction: Math.max(0, Math.min(0.49, Number(val) / 100 || 0)),
-      keep_tags: stripped ? keepTagsOf(tagNames, tagActions) : [],
+      keep_tags: keptEntries,
       strict_tags: omni ? strict : undefined,
       training: writeTraining ? trainingBody(trainingForm) : undefined,
       loudness_db: level && Number.isFinite(Number(levelDb)) ? Number(levelDb) : null,
@@ -299,10 +302,16 @@ export function ExportDialog({
           )}
         </div>
 
+        {tooManyTags && (
+          <p role="alert" className="text-[11px] leading-snug text-amber-500">
+            {t('fishDataset.tags_too_many', { max: MAX_KEPT_TAGS, count: keptEntries.length })}
+          </p>
+        )}
+
         <DialogFooter>
           <DialogClose render={<Button variant="outline" />}>{t('fishStory.done')}</DialogClose>
           <Button disabled={
-              busy || !dest.trim() || formats.length === 0 || clips === 0 || unknown.length > 0 || trainingInvalid
+              busy || !dest.trim() || formats.length === 0 || clips === 0 || unknown.length > 0 || tooManyTags || trainingInvalid
             } onClick={() => void run()}>
             {busy && <LoaderCircleIcon className="animate-spin" />} {t('fishDataset.export_button')}
           </Button>
