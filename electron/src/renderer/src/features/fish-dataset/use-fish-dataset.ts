@@ -43,6 +43,70 @@ export interface ClipStats {
   tail_ms: number;
   pauses: number;
   max_gap_ms: number;
+  /** Level of the quietest tenth of the clip; missing in numbers measured by an older version. */
+  noise_floor_db?: number;
+}
+
+/** A clip the user starred as a possible Qwen3-TTS reference (kept with its details, so the dialog needs no lookup). */
+export interface ShortlistClip {
+  key: string;
+  label: string;
+  voice_id: string;
+  voice_name: string;
+  text: string;
+  duration_s: number;
+  stats?: ClipStats | null;
+}
+
+/** One ranked reference candidate from the backend. */
+export interface ReferenceCandidate {
+  key: string;
+  chapter: string;
+  index: number;
+  text: string;
+  duration_s: number;
+  stats: ClipStats;
+  score: number;
+  reasons: string[];
+  cautions: string[];
+  relaxed: string | null;
+}
+
+export interface ReferenceSuggestion {
+  speaker: { voice_id: string; name: string };
+  /** Clips that could be judged, and how many have no measurements yet. */
+  considered: number;
+  unmeasured: number;
+  clips: number;
+  candidates: ReferenceCandidate[];
+}
+
+/** Min, median and max measured clip level of the selection and a count per 0.1 dB. */
+export interface LevelSummary {
+  measured: number;
+  total: number;
+  min: number | null;
+  median: number | null;
+  max: number | null;
+  counts: Array<[number, number]>;
+}
+
+export interface LoudnessChapter {
+  clips: number;
+  adjusted: number;
+  peak_limited: number;
+  worst_shortfall_db: number;
+  median_before_db: number;
+  median_after_db: number;
+}
+
+export interface LoudnessReport {
+  target_rms_db: number;
+  clips?: number;
+  adjusted: number;
+  peak_limited: number;
+  worst_shortfall_db?: number;
+  chapters?: Record<string, LoudnessChapter>;
 }
 
 export interface DatasetLine {
@@ -68,6 +132,7 @@ export interface DatasetFacets {
   tags: Array<[string, number]>;
   chapters: Array<{ chapter: string; clips: number; seconds: number; rms_db: number | null; peak: number | null }>;
   words: { min: number; max: number; avg: number } | null;
+  levels?: LevelSummary;
   quality: {
     analyzed: number;
     total: number;
@@ -105,6 +170,8 @@ export interface DatasetFilters {
   seed: number;
   /** Only the clips you unticked (to review or put back). */
   excludedOnly: boolean;
+  /** Only the clips you starred as reference candidates. */
+  shortlistOnly: boolean;
   hideClipped: boolean;
   maxPeak: string;
   minRms: string;
@@ -128,6 +195,7 @@ export const EMPTY_FILTERS: DatasetFilters = {
   sort: 'order',
   seed: 0,
   excludedOnly: false,
+  shortlistOnly: false,
   hideClipped: false,
   maxPeak: '',
   minRms: '',
@@ -163,6 +231,8 @@ export interface ExportResult {
   hours: number;
   speakers: Record<string, { clips: number; seconds: number }>;
   formats?: string[];
+  /** Set when level matching ran: what it did, per chapter. */
+  loudness?: LoudnessReport | null;
   training?: { files: string[]; estimate: { passes: number; steps_per_pass: number; note: string } };
   qwen3?: {
     accepted: number;
@@ -198,6 +268,7 @@ export function useFishDataset() {
   const [voices, setVoices] = useState<ReadonlySet<string>>(new Set());
   const [filters, setFilters] = useState<DatasetFilters>(EMPTY_FILTERS);
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [shortlist, setShortlist] = useState<ReadonlyMap<string, ShortlistClip>>(new Map());
   const [page, setPage] = useState(0);
   const [lines, setLines] = useState<DatasetLine[]>([]);
   const [facets, setFacets] = useState<DatasetFacets | null>(null);
@@ -234,9 +305,11 @@ export function useFishDataset() {
       max_gap_ms: num(filters.maxGap),
       ...(filters.excludedOnly
         ? { only_keys: [...excluded], exclude_keys: [] as string[] }
-        : { exclude_keys: [...excluded] }),
+        : filters.shortlistOnly
+          ? { only_keys: [...shortlist.keys()], exclude_keys: [...excluded] }
+          : { exclude_keys: [...excluded] }),
     }),
-    [voices, filters, excluded],
+    [voices, filters, excluded, shortlist],
   );
 
   const refresh = useCallback(async (rescan = false) => {
@@ -255,7 +328,7 @@ export function useFishDataset() {
   }, [refresh]);
 
   // Any filter change returns to the first page.
-  const filterKey = JSON.stringify([...voices, filters, filters.excludedOnly ? [...excluded] : 0]);
+  const filterKey = JSON.stringify([...voices, filters, filters.excludedOnly ? [...excluded] : 0, filters.shortlistOnly ? [...shortlist.keys()] : 0]);
   useEffect(() => setPage(0), [filterKey]);
 
   useEffect(() => {
@@ -335,6 +408,7 @@ export function useFishDataset() {
         await apiJson('/api/fish/dataset/root', { method: 'PUT', body: JSON.stringify({ path }) });
         setVoices(new Set());
         setExcluded(new Set());
+        setShortlist(new Map());
         await refresh(true);
         return true;
       } catch (reason) {
@@ -365,6 +439,37 @@ export function useFishDataset() {
         return next;
       }),
     [],
+  );
+
+  const toggleShortlist = useCallback(
+    (line: DatasetLine) =>
+      setShortlist((current) => {
+        const next = new Map(current);
+        if (next.has(line.key)) next.delete(line.key);
+        else {
+          next.set(line.key, {
+            key: line.key,
+            label: `${line.chapter} #${line.index}`,
+            voice_id: line.voice_id,
+            voice_name: line.voice_name,
+            text: line.plain,
+            duration_s: line.duration_s,
+            stats: line.stats,
+          });
+        }
+        return next;
+      }),
+    [],
+  );
+
+  /** The best reference candidates of the current selection, from the saved audio measurements. */
+  const suggestReferences = useCallback(
+    (limit: number, minDuration: number, maxDuration: number) =>
+      apiJson<ReferenceSuggestion>('/api/fish/dataset/reference-candidates', {
+        method: 'POST',
+        body: JSON.stringify({ ...spec, limit, min_duration: minDuration, max_duration: maxDuration }),
+      }),
+    [spec],
   );
 
   /** Leave out (or put back) every clip the current filters match, not just the visible page. */
@@ -427,6 +532,12 @@ export function useFishDataset() {
     excluded,
     toggleExcluded,
     clearExcluded: () => setExcluded(new Set()),
+    shortlist,
+    toggleShortlist,
+    removeFromShortlist: (keys: string[]) =>
+      setShortlist((current) => new Map([...current].filter(([key]) => !keys.includes(key)))),
+    clearShortlist: () => setShortlist(new Map()),
+    suggestReferences,
     setMatchedExcluded,
     page,
     setPage,

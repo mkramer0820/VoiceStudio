@@ -273,3 +273,31 @@ export function qwenEstimate(clips: number, batchSize: number, epochs: number) {
   const updates = Math.ceil(batches / QWEN_ACCUMULATION);
   return { batches, updates, total: updates * epochs };
 }
+
+// ---- loudness --------------------------------------------------------------------------------
+
+/** The level the training formats start at (dB, whole-clip RMS including pauses); -19 to -23 is the usual range. */
+export const DEFAULT_LEVEL_DB = '-22';
+export const LEVEL_PRESETS = [-19, -22, -23] as const;
+/** The backend refuses anything outside this range. */
+export const LEVEL_RANGE = [-60, -3] as const;
+/** Clips within this many dB of the target count as already there. */
+export const LEVEL_TOLERANCE_DB = 1;
+
+export function levelInvalid(raw: string): boolean {
+  const value = Number(raw);
+  return raw.trim() === '' || !Number.isFinite(value) || value < LEVEL_RANGE[0] || value > LEVEL_RANGE[1];
+}
+
+/** How many measured clips sit below, within 1 dB of, or above `target`; `counts` is [level, clips] pairs. */
+export function levelSplit(counts: Array<[number, number]>, target: number) {
+  let below = 0;
+  let within = 0;
+  let above = 0;
+  for (const [level, clips] of counts) {
+    if (level < target - LEVEL_TOLERANCE_DB) below += clips;
+    else if (level > target + LEVEL_TOLERANCE_DB) above += clips;
+    else within += clips;
+  }
+  return { below, within, above };
+}

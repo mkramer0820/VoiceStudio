@@ -129,15 +129,35 @@ const lastBody = (match: string) => {
 beforeEach(() => {
   mock.api.mockImplementation((path: string, init?: RequestInit) => {
     if (path.startsWith('/api/fish/dataset/lines')) {
-      const left = new Set<string>(JSON.parse(String(init?.body ?? '{}')).exclude_keys ?? []);
-      const picked = LINES.lines.filter((l) => !left.has(l.key));
+      const spec = JSON.parse(String(init?.body ?? '{}'));
+      const left = new Set<string>(spec.exclude_keys ?? []);
+      const only: string[] | undefined = spec.only_keys ?? undefined;
+      const shown = LINES.lines.filter((l) => !only || only.includes(l.key));
+      const picked = shown.filter((l) => !left.has(l.key));
       return Promise.resolve({
         ...LINES,
+        total: shown.length,
+        lines: shown,
         selected: picked.length,
         selected_seconds: picked.reduce((n, l) => n + l.duration_s, 0),
       });
     }
-    if (path === '/api/fish/dataset/facets') return Promise.resolve(FACETS);
+    if (path === '/api/fish/dataset/reference-candidates')
+      return Promise.resolve({
+        speaker: { voice_id: 'v-narr', name: 'SS_Narrator' },
+        considered: 2,
+        unmeasured: 0,
+        clips: 2,
+        candidates: [
+          {
+            key: 'r1:c1', chapter: '3203_x', index: 1, text: 'The road was long.', duration_s: 3.2,
+            stats: { peak: 0.4, rms_db: -23, clip: 0, lead_ms: 0, tail_ms: 0, pauses: 0, max_gap_ms: 0, noise_floor_db: -50 },
+            score: -0.5, reasons: ['not_clipped'], cautions: [], relaxed: null,
+          },
+        ],
+      });
+    if (path === '/api/fish/dataset/facets')
+      return Promise.resolve({ ...FACETS, levels: { measured: 1, total: 2, min: -26, median: -26, max: -26, counts: [[-26, 1]] } });
     if (path === '/api/fish/dataset/analyze')
       return Promise.resolve(init?.method === 'POST' ? { ...IDLE, running: true, total: 3 } : IDLE);
     if (path === '/api/fish/dataset/root') return Promise.resolve({ root: 'D:\\other' });
@@ -231,7 +251,7 @@ it('exports the filtered set only after the folder is given', async () => {
   });
 });
 
-it('exports the OmniVoice format at 24 kHz with stripped text and an optional loudness level', async () => {
+it('exports the OmniVoice format at 24 kHz with stripped text and the default -22 dB loudness level', async () => {
   render(<FishDatasetPage />);
   await screen.findAllByTestId('clip-row');
   fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
@@ -239,8 +259,9 @@ it('exports the OmniVoice format at 24 kHz with stripped text and an optional lo
   fireEvent.click(within(dialog).getByLabelText(/fishDataset\.format_omnivoice(?!_)/));
   expect(within(dialog).getByLabelText('fishDataset.export_text')).toBeDisabled();
   expect(within(dialog).getByLabelText('fishDataset.export_rate')).toBeDisabled();
-  fireEvent.click(within(dialog).getByLabelText('fishDataset.export_loudness'));
-  fireEvent.change(within(dialog).getByLabelText('fishDataset.export_loudness_db'), { target: { value: '-22' } });
+  // matching loudness is already ticked at -22 dB for this format: nothing to touch
+  expect(within(dialog).getByLabelText('fishDataset.export_loudness')).toBeChecked();
+  expect(within(dialog).getByLabelText('fishDataset.export_loudness_db')).toHaveValue(-22);
   fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
   fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
   await within(dialog).findByText(/fishDataset\.export_done/);
@@ -374,6 +395,83 @@ it('leaves out every matching clip, then puts them back', async () => {
   expect(screen.getAllByTestId('clip-row')).toHaveLength(2); // still listed, just unticked
   fireEvent.click(selectAll);
   await waitFor(() => expect(lastLines().exclude_keys).toEqual([]));
+});
+
+const star = (index: number) =>
+  screen.getByRole('button', { name: new RegExp(`fishDataset\\.shortlist_(add|remove) .*"index":${index}\\}`) });
+
+describe('shortlist and reference', () => {
+  it('stars any number of clips and unstars them again', async () => {
+    render(<FishDatasetPage />);
+    await screen.findAllByTestId('clip-row');
+    fireEvent.click(star(1));
+    fireEvent.click(star(2));
+    expect(star(1)).toHaveAttribute('aria-pressed', 'true');
+    expect(star(2)).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(star(1));
+    expect(star(1)).toHaveAttribute('aria-pressed', 'false');
+    expect(star(2)).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('option', { name: /fishDataset\.view_shortlist .*"count":1/ })).toBeInTheDocument();
+  });
+
+  it('shows only the shortlist through only_keys, keeps it across filter changes and lets you unstar there', async () => {
+    render(<FishDatasetPage />);
+    await screen.findAllByTestId('clip-row');
+    fireEvent.click(star(1));
+    fireEvent.click(star(2));
+    fireEvent.change(screen.getByLabelText('fishDataset.view'), { target: { value: 'shortlist' } });
+    await waitFor(() => expect(lastLines()).toMatchObject({ only_keys: ['r1:c1', 'r1:c2'], exclude_keys: [] }));
+    expect(await screen.findByTestId('filter-chip')).toHaveTextContent('fishDataset.chip_shortlist');
+
+    fireEvent.change(screen.getByPlaceholderText('fishDataset.search'), { target: { value: 'road' } });
+    await waitFor(() => expect(lastLines()).toMatchObject({ q: 'road', only_keys: ['r1:c1', 'r1:c2'] }));
+
+    fireEvent.click(star(2));
+    await waitFor(() => expect(lastLines().only_keys).toEqual(['r1:c1']));
+    await waitFor(() => expect(screen.getAllByTestId('clip-row')).toHaveLength(1));
+    fireEvent.change(screen.getByLabelText('fishDataset.view'), { target: { value: 'all' } });
+    await waitFor(() => expect(lastLines().only_keys).toBeUndefined());
+    expect(star(1)).toHaveAttribute('aria-pressed', 'true'); // still starred in the full view
+  });
+
+  it('plays only the shortlist in the shortlist view', async () => {
+    mock.fetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(['x'])) });
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }));
+    vi.stubGlobal('Audio', class { onended = null; play = () => Promise.resolve(); pause = () => undefined; });
+    render(<FishDatasetPage />);
+    await screen.findAllByTestId('clip-row');
+    fireEvent.click(star(2));
+    fireEvent.change(screen.getByLabelText('fishDataset.view'), { target: { value: 'shortlist' } });
+    await waitFor(() => expect(screen.getAllByTestId('clip-row')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'fishDataset.play_all' }));
+    await waitFor(() => expect(mock.fetch).toHaveBeenCalledTimes(1));
+    expect(decodeURIComponent(String(mock.fetch.mock.calls[0][0]).split('key=')[1])).toBe('r1:c2');
+    vi.unstubAllGlobals();
+  });
+
+  it('chooses one reference among the shortlist in the export dialog and sends exactly that key', async () => {
+    render(<FishDatasetPage />);
+    fireEvent.click((await screen.findAllByTestId('speaker-row'))[0]);
+    await screen.findByTestId('character-view');
+    await screen.findAllByTestId('clip-row');
+    fireEvent.click(star(1));
+    fireEvent.click(star(2));
+    fireEvent.click(screen.getByRole('button', { name: /fishDataset\.export_open/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByLabelText(/fishDataset\.format_qwen3_tts(?!_)/));
+    expect(await within(dialog).findAllByTestId('reference-suggestion')).toHaveLength(1);
+    expect(lastBody('/api/fish/dataset/reference-candidates')).toMatchObject({ voice_ids: ['v-narr'], limit: 5, min_duration: 0.8 });
+    fireEvent.click(within(dialog).getByLabelText(/fishDataset\.ref_choose_clip .*3203_x #2/));
+    expect(within(dialog).getByTestId('reference-current')).toHaveTextContent('Rain fell.');
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_dest'), { target: { value: 'D:\\out' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.export_button/ }));
+    await within(dialog).findByText(/fishDataset\.export_done/);
+    expect(lastBody('/api/fish/dataset/export')).toMatchObject({
+      formats: ['qwen3_tts'],
+      loudness_db: -22,
+      qwen3: { reference_key: 'r1:c2' },
+    });
+  });
 });
 
 describe('playback', () => {

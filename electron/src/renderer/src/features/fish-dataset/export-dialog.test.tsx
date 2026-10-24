@@ -8,6 +8,15 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+const player = vi.hoisted(() => ({
+  stop: vi.fn(),
+  toggle: vi.fn(),
+  play: vi.fn(),
+}));
+vi.mock('./clip-player', () => ({
+  useClipPlayer: () => ({ playing: null, play: player.play, toggle: player.toggle, stop: player.stop }),
+}));
+
 import { ExportDialog } from './export-dialog';
 import {
   estimatePasses, keepTagsOf, parseDictionary, suggestSteps, trainingBody, EMPTY_TRAINING,
@@ -340,18 +349,6 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     expect(sent(onExport).qwen3.speaker_name).toBe('Sunny');
   });
 
-  it('sends the starred reference clip, and clears it', async () => {
-    const onClear = vi.fn();
-    const { dialog, onExport } = setup({ referenceKey: 'run:c1', referenceLabel: '3001 #4', onClearReference: onClear }, QWEN_RESULT);
-    qwenOn(dialog);
-    expect(within(dialog).getByText(/qwen_ref_clip .*3001 #4/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'fishDataset.qwen_ref_clear' }));
-    expect(onClear).toHaveBeenCalled();
-    fireEvent.click(exportButton(dialog));
-    await waitFor(() => expect(onExport).toHaveBeenCalled());
-    expect(sent(onExport).qwen3.reference_key).toBe('run:c1');
-  });
-
   it('shows an estimate from the script loop, not an audio rate', () => {
     const { dialog } = setup({ clips: 100 });
     qwenOn(dialog);
@@ -406,5 +403,237 @@ describe('Qwen option helpers', () => {
     });
     expect(qwenTrainInvalid({ edits: { base_model: 'x; ls' } })).toEqual(['base_model']);
     expect(qwenEstimate(0, 2, 3)).toBeNull();
+  });
+});
+
+const LEVELS = {
+  measured: 10,
+  total: 10,
+  min: -26,
+  median: -25,
+  max: -14,
+  counts: [[-26, 4], [-25, 4], [-14, 2]] as Array<[number, number]>,
+};
+
+describe('match loudness', () => {
+  it('is ticked with -22 dB for the training formats and sends it without the user touching the field', async () => {
+    const { dialog, onExport } = setup({}, QWEN_RESULT);
+    qwenOn(dialog);
+    expect(within(dialog).getByLabelText('fishDataset.export_loudness')).toBeChecked();
+    expect(within(dialog).getByLabelText('fishDataset.export_loudness_db')).toHaveValue(-22);
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+    expect(sent(onExport).loudness_db).toBe(-22);
+
+    cleanup();
+    const omni = setup();
+    omniOn(omni.dialog);
+    fireEvent.click(exportButton(omni.dialog));
+    await waitFor(() => expect(omni.onExport).toHaveBeenCalled());
+    expect(sent(omni.onExport).loudness_db).toBe(-22);
+  });
+
+  it('stays off for the other formats, and the user can untick it for the training formats', async () => {
+    const plain = setup();
+    expect(within(plain.dialog).getByLabelText('fishDataset.export_loudness')).not.toBeChecked();
+    fireEvent.click(exportButton(plain.dialog));
+    await waitFor(() => expect(plain.onExport).toHaveBeenCalled());
+    expect(sent(plain.onExport).loudness_db).toBeNull();
+    cleanup();
+
+    const { dialog, onExport } = setup({}, QWEN_RESULT);
+    qwenOn(dialog);
+    fireEvent.click(within(dialog).getByLabelText('fishDataset.export_loudness'));
+    expect(within(dialog).queryByLabelText('fishDataset.export_loudness_db')).not.toBeInTheDocument();
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalled());
+    expect(sent(onExport).loudness_db).toBeNull();
+  });
+
+  it('offers -19, -22 and -23 presets, accepts a typed value and refuses one outside -60..-3', async () => {
+    const { dialog, onExport } = setup({}, QWEN_RESULT);
+    qwenOn(dialog);
+    fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.level_preset .*-19/ }));
+    expect(within(dialog).getByLabelText('fishDataset.export_loudness_db')).toHaveValue(-19);
+    fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.level_preset .*-23/ }));
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+    expect(sent(onExport).loudness_db).toBe(-23);
+
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_loudness_db'), { target: { value: '-2' } });
+    expect(exportButton(dialog)).toBeDisabled();
+    expect(within(dialog).getByText(/level_invalid/)).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_loudness_db'), { target: { value: '-61' } });
+    expect(exportButton(dialog)).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_loudness_db'), { target: { value: '-30.5' } });
+    expect(exportButton(dialog)).toBeEnabled();
+    expect(within(dialog).getByText('fishDataset.export_loudness_hint')).toBeInTheDocument();
+  });
+
+  it('shows the selection levels and how many clips sit below and above the target', () => {
+    const { dialog } = setup({ levels: LEVELS });
+    omniOn(dialog);
+    const summary = within(dialog).getByTestId('level-summary');
+    expect(summary).toHaveTextContent('"min":-26,"max":-14,"median":-25');
+    expect(summary).toHaveTextContent('"below":8,"above":2,"within":0,"target":-22');
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.export_loudness_db'), { target: { value: '-15' } });
+    expect(within(dialog).getByTestId('level-summary')).toHaveTextContent('"below":8,"above":0,"within":2,"target":-15');
+  });
+
+  it('says clips are not measured and offers the existing Measure audio action', () => {
+    const onMeasure = vi.fn();
+    const { dialog } = setup({ levels: { ...LEVELS, measured: 0, min: null, max: null, median: null, counts: [] }, onMeasure });
+    expect(within(dialog).getByText('fishDataset.level_unmeasured')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'fishDataset.analyze' }));
+    expect(onMeasure).toHaveBeenCalled();
+  });
+
+  it('reports per chapter what matching did, including clips the peak cap stopped', async () => {
+    const { dialog } = setup({}, {
+      loudness: {
+        target_rms_db: -22, clips: 40, adjusted: 38, peak_limited: 3, worst_shortfall_db: 4.2,
+        chapters: {
+          '3193_hot': { clips: 10, adjusted: 10, peak_limited: 3, worst_shortfall_db: 4.2, median_before_db: -16.1, median_after_db: -22 },
+        },
+      },
+    });
+    omniOn(dialog);
+    fireEvent.click(exportButton(dialog));
+    const result = await within(dialog).findByTestId('loudness-result');
+    expect(result).toHaveTextContent('"target":-22,"adjusted":38,"clips":40');
+    expect(result).toHaveTextContent('"chapter":"3193_hot","before":-16.1,"after":-22');
+    expect(result).toHaveTextContent('"count":3,"db":4.2');
+  });
+});
+
+const CLIPS = [
+  { key: 'k1', label: '3001 #1', voice_id: 'v-narr', voice_name: 'Narrator', text: 'Rain fell on the roof.', duration_s: 8.2, stats: null },
+  { key: 'k2', label: '3002 #4', voice_id: 'v-narr', voice_name: 'Narrator', text: 'A calm sentence.', duration_s: 9.5, stats: null },
+  { key: 'k9', label: '3002 #9', voice_id: 'v-noct', voice_name: 'Noctis', text: 'Another voice.', duration_s: 5, stats: null },
+];
+const CANDIDATE = (key: string, index: number) => ({
+  key,
+  chapter: '3001',
+  index,
+  text: `Candidate ${index}.`,
+  duration_s: 9,
+  stats: { peak: 0.5, rms_db: -22.5, clip: 0, lead_ms: 100, tail_ms: 200, pauses: 1, max_gap_ms: 300, noise_floor_db: -50 },
+  score: -0.1 * index,
+  reasons: ['not_clipped', 'neutral'],
+  cautions: index === 2 ? ['many_pauses'] : [],
+  relaxed: null,
+});
+const SUGGESTION = {
+  speaker: { voice_id: 'v-narr', name: 'Narrator' },
+  considered: 6,
+  unmeasured: 0,
+  clips: 6,
+  candidates: [1, 2, 3, 4, 5].map((i) => CANDIDATE(`c${i}`, i)),
+};
+
+describe('reference clip panel', () => {
+  const panel = (props: Partial<React.ComponentProps<typeof ExportDialog>> = {}, result?: Partial<ExportResult>) => {
+    const onSuggestReferences = vi.fn(async () => SUGGESTION);
+    const onReferenceChange = vi.fn();
+    const made = setup({ shortlist: CLIPS, speakerId: 'v-narr', onSuggestReferences, onReferenceChange, ...props }, result ?? QWEN_RESULT);
+    qwenOn(made.dialog);
+    return { ...made, onSuggestReferences, onReferenceChange };
+  };
+
+  it('says it is chosen automatically and shows the clip that would be picked and why', async () => {
+    const { dialog, onSuggestReferences } = panel();
+    const current = within(dialog).getByTestId('reference-current');
+    await waitFor(() => expect(current).toHaveTextContent('Candidate 1.'));
+    expect(current).toHaveTextContent('fishDataset.ref_auto_now');
+    expect(current).toHaveTextContent('fishDataset.ref_reason_not_clipped');
+    expect(onSuggestReferences).toHaveBeenCalledWith(5, 0.8, 30);
+  });
+
+  it('lists the top 5 with reasons, and Use this picks one', async () => {
+    const { dialog, onReferenceChange } = panel();
+    const rows = await within(dialog).findAllByTestId('reference-suggestion');
+    expect(rows).toHaveLength(5);
+    expect(rows[1]).toHaveTextContent('fishDataset.ref_caution_many_pauses');
+    expect(rows[0]).toHaveTextContent('fishDataset.ref_reason_neutral');
+    fireEvent.click(within(rows[2]).getByRole('button', { name: /fishDataset\.ref_use_clip/ }));
+    expect(onReferenceChange).toHaveBeenCalledWith(expect.objectContaining({ key: 'c3', label: '3001 #3' }));
+  });
+
+  it('Suggest asks again for the current selection', async () => {
+    const { dialog, onSuggestReferences } = panel();
+    await within(dialog).findAllByTestId('reference-suggestion');
+    fireEvent.click(within(dialog).getByRole('button', { name: /fishDataset\.ref_suggest$/ }));
+    await waitFor(() => expect(onSuggestReferences).toHaveBeenCalledTimes(2));
+  });
+
+  it('lists only the shortlisted clips of the exported speaker, one radio each, plus Automatic', async () => {
+    const onRemove = vi.fn();
+    const { dialog, onReferenceChange } = panel({ onRemoveShortlist: onRemove });
+    const choices = within(dialog).getByTestId('reference-choices');
+    expect(within(choices).getAllByRole('radio')).toHaveLength(3); // Automatic + two Narrator clips
+    expect(choices).toHaveTextContent('A calm sentence.');
+    expect(choices).not.toHaveTextContent('Another voice.');
+    expect(within(choices).getByRole('alert')).toHaveTextContent('"count":1');
+    fireEvent.click(within(choices).getByRole('button', { name: 'fishDataset.ref_remove_other' }));
+    expect(onRemove).toHaveBeenCalledWith(['k9']);
+    fireEvent.click(within(choices).getByLabelText(/fishDataset\.ref_choose_clip .*3002 #4/));
+    expect(onReferenceChange).toHaveBeenCalledWith(expect.objectContaining({ key: 'k2' }));
+    await within(dialog).findAllByTestId('reference-suggestion');
+  });
+
+  it('shows the chosen reference with its details, Automatic clears it, and exactly its key is sent', async () => {
+    const chosen = { key: 'k2', label: '3002 #4', text: 'A calm sentence.', duration_s: 9.5, stats: null };
+    const { dialog, onExport, onReferenceChange } = panel({ reference: chosen });
+    expect(within(dialog).getByTestId('reference-current')).toHaveTextContent('"label":"3002 #4"');
+    expect(within(dialog).getByTestId('reference-current')).toHaveTextContent('A calm sentence.');
+    fireEvent.click(within(dialog).getByLabelText('fishDataset.ref_automatic'));
+    expect(onReferenceChange).toHaveBeenCalledWith(null);
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalled());
+    expect(sent(onExport).qwen3.reference_key).toBe('k2');
+    await within(dialog).findAllByTestId('reference-suggestion');
+  });
+
+  it('sends a null reference when Automatic is chosen', async () => {
+    const { dialog, onExport } = panel();
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalled());
+    expect(sent(onExport).qwen3.reference_key).toBeNull();
+    await within(dialog).findAllByTestId('reference-suggestion');
+  });
+
+  it('says when clips are not measured and offers to measure first', async () => {
+    const onMeasure = vi.fn();
+    const none = { ...SUGGESTION, unmeasured: 6, candidates: [] };
+    const { dialog } = panel({ onSuggestReferences: vi.fn(async () => none), onMeasure });
+    const note = await within(dialog).findByTestId('reference-unmeasured');
+    expect(note).toHaveTextContent('"unmeasured":6,"clips":6');
+    fireEvent.click(within(note).getByRole('button', { name: 'fishDataset.analyze' }));
+    expect(onMeasure).toHaveBeenCalled();
+    expect(within(dialog).queryByTestId('reference-suggestion')).not.toBeInTheDocument();
+  });
+
+  it('shows the backend message when the selection cannot be ranked', async () => {
+    const { dialog } = panel({ onSuggestReferences: vi.fn(async () => { throw new Error('Pick one speaker'); }) });
+    expect(await within(dialog).findByText(/Pick one speaker/)).toBeInTheDocument();
+  });
+
+  it('plays a clip with the shared player, and stops playback when the dialog closes', async () => {
+    player.stop.mockClear();
+    const view = render(
+      <ExportDialog open onOpenChange={() => {}} clips={5} seconds={50} excluded={0} knownTags={[]} onExport={vi.fn()}
+        onError={() => {}} shortlist={CLIPS} speakerId="v-narr" onSuggestReferences={async () => SUGGESTION} />,
+    );
+    const dialog = screen.getByRole('dialog');
+    qwenOn(dialog);
+    fireEvent.click(within(dialog).getAllByRole('button', { name: /fishDataset\.ref_play .*3001 #1/ })[0]);
+    expect(player.toggle).toHaveBeenCalledWith('k1');
+    await within(dialog).findAllByTestId('reference-suggestion');
+    player.stop.mockClear();
+    view.rerender(
+      <ExportDialog open={false} onOpenChange={() => {}} clips={5} seconds={50} excluded={0} knownTags={[]} onExport={vi.fn()}
+        onError={() => {}} shortlist={CLIPS} speakerId="v-narr" onSuggestReferences={async () => SUGGESTION} />,
+    );
+    expect(player.stop).toHaveBeenCalled();
   });
 });

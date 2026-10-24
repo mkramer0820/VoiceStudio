@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { useClipPlayer } from './clip-player';
 import { DatasetExplorer } from './dataset-explorer';
 import { ExportDialog } from './export-dialog';
+import type { ReferenceClip } from './export-reference';
 import { TrainDialog } from './train-dialog';
 import {
   EMPTY_FILTERS,
@@ -94,7 +95,7 @@ export function FishDatasetPage() {
   const ds = useFishDataset();
   const [folder, setFolder] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
-  const [reference, setReference] = useState<{ key: string; label: string } | null>(null);
+  const [reference, setReference] = useState<ReferenceClip | null>(null);
   const [trainOpen, setTrainOpen] = useState(false);
   const [trainDir, setTrainDir] = useState('');
   const [auto, setAuto] = useState(true);
@@ -107,6 +108,8 @@ export function FishDatasetPage() {
   const focused =
     ds.voices.size === 1 ? overview?.speakers.find((s) => ds.voices.has(s.voice_id)) : undefined;
   const nFilters = activeFilterCount(filters) + (ds.voices.size > 0 ? 1 : 0);
+  const speakerId = focused?.voice_id ?? (overview?.speakers.length === 1 ? overview.speakers[0].voice_id : '');
+  const shortlisted = useMemo(() => [...ds.shortlist.values()], [ds.shortlist]);
 
   // Auto-advance reads fresh values through refs: the player's callback outlives a render.
   const live = useRef({ lines: ds.lines, page: ds.page, pages, auto });
@@ -179,6 +182,8 @@ export function FishDatasetPage() {
     if (f.maxPauses) out.push({ id: 'pauses', label: t('fishDataset.chip_pauses', { value: f.maxPauses }), clear: () => set({ maxPauses: '' }) });
     if (f.maxGap) out.push({ id: 'gap', label: t('fishDataset.chip_gap', { value: f.maxGap }), clear: () => set({ maxGap: '' }) });
     if (f.excludedOnly) out.push({ id: 'ex', label: t('fishDataset.chip_excluded'), clear: () => set({ excludedOnly: false }) });
+    if (f.shortlistOnly)
+      out.push({ id: 'sl', label: t('fishDataset.chip_shortlist'), clear: () => set({ shortlistOnly: false }) });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, t]);
@@ -299,11 +304,14 @@ export function FishDatasetPage() {
                 {t('fishDataset.view')}
                 <select
                   className={selectClass}
-                  value={filters.excludedOnly ? 'excluded' : 'all'}
-                  onChange={(e) => set({ excludedOnly: e.target.value === 'excluded' })}
+                  value={filters.excludedOnly ? 'excluded' : filters.shortlistOnly ? 'shortlist' : 'all'}
+                  onChange={(e) =>
+                    set({ excludedOnly: e.target.value === 'excluded', shortlistOnly: e.target.value === 'shortlist' })
+                  }
                 >
                   <option value="all">{t('fishDataset.view_all')}</option>
                   <option value="excluded">{t('fishDataset.view_excluded', { count: ds.excluded.size })}</option>
+                  <option value="shortlist">{t('fishDataset.view_shortlist', { count: ds.shortlist.size })}</option>
                 </select>
               </label>
             </fieldset>
@@ -365,7 +373,10 @@ export function FishDatasetPage() {
             <Button
               className="w-full"
               disabled={!overview?.exists || ds.selected === 0}
-              onClick={() => setExportOpen(true)}
+              onClick={() => {
+                player.stop();
+                setExportOpen(true);
+              }}
             >
               <DownloadIcon /> {t('fishDataset.export_open', { count: ds.selected })}
             </Button>
@@ -648,15 +659,15 @@ export function FishDatasetPage() {
                         size="icon-sm"
                         variant="ghost"
                         tabIndex={-1}
-                        aria-pressed={reference?.key === line.key}
-                        aria-label={t(reference?.key === line.key ? 'fishDataset.reference_unset' : 'fishDataset.reference_set', { index: line.index })}
-                        title={t('fishDataset.reference_title')}
+                        aria-pressed={ds.shortlist.has(line.key)}
+                        aria-label={t(ds.shortlist.has(line.key) ? 'fishDataset.shortlist_remove' : 'fishDataset.shortlist_add', { index: line.index })}
+                        title={t('fishDataset.shortlist_title')}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setReference(reference?.key === line.key ? null : { key: line.key, label: `${line.chapter} #${line.index}` });
+                          ds.toggleShortlist(line);
                         }}
                       >
-                        <StarIcon className={reference?.key === line.key ? 'fill-amber-500 text-amber-500' : undefined} />
+                        <StarIcon className={ds.shortlist.has(line.key) ? 'fill-amber-500 text-amber-500' : undefined} />
                       </Button>
                       <label className="flex items-center gap-1 pt-1.5 text-muted-foreground">
                         <input
@@ -688,9 +699,18 @@ export function FishDatasetPage() {
         excluded={ds.total - ds.selected}
         knownTags={overview?.tags ?? facets?.tags ?? []}
         omnivoiceTags={overview?.omnivoice_tags}
-        referenceKey={reference?.key ?? null}
-        referenceLabel={reference?.label ?? null}
-        onClearReference={() => setReference(null)}
+        reference={reference}
+        onReferenceChange={setReference}
+        shortlist={shortlisted}
+        onRemoveShortlist={(keys) => {
+          ds.removeFromShortlist(keys);
+          if (reference && keys.includes(reference.key)) setReference(null);
+        }}
+        onSuggestReferences={ds.suggestReferences}
+        levels={facets?.levels ?? null}
+        analysis={analysis}
+        onMeasure={() => void ds.startAnalysis()}
+        speakerId={speakerId}
         speakerCount={ds.voices.size || overview?.speakers.length || 1}
         speakerName={overview?.speakers.find((s) => ds.voices.has(s.voice_id))?.name ?? overview?.speakers[0]?.name ?? ''}
         onExport={ds.runExport}

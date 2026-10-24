@@ -14,11 +14,13 @@ import {
 import { Input } from '@/components/ui/input';
 import { getBridge } from '@/components/bridge';
 import {
+  DEFAULT_LEVEL_DB,
   EMPTY_QWEN,
   EMPTY_QWEN_TRAIN,
   EMPTY_TRAINING,
   invalidKeys,
   keepTagsOf,
+  levelInvalid,
   MAX_KEPT_TAGS,
   QWEN_FORMAT,
   qwenBody,
@@ -32,16 +34,59 @@ import {
   type TagActions,
   type TrainingForm,
 } from './export-options';
+import { LoudnessSection } from './export-loudness';
 import { QwenSection } from './export-qwen';
+import { ReferencePanel, type ReferenceClip } from './export-reference';
 import { TagsSection } from './export-tags';
 import { QwenTrainingSection, TrainingSection } from './export-training';
-import type { ExportOptions, ExportResult } from './use-fish-dataset';
+import type {
+  AnalysisStatus,
+  ExportOptions,
+  ExportResult,
+  LevelSummary,
+  LoudnessReport,
+  ReferenceSuggestion,
+  ShortlistClip,
+} from './use-fish-dataset';
 
 const FORMATS = ['jsonl', 'fish_lab', 'ljspeech', 'omnivoice', QWEN_FORMAT] as const;
 const DEFAULT_FORMATS = ['jsonl', 'fish_lab'];
 const RATES = [24000, 22050, 16000] as const;
 const selectClass =
   'h-8 w-full rounded-md border border-input bg-input/20 px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30';
+
+/** What level matching did: the target, how many clips changed, each chapter's median before and after, and the peak-limited ones. */
+function LoudnessResult({ report }: { report: LoudnessReport }) {
+  const { t } = useTranslation();
+  const chapters = Object.entries(report.chapters ?? {});
+  return (
+    <div className="space-y-0.5" data-testid="loudness-result">
+      <p>
+        {t('fishDataset.loudness_done', {
+          target: report.target_rms_db,
+          adjusted: report.adjusted,
+          clips: report.clips ?? report.adjusted,
+        })}
+      </p>
+      {chapters.length > 0 && (
+        <ul className="max-h-24 overflow-y-auto text-[11px] tabular-nums">
+          {chapters.map(([chapter, c]) => (
+            <li key={chapter}>
+              {t('fishDataset.loudness_chapter', { chapter, before: c.median_before_db, after: c.median_after_db })}
+            </li>
+          ))}
+        </ul>
+      )}
+      {report.peak_limited > 0 ? (
+        <p className="text-[11px] text-amber-500">
+          {t('fishDataset.loudness_limited', { count: report.peak_limited, db: report.worst_shortfall_db ?? 0 })}
+        </p>
+      ) : (
+        <p className="text-[11px]">{t('fishDataset.loudness_none_limited')}</p>
+      )}
+    </div>
+  );
+}
 
 export function ExportDialog({
   open,
@@ -54,10 +99,22 @@ export function ExportDialog({
   onExport,
   onError,
   onTrain,
-  referenceKey = null,
-  referenceLabel = null,
-  onClearReference = () => {},
+  reference = null,
+  onReferenceChange = () => {},
+  shortlist = [],
+  onRemoveShortlist,
+  onSuggestReferences = async () => ({
+    speaker: { voice_id: '', name: '' },
+    considered: 0,
+    unmeasured: 0,
+    clips: 0,
+    candidates: [],
+  }),
+  levels = null,
+  analysis = null,
+  onMeasure,
   speakerCount = 1,
+  speakerId = '',
   speakerName = '',
 }: {
   open: boolean;
@@ -71,10 +128,21 @@ export function ExportDialog({
   onError: (message: string) => void;
   /** Open the Train step for the export that was just written. */
   onTrain?: (exportDir: string) => void;
-  /** Qwen3-TTS: the clip the user starred as the reference, or null for an automatic choice. */
-  referenceKey?: string | null;
-  referenceLabel?: string | null;
-  onClearReference?: () => void;
+  /** Qwen3-TTS: the one reference clip the user chose, or null for an automatic choice. */
+  reference?: ReferenceClip | null;
+  onReferenceChange?: (clip: ReferenceClip | null) => void;
+  /** Clips the user starred as reference candidates. */
+  shortlist?: ShortlistClip[];
+  onRemoveShortlist?: (keys: string[]) => void;
+  /** Ranked reference candidates for the current selection (measured clips only). */
+  onSuggestReferences?: (limit: number, minDuration: number, maxDuration: number) => Promise<ReferenceSuggestion>;
+  /** Level spread of the selection, to help choose the loudness target. */
+  levels?: LevelSummary | null;
+  analysis?: AnalysisStatus | null;
+  /** Start the "Measure audio" run. */
+  onMeasure?: () => void;
+  /** The single speaker being exported, when known. */
+  speakerId?: string;
   /** How many speakers the current selection spans (Qwen3-TTS trains exactly one). */
   speakerCount?: number;
   /** The selected voice's name, shown in the checkpoint path until a speaker name is typed. */
@@ -93,8 +161,9 @@ export function ExportDialog({
   const [trainingForm, setTrainingForm] = useState<TrainingForm>(EMPTY_TRAINING);
   const [qwenForm, setQwenForm] = useState<QwenForm>(EMPTY_QWEN);
   const [qwenTrain, setQwenTrain] = useState<QwenTrainForm>(EMPTY_QWEN_TRAIN);
-  const [level, setLevel] = useState(false);
-  const [levelDb, setLevelDb] = useState('-24');
+  // Matching loudness is on by default for the training formats; once the user touches the box it stays as they set it.
+  const [levelChoice, setLevelChoice] = useState<boolean | null>(null);
+  const [levelDb, setLevelDb] = useState(DEFAULT_LEVEL_DB);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<ExportResult | null>(null);
 
@@ -107,6 +176,8 @@ export function ExportDialog({
 
   const qwen = formats.includes(QWEN_FORMAT);
   const omni = formats.includes('omnivoice');
+  const level = levelChoice ?? (qwen || omni);
+  const levelBad = level && levelInvalid(levelDb);
   const stripped = omni || qwen || textMode === 'strip';
   const tagNames = knownTags.map(([tag]) => tag);
   const unknown = omni && strict ? unknownTags(tagNames, tagActions, omnivoiceTags) : [];
@@ -115,7 +186,7 @@ export function ExportDialog({
   const writeTraining = omni && training;
   const trainSeconds = seconds * (1 - Math.max(0, Math.min(0.49, Number(val) / 100 || 0)));
   const trainingInvalid = writeTraining && invalidKeys(trainingForm).length > 0;
-  const qwenBlocked = qwen && (qwenInvalid(qwenForm).length > 0 || qwenTrainInvalid(qwenTrain).length > 0 || speakerCount > 1);
+  const qwenBlocked = qwen && (qwenInvalid(qwenForm).length > 0 || qwenTrainInvalid(qwenTrain).length > 0 || speakerCount > 1 || levelBad);
 
   const run = async () => {
     setBusy(true);
@@ -130,8 +201,8 @@ export function ExportDialog({
       keep_tags: keptEntries,
       strict_tags: omni ? strict : undefined,
       training: qwen ? qwenTrainBody(qwenTrain) : writeTraining ? trainingBody(trainingForm) : undefined,
-      qwen3: qwen ? qwenBody(qwenForm, referenceKey) : undefined,
-      loudness_db: level && Number.isFinite(Number(levelDb)) ? Number(levelDb) : null,
+      qwen3: qwen ? qwenBody(qwenForm, reference?.key ?? null) : undefined,
+      loudness_db: level && !levelInvalid(levelDb) ? Number(levelDb) : null,
     });
     setBusy(false);
     if (result) setDone(result);
@@ -227,6 +298,15 @@ export function ExportDialog({
               </select>
             </div>
           </div>
+          <LoudnessSection
+            enabled={level}
+            onEnabledChange={setLevelChoice}
+            value={levelDb}
+            onValueChange={setLevelDb}
+            levels={levels}
+            analysis={analysis}
+            onMeasure={onMeasure}
+          />
           {omni && (
             <p className="rounded-md bg-muted/40 p-2 text-[11px] leading-snug text-muted-foreground">
               {t('fishDataset.export_omni_note', { tags: omnivoiceTags.join(', ') })}
@@ -236,9 +316,23 @@ export function ExportDialog({
             <QwenSection
               form={qwenForm}
               onChange={setQwenForm}
-              referenceLabel={referenceKey ? (referenceLabel ?? referenceKey) : null}
-              onClearReference={onClearReference}
               speakerCount={speakerCount}
+              referencePanel={
+                <ReferencePanel
+                  open={open}
+                  speakerId={speakerId}
+                  shortlist={shortlist}
+                  reference={reference}
+                  onChange={onReferenceChange}
+                  onSuggest={onSuggestReferences}
+                  minDuration={Number(qwenForm.minDuration) > 0 ? Number(qwenForm.minDuration) : 0.8}
+                  maxDuration={Number(qwenForm.maxDuration) > 0 ? Number(qwenForm.maxDuration) : 30}
+                  analysis={analysis}
+                  onMeasure={onMeasure}
+                  onRemoveShortlist={onRemoveShortlist}
+                  onError={onError}
+                />
+              }
             />
           )}
           {stripped && !qwen && (
@@ -257,25 +351,6 @@ export function ExportDialog({
               {t('fishDataset.strict_tags')}
             </label>
           )}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 text-xs font-medium">
-              <input type="checkbox" checked={level} onChange={(e) => setLevel(e.target.checked)} />
-              {t('fishDataset.export_loudness')}
-            </label>
-            {level && (
-              <Input
-                id="ds-level"
-                aria-label={t('fishDataset.export_loudness_db')}
-                type="number"
-                min={-60}
-                max={-3}
-                className="w-24"
-                value={levelDb}
-                onChange={(e) => setLevelDb(e.target.value)}
-              />
-            )}
-            <p className="text-[11px] text-muted-foreground">{t('fishDataset.export_loudness_hint')}</p>
-          </div>
           {!qwen && (
           <div className="space-y-1">
             <label htmlFor="ds-val" className="text-xs font-medium">
@@ -327,6 +402,7 @@ export function ExportDialog({
             <div role="status" className="space-y-1 rounded-md bg-emerald-500/10 p-2 text-xs text-emerald-500">
               <p>{t('fishDataset.export_done', { clips: done.clips, hours: done.hours })}</p>
               <p className="break-all font-mono text-[11px]">{done.path}</p>
+              {done.loudness && <LoudnessResult report={done.loudness} />}
               {done.qwen3 && (
                 <>
                   <p>{t('fishDataset.qwen_done', { accepted: done.qwen3.accepted, rejected: done.qwen3.rejected })}</p>
