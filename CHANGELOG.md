@@ -26,6 +26,8 @@ metadata and the backend fallback mirror it.
 - OmniVoice trainer: optional LoRA adapters (`lora_enabled` in the training config; no new dependency), compact adapter checkpoints and a held-out evaluation history for an evaluation gate — thanks @mkramer0820!
 - Training data: an opt-in Train dialog that checks an OmniVoice export with a dry run, tokenizes it and trains a LoRA adapter as a cancellable, resumable background run with progress, logs and a held-out evaluation record — thanks @mkramer0820!
 - Training data export: a Qwen3-TTS fine-tuning folder (`train.jsonl` with `audio`, `text`, `ref_audio`, 24 kHz mono WAVs, an automatic or chosen reference clip, a report and a rejected-clips list) with a Colab script that trains from Google Drive and writes checkpoints back to it, set up in the same Training setup section as OmniVoice; also `scripts/export_qwen3_tts.py` — thanks @mkramer0820!
+- Training data export: *Match loudness* is a visible setting in the export dialog, ticked at -22 dB for Qwen3-TTS and OmniVoice, with -19/-22/-23 presets, your selection's level range and a per-chapter before/after report that counts clips the peak cap held back; the Qwen3-TTS script defaults to -22 dB too (`--no-loudness-match` turns it off) — thanks @mkramer0820!
+- Training data: star clips to build a reference shortlist, view only the shortlist, and choose the Qwen3-TTS reference in the export dialog from the shortlist, from ranked suggestions for your selection (with reasons and playback) or automatically — thanks @mkramer0820!
 - GitHub Sponsors is now the lead way to support VoiceStudio — on the Support page, the footer support menu, the repository Sponsor button, and SPONSORS.md (#2918)
 
 ### Changed
