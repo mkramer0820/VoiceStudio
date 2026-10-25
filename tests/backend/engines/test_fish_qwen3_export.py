@@ -562,3 +562,44 @@ def test_facets_carry_the_level_spread_of_the_selection(client, corpus):
     lv = res["levels"]
     assert lv["measured"] == lv["total"] - 1 and lv["min"] <= lv["median"] <= lv["max"]
     assert sum(n for _, n in lv["counts"]) == lv["measured"]
+
+
+# ------------------------------------------------------------------------------------------------ trailing silence helper
+def test_pad_qwen3_dataset_adds_silence_to_clips_only_and_never_touches_the_original(tmp_path):
+    import importlib.util
+    import wave
+    import zipfile
+
+    spec = importlib.util.spec_from_file_location("pad_qwen3_dataset", os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "pad_qwen3_dataset.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    src = tmp_path / "export"
+    (src / "audio").mkdir(parents=True)
+    (src / "reference").mkdir()
+
+    def make(path, seconds):
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(24000)
+            w.writeframes(b"\x01\x01" * int(24000 * seconds))
+
+    make(src / "audio" / "000001.wav", 2.0)
+    make(src / "audio" / "000002.wav", 3.5)
+    make(src / "reference" / "ref.wav", 5.0)
+    (src / "train.jsonl").write_text('{"audio": "audio/000001.wav", "text": "x", "ref_audio": "reference/ref.wav"}\n')
+    (src / "README.txt").write_text("names the old zip")
+    (src / "voicestudio_qwen3_colab.py").write_text("old runner")
+    before = (src / "audio" / "000001.wav").read_bytes()
+    out = mod.pad_dataset(str(src), str(tmp_path / "export_sil"), 1.0, str(tmp_path / "export_sil.zip"))
+    assert out["clips"] == 2 and out["zip"]["path"].endswith("export_sil.zip")
+    with wave.open(str(tmp_path / "export_sil" / "audio" / "000002.wav")) as w:
+        assert abs(w.getnframes() / 24000 - 4.5) < 1e-6  # 3.5 s + exactly 1.000 s
+    with wave.open(str(tmp_path / "export_sil" / "reference" / "ref.wav")) as w:
+        assert abs(w.getnframes() / 24000 - 5.0) < 1e-6  # the reference clip is not padded
+    assert (src / "audio" / "000001.wav").read_bytes() == before  # the original is untouched
+    names = zipfile.ZipFile(tmp_path / "export_sil.zip").namelist()
+    assert "train.jsonl" in names and "audio/000001.wav" in names and "reference/ref.wav" in names
+    assert "README.txt" not in names and "voicestudio_qwen3_colab.py" not in names  # stale helpers stay out
+    with pytest.raises(ValueError):
+        mod.pad_dataset(str(src), str(src))
+    with pytest.raises(FileNotFoundError):
+        mod.pad_dataset(str(tmp_path / "nothing"), str(tmp_path / "x"))
