@@ -32,6 +32,7 @@ import {
   PlayIcon,
   SettingsIcon,
   KeyboardIcon,
+  FlaskConicalIcon,
   UsersRoundIcon,
   WandSparklesIcon,
   WrenchIcon,
@@ -185,6 +186,13 @@ export function CommandPalette() {
       group: workspaceGroup,
       icon: BookAudioIcon,
       run: () => navigate({ to: '/fish-story' }),
+    },
+    {
+      id: 'qwen-playground',
+      label: t('qwenPlayground.nav'),
+      group: workspaceGroup,
+      icon: FlaskConicalIcon,
+      run: () => navigate({ to: '/qwen-playground' }),
     },
     {
       id: 'fish-dataset',

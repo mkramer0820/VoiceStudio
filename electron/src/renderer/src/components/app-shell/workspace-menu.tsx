@@ -5,6 +5,7 @@ import {
   AudioLinesIcon,
   FingerprintIcon,
   BookAudioIcon,
+  FlaskConicalIcon,
   DatabaseIcon,
   BookOpenIcon,
   FolderIcon,
@@ -32,6 +33,7 @@ type Destination = readonly [
     | '/audiobook'
     | '/fish-story'
     | '/fish-dataset'
+    | '/qwen-playground'
     | '/projects'
     | '/tools'
     | '/batch'
@@ -60,6 +62,7 @@ const storyDestinations: Destination[] = [
   ['/audiobook', 'audiobook.title', BookOpenIcon],
   ['/fish-story', 'fishStory.nav', BookAudioIcon],
   ['/fish-dataset', 'fishDataset.nav', DatabaseIcon],
+  ['/qwen-playground', 'qwenPlayground.nav', FlaskConicalIcon],
 ];
 const dubDestinations: Destination[] = [
   ['/dub', 'dubWorkspace.title', FilmIcon],
@@ -87,6 +90,7 @@ const iconMotion: Record<Destination[0], string> = {
   '/audiobook': 'tilt',
   '/fish-story': 'wave',
   '/fish-dataset': 'lift',
+  '/qwen-playground': 'wave',
   '/dub': 'tilt',
   '/batch': 'lift',
   '/transcriptions': 'nudge',

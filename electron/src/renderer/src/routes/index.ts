@@ -28,6 +28,10 @@ const FishStoryPage = lazyRouteComponent(
   () => import('@/features/fish-story/fish-story-page'),
   'FishStoryPage',
 );
+const QwenPlaygroundPage = lazyRouteComponent(
+  () => import('@/features/qwen-playground/qwen-playground-page'),
+  'QwenPlaygroundPage',
+);
 const AudiobookPage = lazyRouteComponent(
   () => import('@/features/longform/longform-page'),
   'AudiobookPage',
@@ -196,6 +200,11 @@ export const fishStoryRoute = createRoute({
   path: '/fish-story',
   component: FishStoryPage,
 });
+export const qwenPlaygroundRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/qwen-playground',
+  component: QwenPlaygroundPage,
+});
 export const fishDatasetRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/fish-dataset',
@@ -294,6 +303,7 @@ export const routeTree = rootRoute.addChildren([
   storiesRoute,
   fishStoryRoute,
   fishDatasetRoute,
+  qwenPlaygroundRoute,
   audiobookRoute,
   projectsRoute,
   indexRoute,
