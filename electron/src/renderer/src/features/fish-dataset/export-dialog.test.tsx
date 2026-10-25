@@ -327,7 +327,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     expect(within(dialog).queryByLabelText('fishDataset.export_val')).not.toBeInTheDocument(); // no validation split
     expect(within(dialog).queryByTestId('tag-row')).not.toBeInTheDocument(); // tags are always removed
     expect(within(dialog).getByLabelText(/fishDataset\.format_jsonl(?!_)/)).toBeDisabled();
-    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/VoiceStudio-training/runs/<speaker>/<run_id>/checkpoints');
+    expect(within(dialog).getByTestId('qwen-checkpoint-path')).toHaveTextContent('My Drive/Qwen3TTS/runs/<speaker>/<run_id>/checkpoints');
   });
 
   it('sends only changed training fields and the Qwen3-TTS options', async () => {

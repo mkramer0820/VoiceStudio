@@ -11,7 +11,7 @@ READ ONLY THESE, in order, and nothing else until a step needs it:
 3. docs/agents/SUBAGENT_BRIEF.md (limits, check commands, code map, git rules).
 Only when you must change or debug something: the section of docs/engines/fish-audio-handoff.md named in SESSION_STATE.md (10b = Qwen3 export format facts, 10c = Colab runner), and the specific function in backend/engines/fish_api/qwen3_colab_runner.py (a 2,300-line file: search for the function name, do not read it whole).
 
-STATE IN BRIEF: branch ext/fish-qwen3-export (local only, not pushed). The export dialog on the "Training data" screen writes a Qwen3-TTS folder plus a ZIP, a Colab notebook (Qwen3_TTS_Colab_Training.ipynb) and one runner script (voicestudio_qwen3_colab.py). The notebook caches models/wheels/audio codes on Google Drive (My Drive/VoiceStudio-training/), checks dependencies and data, shows live progress, copies each finished epoch to Drive only after verifying it, and has a SMOKE_RUN timing mode that projects time and compute units. Training runs on a 100-compute-unit Colab budget; A100 is the planned first runtime.
+STATE IN BRIEF: branch ext/fish-qwen3-export (local only, not pushed). The export dialog on the "Training data" screen writes a Qwen3-TTS folder plus a ZIP, a Colab notebook (Qwen3_TTS_Colab_Training.ipynb) and one runner script (voicestudio_qwen3_colab.py). The notebook caches models/wheels/audio codes on Google Drive (My Drive/Qwen3TTS/), checks dependencies and data, shows live progress, copies each finished epoch to Drive only after verifying it, and has a SMOKE_RUN timing mode that projects time and compute units. Training runs on a 100-compute-unit Colab budget; A100 is the planned first runtime.
 
 HARD RULES (more in SUBAGENT_BRIEF.md):
 - Do NOT start a Colab session, upload data, run training, or spend compute units without the owner's explicit go for that exact step.
@@ -27,7 +27,7 @@ START BY asking the owner these (skip any answered in SESSION_STATE.md "Owner de
 4. Do they prefer driving Colab from the browser notebook or from the `colab` command-line tool (its README lists Linux/macOS only)?
 
 THEN, with the owner running Colab (you guide and read their pasted output):
-1. Confirm the ZIP and the notebook are in My Drive/VoiceStudio-training/ (datasets/ for the ZIP).
+1. Confirm the ZIP and the notebook are in My Drive/Qwen3TTS/ (datasets/ for the ZIP).
 2. Open the notebook, set the parameters cell (DATA_SOURCE, SPEAKER_NAME, EPOCHS, BATCH_SIZE...), and run it with SMOKE_RUN = True first. Read the printed GPU table, dependency table, data check, seconds per batch, peak memory, and the projected epoch time and compute units.
 3. Decide with the owner whether the projection fits the budget; adjust batch size/epochs; then run for real (SMOKE_RUN = False).
 4. While training, check the progress lines, the heartbeat, and that each finished epoch is copied to Drive and verified. Remind them to disconnect and delete the runtime when done.

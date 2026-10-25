@@ -72,7 +72,7 @@ class Env:
     """A fake Colab: Drive and /content are folders under tmp_path, the repo checkout and models are pre-made."""
 
     def __init__(self, tmp_path, **overrides):
-        self.drive = str(tmp_path / "MyDrive" / "VoiceStudio-training")
+        self.drive = str(tmp_path / "MyDrive" / "Qwen3TTS")
         self.content = str(tmp_path / "content")
         os.makedirs(self.content, exist_ok=True)
         base = dict(drive_root=self.drive, local_root=self.content, speaker_name="Sunny", epochs=2, lr=2e-5, batch_size=2,
@@ -1121,7 +1121,7 @@ def test_notebook_prefills_the_exports_defaults_and_only_speaker_and_source_chan
 
 def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch):
     """Execute the notebook's bootstrap and cell calls for real, with google.colab faked and Drive in a temp folder."""
-    drive_root = str(tmp_path / "MyDrive" / "VoiceStudio-training")
+    drive_root = str(tmp_path / "MyDrive" / "Qwen3TTS")
     src = make_dataset(tmp_path / "ds")
     archive = zip_folder(src, tmp_path / "set.zip")
     with zipfile.ZipFile(archive, "a") as zf:

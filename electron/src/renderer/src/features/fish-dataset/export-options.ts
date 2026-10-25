@@ -220,7 +220,7 @@ export const QWEN_NUMBERS: Record<QwenNumberKey, NumberSpec & { advanced?: boole
   batch_size: { def: 2, min: 1, max: 256, step: '1' },
 };
 export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advanced?: boolean }> = {
-  drive_folder: { def: 'VoiceStudio-training', test: DRIVE_FOLDER },
+  drive_folder: { def: 'Qwen3TTS', test: DRIVE_FOLDER },
   base_model: { def: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base', test: MODEL_ID },
   tokenizer_model: { def: 'Qwen/Qwen3-TTS-Tokenizer-12Hz', test: MODEL_ID, advanced: true },
 };

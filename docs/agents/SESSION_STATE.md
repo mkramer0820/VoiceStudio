@@ -59,7 +59,7 @@ True resume with optimizer state (the official script saves weights only), per-e
 
 ## Owner decisions already made
 - Colab, not local; target `Qwen/Qwen3-TTS-12Hz-1.7B-Base`; narrator first (pilot of about 60 minutes of audio, later more). Export audio is 24 kHz mono 16-bit, all Fish tags removed, loudness matched (owner's good range is -19 to -23 dB, default -22).
-- Everything cached and saved on Google Drive (the owner's Drive is mounted locally as `G:\`; default folder `My Drive\VoiceStudio-training\`). Never lose data: no overwriting, no deleting by default.
+- Everything cached and saved on Google Drive (the owner's Drive is mounted locally as `G:\`; default folder `My Drive\Qwen3TTS\`). Never lose data: no overwriting, no deleting by default.
 - Wants progress logs that prove the job is alive. A fast first look: run the notebook with `SMOKE_RUN = True` before the real run.
 - Colab budget: 100 compute units. The A100 is the planned first runtime; the G4 (Blackwell) is optional and uses a fallback attention path.
 

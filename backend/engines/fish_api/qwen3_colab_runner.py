@@ -8,7 +8,7 @@ so it runs on a bare Colab runtime; the packages it installs come from pip on th
 Commands follow QwenLM/Qwen3-TTS ``finetuning/`` at the pinned commit below. None of this has been run on Colab or on
 a GPU by VoiceStudio; every step prints what it does so a first run is easy to read.
 
-    python3 voicestudio_qwen3_colab.py all --data-source /content/drive/MyDrive/VoiceStudio-training/datasets/x.zip
+    python3 voicestudio_qwen3_colab.py all --data-source /content/drive/MyDrive/Qwen3TTS/datasets/x.zip
     python3 voicestudio_qwen3_colab.py {gpu,setup,data,train,results,smoke,all} --help
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ READ_ON = "2026-10-24"
 BASE_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 TOKENIZER = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
 SAMPLE_RATE = 24000
-DEFAULT_DRIVE_FOLDER = "VoiceStudio-training"
+DEFAULT_DRIVE_FOLDER = "Qwen3TTS"
 SPEAKER_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 FOLDER_RE = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -195,7 +195,7 @@ class Params:
                 raise StepFailed(f"{key.upper()} must be a positive number or empty.")
         self.units_available = float(self.units_available)
         if not self.drive_root or not _is_abs(self.drive_root) or self.drive_root.replace("\\", "/").rstrip("/") in ("", "."):
-            raise StepFailed("DRIVE_ROOT must be a full folder path on Drive, e.g. /content/drive/MyDrive/VoiceStudio-training.")
+            raise StepFailed("DRIVE_ROOT must be a full folder path on Drive, e.g. /content/drive/MyDrive/Qwen3TTS.")
         return self
 
     def provenance(self) -> dict:
@@ -1553,7 +1553,7 @@ def _find_source(src: str) -> tuple:
     """(kind, path) with kind 'zip' or 'dir'. A folder without train.jsonl may hold exactly one dataset below it."""
     if not src:
         raise StepFailed("DATA_SOURCE is empty. Set it to the dataset folder or .zip (for example "
-                         "/content/drive/MyDrive/VoiceStudio-training/datasets/<name>.zip).")
+                         "/content/drive/MyDrive/Qwen3TTS/datasets/<name>.zip).")
     if os.path.isfile(src):
         if src.lower().endswith(".zip"):
             return "zip", src

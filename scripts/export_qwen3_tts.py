@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"match every clip to this whole-clip RMS level in dBFS (default {DEFAULT_LOUDNESS_DB:g}; "
                         "-19 to -23 is the usual range)")
     p.add_argument("--no-loudness-match", action="store_true", help="leave every clip at its own level")
-    p.add_argument("--drive-folder", default="VoiceStudio-training",
+    p.add_argument("--drive-folder", default="Qwen3TTS",
                    help="Google Drive folder under My Drive; checkpoints go to <folder>/runs/<speaker>/<run_id>/checkpoints")
     p.add_argument("--epochs", type=int, help="sft_12hz.py --num_epochs (default 3)")
     p.add_argument("--learning-rate", type=float, help="sft_12hz.py --lr (default 2e-5)")
