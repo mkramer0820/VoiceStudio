@@ -81,11 +81,11 @@ def settings_from(spec: Optional[dict]) -> TrainSettings:
     return out
 
 
-def estimate(settings: TrainSettings, clips: int) -> dict:
+def estimate(settings: TrainSettings, clips: int, accum: int = ACCUMULATION) -> dict:
     """Batches and optimizer updates implied by the script's own loop; an estimate (no time or quality claim)."""
     batches = math.ceil(clips / settings.batch_size)
-    return {"batches_per_epoch": batches, "updates_per_epoch": math.ceil(batches / ACCUMULATION),
-            "total_updates": math.ceil(batches / ACCUMULATION) * settings.epochs,
+    return {"batches_per_epoch": batches, "updates_per_epoch": math.ceil(batches / accum),
+            "total_updates": math.ceil(batches / accum) * settings.epochs,
             "note": f"Estimated from the script's loop: one batch per {settings.batch_size} clips, one optimizer update per "
                     f"{ACCUMULATION} batches (fixed in sft_12hz.py). Not a time or quality prediction."}
 
@@ -359,7 +359,7 @@ Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's offici
 
 def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAULT_FOLDER_NAME, zip_name: Optional[str] = None,
                     settings: Optional[TrainSettings] = None, embed_runner: bool = False, flash_wheel: str = "",
-                    smoke_run: bool = False) -> str:
+                    smoke_run: bool = False, grad_accum: int = ACCUMULATION) -> str:
     """The Colab notebook for one export (nbformat 4). Same input, same text.
 
     ``embed_runner`` stores the runner script inside the notebook (compressed), so the notebook alone is enough besides the data zip.
@@ -374,6 +374,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         f"SPEAKER_NAME = {_py(speaker)}  # the name the fine-tuned model answers to",
         f"EPOCHS = {st.epochs}",
         f"LR = {st.learning_rate:g}",
+        f"GRAD_ACCUM = {int(grad_accum)}  # micro-batches per update (the script fixes 4). BATCH_SIZE x GRAD_ACCUM = clips per update: 2 x 4 or 4 x 2 both make 8",
         f"BATCH_SIZE = {st.batch_size}  # a number, or 'auto' for the suggestion for this GPU (untested estimates, see the GPU section of the output)",
         f"BASE_MODEL = {_py(st.base_model)}",
         "RUN_ID = ''  # empty: a new timestamped run folder every time, so a second run never overwrites the first",
@@ -444,7 +445,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "import importlib, voicestudio_qwen3_colab as vs",
         "importlib.reload(vs)",
         "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LR,",
-        "    batch_size=BATCH_SIZE, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
+        "    batch_size=BATCH_SIZE, grad_accum=GRAD_ACCUM, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
         "    keep_first=KEEP_FIRST, keep_final=KEEP_FINAL, sample_text=SAMPLE_TEXT, sample_seed=SAMPLE_SEED, cache_models_on_drive=CACHE_MODELS_ON_DRIVE,",
         "    attn_fallback=ATTN_FALLBACK, use_venv=USE_VENV, build_flash_attn=BUILD_FLASH_ATTN, flash_wheel=FLASH_WHEEL, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
         "    compare_epoch_seconds=COMPARE_EPOCH_SECONDS, compare_units_per_hour=COMPARE_UNITS_PER_HOUR), env={})",

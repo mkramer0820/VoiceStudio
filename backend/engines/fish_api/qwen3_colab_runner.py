@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "15"
+RUNNER_VERSION = "16"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -78,7 +78,7 @@ ALIGN_C_NEW = '                sub_talker_logits, sub_talker_loss = _aligned_sub
 ALIGN_HELPER_ANCHOR = "target_speaker_embedding = None"
 ALIGN_HELPER = 'def _aligned_sub_talker_loss(talker, codec_ids, hidden):\n    """VoiceStudio: the library\'s forward_sub_talker_finetune passes already-aligned labels through ForCausalLMLoss, which shifts them again\n    (head i trained on codebook i+2, codebook 15 never). Same inputs, plain cross entropy on the logits as they are."""\n    embeds = [hidden.unsqueeze(1)]\n    for i in range(talker.config.num_code_groups - 1):\n        if i == 0:\n            embeds.append(talker.get_input_embeddings()(codec_ids[:, :1]))\n        else:\n            embeds.append(talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, i:i + 1]))\n    logits = talker.code_predictor.forward_finetune(inputs_embeds=torch.cat(embeds, dim=1), labels=None).logits\n    loss = torch.nn.functional.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), codec_ids[:, 1:].reshape(-1))\n    return logits, loss\n\n\ntarget_speaker_embedding = None'
 ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_OLD, ALIGN_C_NEW), (ALIGN_HELPER_ANCHOR, ALIGN_HELPER))
-ACCEL_FIXED = ('Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", '
+ACCEL_FIXED = ('Accelerator(gradient_accumulation_steps=int(os.environ.get("VS_GRAD_ACCUM", "4")), mixed_precision="bf16", log_with="tensorboard", '
                'project_dir=os.environ.get("VS_TENSORBOARD_DIR", "tensorboard"))')
 
 # Packages installed on top of Colab's torch (pyproject.toml of the pinned commit: qwen-tts 0.1.1 pins transformers
@@ -125,6 +125,7 @@ class Params:
     epochs: int = 3
     lr: float = 2e-6  # NOT the script's 2e-5 default: that gives noise and a model that never stops (Qwen3-TTS issue #39)
     batch_size: object = 2  # an int, or "auto"
+    grad_accum: int = 4  # micro-batches per optimizer update. The script hard-codes 4; the patched copy reads it. batch_size x grad_accum = clips per update
     base_model: str = BASE_MODEL
     tokenizer_model: str = TOKENIZER
     run_id: str = ""  # empty: a new timestamp. Re-using an id is explicit (and refused over existing checkpoints unless restart)
@@ -177,6 +178,9 @@ class Params:
             if not 1 <= self.batch_size <= 256:
                 raise StepFailed("BATCH_SIZE must be 1-256 or 'auto'.")
         self.attn_fallback = "auto" if str(self.attn_fallback).strip().lower() in ("auto", "") else _truthy(self.attn_fallback)
+        self.grad_accum = int(self.grad_accum)
+        if not 1 <= self.grad_accum <= 32:
+            raise StepFailed("GRAD_ACCUM must be 1-32.")
         self.flash_wheel = str(self.flash_wheel or "").strip()
         self.use_venv = "auto" if str(self.use_venv).strip().lower() in ("auto", "") else _truthy(self.use_venv)
         for key in ("restart", "build_flash_attn", "smoke_run", "keep_all", "keep_first", "keep_final", "cache_models_on_drive", "sample_after_training"):
@@ -222,7 +226,7 @@ def _truthy(v) -> bool:
     return v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-_ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "base_model", "tokenizer_model", "run_id",
+_ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "base_model", "tokenizer_model", "run_id",
                "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "sample_after_training",
                "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour")
@@ -2341,7 +2345,7 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
     return {
         "cwd": dataset_dir,
         "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", ""),
-                "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard")},
+                "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard"), "VS_GRAD_ACCUM": str(p.grad_accum)},
         "train": [py(), "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
                   "--output_model_path", out_dir or lay.local_checkpoints, "--train_jsonl", codes or lay.codes_local, "--batch_size", str(batch),
                   "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", model_speaker_name(p)],
@@ -2438,7 +2442,8 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
         codes = ensure_codes(p, lay, folder, result["dataset_hash"], result["rows"], log, stream=stream)
         plan = plan_commands(p, lay, folder, batch, patched=patched, codes=codes)
         write_snapshot(p, lay, env, gpu, path, plan, result["dataset_hash"], started)
-        say(f"== Training: {p.epochs} epochs, batch size {batch}, learning rate {p.lr:g}, speaker {p.speaker_name}, attention {path.upper()}")
+        say(f"== Training: {p.epochs} epochs, batch size {batch} x accumulation {p.grad_accum} = {batch * p.grad_accum} clips per update, "
+            f"learning rate {p.lr:g}, speaker {p.speaker_name}, attention {path.upper()}")
         say(f"Checkpoints are written to {lay.local_checkpoints} (local), then each finished epoch is copied to Drive: {lay.checkpoints}")
         say("There is no resume: a disconnect keeps the epochs already synced to Drive. The official script writes no TensorBoard event files, "
             "so there is no TensorBoard to open; progress is shown below and in metrics.csv / status.json in the run folder.")

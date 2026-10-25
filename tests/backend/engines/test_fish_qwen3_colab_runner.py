@@ -1137,7 +1137,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
     monkeypatch.delitem(sys.modules, "voicestudio_qwen3_colab", raising=False)
     ns = {"DRIVE_ROOT": drive_root, "DATA_SOURCE": archive, "SPEAKER_NAME": "Sunny", "EPOCHS": 2, "LR": 2e-5, "BATCH_SIZE": 2, "BASE_MODEL": vs.BASE_MODEL,
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
-          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
+          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
           "COMPARE_UNITS_PER_HOUR": None}
     saved_path = list(sys.path)
@@ -1660,3 +1660,19 @@ def test_the_push_starts_at_the_narrators_median_pace_not_a_constant():
     text = "x" * 124
     start, cap = vs.push_start_for(text, pace), vs.max_tokens_for(text, pace)
     assert start < cap and abs(start / vs.TOKENS_PER_SECOND - 124 / 13.7 * 1.1) < 0.2
+
+
+def test_gradient_accumulation_is_a_setting_that_reaches_the_training_script(tmp_path):
+    assert vs.params_from({}, env={}).grad_accum == 4  # the script's own value stays the default
+    p = vs.params_from({"grad_accum": 2, "batch_size": 4, "drive_root": "/content/drive/MyDrive/X"}, env={})
+    assert p.grad_accum == 2 and vs.plan_commands(p, vs.Layout(p), "/d", 4)["env"]["VS_GRAD_ACCUM"] == "2"
+    assert vs.params_from({}, env={"GRAD_ACCUM": "3"}).grad_accum == 3
+    for bad in (0, 33, "x"):
+        with pytest.raises((vs.StepFailed, ValueError)):
+            vs.params_from({"grad_accum": bad}, env={})
+    e = _flow_env(tmp_path)
+    out = open(vs.build_patched_script(e.lay, None)).read()
+    assert 'gradient_accumulation_steps=int(os.environ.get("VS_GRAD_ACCUM", "4"))' in out and "gradient_accumulation_steps=4" not in out
+    nb = qwen3_colab.render_notebook(grad_accum=2)
+    assert "GRAD_ACCUM = 2" in nb and "grad_accum=GRAD_ACCUM" in nb
+    assert qwen3_colab.estimate(qwen3_colab.settings_from({}), 640, accum=2)["updates_per_epoch"] == 160  # 320 batches of 2, 2 per update
