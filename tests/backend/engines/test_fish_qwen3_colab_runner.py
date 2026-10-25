@@ -1602,13 +1602,13 @@ def test_the_training_copy_fixes_the_text_projection_and_the_label_shift_that_br
         vs.build_patched_script(e.lay, None)
 
 
-def _stop_helpers_namespace():
+def _stop_helpers_namespace(monkeypatch):
     import types
 
     stub = types.ModuleType("transformers")
     stub.LogitsProcessor = type("LogitsProcessor", (), {})
     stub.LogitsProcessorList = list
-    sys.modules["transformers"] = stub
+    monkeypatch.setitem(sys.modules, "transformers", stub)  # restored after the test: other tests import the real transformers
     ns = {}
     code = vs.SAMPLE_CODE.split("ckpt, speaker, text, out, attn, seed")[0].replace("from qwen_tts import Qwen3TTSModel", "")
     exec(code, ns)
@@ -1617,8 +1617,7 @@ def _stop_helpers_namespace():
 
 def test_the_stop_push_leaves_a_model_alone_that_stops_and_ends_a_run_on_near_the_expected_length(monkeypatch):
     torch = pytest.importorskip("torch")
-    monkeypatch.setitem(sys.modules, "transformers", sys.modules.get("transformers"))
-    ns = _stop_helpers_namespace()
+    ns = _stop_helpers_namespace(monkeypatch)
     ramp = ns["EosRamp"](eos_id=3, start=10)
     scores = torch.zeros(1, 8)
     for _ in range(10):  # up to the expected length nothing changes
@@ -1630,7 +1629,7 @@ def test_the_stop_push_leaves_a_model_alone_that_stops_and_ends_a_run_on_near_th
 
 def test_the_stop_push_reaches_the_talkers_generate_and_the_tail_is_trimmed(monkeypatch):
     np = pytest.importorskip("numpy")
-    ns = _stop_helpers_namespace()
+    ns = _stop_helpers_namespace(monkeypatch)
     seen = {}
 
     class Talker:
