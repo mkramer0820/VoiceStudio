@@ -5,6 +5,8 @@ Written 2026-10-25 for the next agent (any agent). Read this before touching the
 **Runtime setup (Python, torch, CUDA, the FlashAttention wheel, all the Colab traps): [../engines/qwen3-tts-colab-runtime.md](../engines/qwen3-tts-colab-runtime.md). Find a wheel for a new runtime with `python scripts/find_flash_wheel.py`.**
 
 ## Status in five lines
+
+**Two run numberings exist: do not mix them.** In this document \"run 1, run 2, run 3\" are the three training runs in order: run 1 = Drive `20261025-022715` (script defaults, noise; deleted from Drive), run 2 = `20261025-035854` (patched script, the 105-minute set), run 3 = `20261025-133200` (the 3-hour set). The owner's local folders use their own names: **`Run_1_EP07` = this document's run 2, epoch file 7.**
 - Branch `ext/fish-api` (merged from `ext/fish-qwen3-export`, which was then deleted; pushed 2026-10-25). Latest work is committed; tests: `python -m pytest tests/backend/engines/test_fish_qwen3_colab_runner.py tests/backend/engines/test_fish_qwen3_export.py` (150+ pass) and the vitest file `export-dialog.test.tsx` (40 pass).
 - Run 1 (the official script's defaults) produced **noise from every epoch** although the loss fell normally. The base model spoke fine in the same runtime, so the environment was not the cause.
 - Root causes were found by reading the model code and Qwen3-TTS GitHub issues (below). The runner now trains from a **patched copy** of Qwen's `sft_12hz.py` that fixes them.
