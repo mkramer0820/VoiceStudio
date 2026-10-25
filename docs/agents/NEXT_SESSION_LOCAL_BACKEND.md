@@ -43,7 +43,7 @@ START BY looking at the real folder tree under E:\Qwen3TTS_Checkpoints\SS_Narrat
 
 ## Optional once it works: a fairer epoch comparison
 
-The owner heard epochs 04, 07, 08, 09 of the 3-hour run as best and 05, 06 as weaker; the loss log does not explain the dip (see the state doc, "Listening results and the loss per epoch"). With the model on the 3070, generate 10 to 20 sentences that are not in the training data, 3 seeds per checkpoint, and compare. That separates a real difference from sampling luck.
+The owner kept `Run_1_EP07` and epochs 8 and 9 of the 3-hour run (epochs 4, 5, 6 and 7 of that run were weaker or had pacing problems); the loss log does not explain the dip (see the state doc, "Listening results and the loss per epoch"). With the model on the 3070, generate 10 to 20 sentences that are not in the training data, 3 seeds per checkpoint, and compare the three keepers (`Run_1_EP07`, epoch 8, epoch 9), including pacing. That separates a real difference from sampling luck.
 
 ## Open questions for the owner
 
