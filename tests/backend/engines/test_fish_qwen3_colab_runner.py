@@ -62,6 +62,12 @@ def zip_folder(folder, archive, top=None):
     return str(archive)
 
 
+def fake_sft_script() -> str:
+    """The lines of Qwen's sft_12hz.py (pinned commit) that the runner patches, in their real form."""
+    return "\n".join(["target_speaker_embedding = None", 'attn_implementation="flash_attention_2"', vs.ACCEL_LINE,
+                      vs.ALIGN_A_OLD, vs.ALIGN_B_OLD, vs.ALIGN_C_OLD, ""])
+
+
 class Env:
     """A fake Colab: Drive and /content are folders under tmp_path, the repo checkout and models are pre-made."""
 
@@ -77,7 +83,7 @@ class Env:
     def install_repo_and_models(self):
         ft = os.path.join(self.lay.local_repo, "finetuning")
         os.makedirs(ft)
-        open(os.path.join(ft, "sft_12hz.py"), "w").write('x = 1\nattn_implementation="flash_attention_2"\naccelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard")\n')
+        open(os.path.join(ft, "sft_12hz.py"), "w").write(fake_sft_script())
         for m in (self.p.base_model, self.p.tokenizer_model):
             d = vs.local_model_dir(self.lay, m)
             os.makedirs(d)
@@ -1554,7 +1560,7 @@ def test_a_script_copy_that_was_already_patched_by_hand_is_accepted(tmp_path):
     e = _flow_env(tmp_path)
     path = os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py")
     line = 'accelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", project_dir="/content/tensorboard")'
-    open(path, "w").write("x = 1\nattn_implementation=\"flash_attention_2\"\n" + line + "\n")
+    open(path, "w").write(fake_sft_script().replace(vs.ACCEL_LINE, line))
     out = vs.build_patched_script(e.lay, None)
     assert open(out).read().count("project_dir=") == 1
 
@@ -1577,3 +1583,20 @@ def test_the_generation_limit_comes_from_the_narrators_own_pace_when_it_can_be_m
     assert 14.0 < cap_seconds < 15.5 and cap_seconds < 35  # 124 characters x 0.1 s x 1.15 + 0.5 s: it follows the data, not a constant
     assert vs.max_tokens_for(eight, {**slow, "slowest95": 1 / 20.0}) < vs.max_tokens_for(eight, slow)  # a faster narrator gets a shorter limit
     assert vs.dataset_pace(str(tmp_path / "nothing_here")) is None
+
+
+def test_the_training_copy_fixes_the_text_projection_and_the_label_shift_that_broke_the_end_of_speech_token(tmp_path):
+    e = _flow_env(tmp_path)
+    out = open(vs.build_patched_script(e.lay, None)).read()
+    # fixed: the text goes through the same projection generation uses; the talker gets unshifted tensors; sub-talker rows line up with the frame they predict
+    assert "text_projection(model.talker.model.text_embedding(input_text_ids))" in out
+    assert "inputs_embeds=input_embeddings,\n" in out and "labels=codec_0_labels,\n" in out and "attention_mask=attention_mask,\n" in out
+    assert "codec_mask[:, 1:]" in out and "hidden_states[:, :-1][target_codec_mask]" in out and "codec_ids[:, 1:][target_codec_mask]" in out
+    assert "_aligned_sub_talker_loss(model.talker, talker_codec_ids, talker_hidden_states)" in out and "cross_entropy" in out
+    # gone: the manual shift that the loss function then repeated
+    assert "input_embeddings[:, :-1, :]" not in out and "labels=codec_0_labels[:, 1:]" not in out and "forward_sub_talker_finetune(" not in out
+    compile(vs.ALIGN_HELPER.replace("target_speaker_embedding = None", ""), "helper", "exec")  # the inserted helper is valid Python (the whole real script was compiled by hand)
+    # a repo that is not the pinned commit is refused, not guessed at
+    open(os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py"), "w").write(vs.ACCEL_LINE)
+    with pytest.raises(vs.StepFailed, match="cannot be patched safely|cannot be applied"):
+        vs.build_patched_script(e.lay, None)

@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "13"
+RUNNER_VERSION = "14"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -69,6 +69,15 @@ FLASH_PREBUILT = {  # torch major.minor -> python tags with a prebuilt Linux x86
 ATTN_FALLBACK_IMPL = "sdpa"
 FLASH_LINE = 'attn_implementation="flash_attention_2"'  # sft_12hz.py line 51 at the pinned commit
 ACCEL_LINE = 'Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard")'  # line 44; no logging_dir
+ALIGN_A_OLD = '                input_text_embedding = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask'
+ALIGN_A_NEW = '                input_text_embedding = model.talker.text_projection(model.talker.model.text_embedding(input_text_ids)) * text_embedding_mask'
+ALIGN_B_OLD = '                outputs = model.talker(\n                    inputs_embeds=input_embeddings[:, :-1, :],\n                    attention_mask=attention_mask[:, :-1],\n                    labels=codec_0_labels[:, 1:],\n                    output_hidden_states=True\n                )\n\n                hidden_states = outputs.hidden_states[0][-1]\n                talker_hidden_states = hidden_states[codec_mask[:, :-1]]\n                talker_codec_ids = codec_ids[codec_mask]'
+ALIGN_B_NEW = '                # VoiceStudio: ForCausalLMLoss already shifts the labels once, so the tensors are passed unshifted (the original sliced them AND\n                # let the loss shift again, training the talker, and its end-of-speech token, one frame late).\n                outputs = model.talker(\n                    inputs_embeds=input_embeddings,\n                    attention_mask=attention_mask,\n                    labels=codec_0_labels,\n                    output_hidden_states=True\n                )\n\n                # The sub-talker for frame p must see the hidden state that predicted frame p (the position before it), as in generation.\n                hidden_states = outputs.hidden_states[0][-1]\n                target_codec_mask = codec_mask[:, 1:]\n                talker_hidden_states = hidden_states[:, :-1][target_codec_mask]\n                talker_codec_ids = codec_ids[:, 1:][target_codec_mask]'
+ALIGN_C_OLD = '                sub_talker_logits, sub_talker_loss = model.talker.forward_sub_talker_finetune(talker_codec_ids, talker_hidden_states)'
+ALIGN_C_NEW = '                sub_talker_logits, sub_talker_loss = _aligned_sub_talker_loss(model.talker, talker_codec_ids, talker_hidden_states)'
+ALIGN_HELPER_ANCHOR = "target_speaker_embedding = None"
+ALIGN_HELPER = 'def _aligned_sub_talker_loss(talker, codec_ids, hidden):\n    """VoiceStudio: the library\'s forward_sub_talker_finetune passes already-aligned labels through ForCausalLMLoss, which shifts them again\n    (head i trained on codebook i+2, codebook 15 never). Same inputs, plain cross entropy on the logits as they are."""\n    embeds = [hidden.unsqueeze(1)]\n    for i in range(talker.config.num_code_groups - 1):\n        if i == 0:\n            embeds.append(talker.get_input_embeddings()(codec_ids[:, :1]))\n        else:\n            embeds.append(talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, i:i + 1]))\n    logits = talker.code_predictor.forward_finetune(inputs_embeds=torch.cat(embeds, dim=1), labels=None).logits\n    loss = torch.nn.functional.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), codec_ids[:, 1:].reshape(-1))\n    return logits, loss\n\n\ntarget_speaker_embedding = None'
+ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_OLD, ALIGN_C_NEW), (ALIGN_HELPER_ANCHOR, ALIGN_HELPER))
 ACCEL_FIXED = ('Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", '
                'project_dir=os.environ.get("VS_TENSORBOARD_DIR", "tensorboard"))')
 
@@ -2281,7 +2290,13 @@ def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) 
         raise StepFailed("sft_12hz.py does not contain the expected lines exactly once, so it cannot be patched safely "
                          "(the repo is not the pinned commit?).")
     text = text.replace(ACCEL_LINE, ACCEL_FIXED)  # no-op when the line is already fixed
-    note = "# Copy of Qwen's sft_12hz.py written by VoiceStudio: a TensorBoard project_dir was added to the Accelerator."
+    for old, new in ALIGN_PAIRS:  # training-loop fixes, see the comments inside ALIGN_* (Qwen3-TTS issues #39, #179, #278, #371)
+        if text.count(old) != 1:
+            raise StepFailed("sft_12hz.py does not contain the expected training lines exactly once, so the label-alignment fix cannot be applied "
+                             "safely (the repo is not the pinned commit, or the copy was edited).")
+        text = text.replace(old, new)
+    note = ("# Copy of Qwen's sft_12hz.py written by VoiceStudio: a TensorBoard project_dir, the text projection, and the label/sub-talker "
+            "alignment fixes (so the end-of-speech token is trained where generation expects it).")
     if impl:
         text = text.replace(FLASH_LINE, f'attn_implementation="{impl}"')
         note = ("# UNVERIFIED copy of Qwen's sft_12hz.py written by VoiceStudio: attention changed from flash_attention_2 to "
