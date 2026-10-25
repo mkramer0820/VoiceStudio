@@ -34,7 +34,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "3"
+RUNNER_VERSION = "4"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -745,9 +745,81 @@ def record_fingerprint(lay: Layout, env: dict) -> bool:
 
 # --------------------------------------------------------------------------------------------- dependency checks
 def probe_module(name: str) -> tuple:
-    code, out = capture([py(), "-c", f"import {name} as m; print(getattr(m, '__version__', 'ok'))"])
+    """(importable, detail). A failed import reports the ROOT cause (transformers wraps the real error in a generic one)."""
+    code, out = capture([py(), "-c", PROBE_CODE.format(name=name)])
     last = (out.strip().splitlines() or [""])[-1]
-    return code == 0, (last if code == 0 else last[:160] or "import failed")
+    return code == 0, (last if code == 0 else last[:220] or "import failed")
+
+
+PROBE_CODE = """import sys
+try:
+    import {name} as m
+    print(getattr(m, '__version__', 'ok'))
+except BaseException as e:
+    r = e
+    for _ in range(12):
+        nxt = r.__cause__ or r.__context__
+        if nxt is None:
+            break
+        r = nxt
+    print(type(r).__name__ + ': ' + (str(r).strip().splitlines() or [''])[0])
+    sys.exit(1)
+"""
+
+COMPANION_CODE = """import json
+out = {}
+for n in ('torch', 'torchvision', 'torchaudio'):
+    try:
+        m = __import__(n)
+        out[n] = str(m.__version__).split('+')[0]
+    except Exception:
+        pass
+try:
+    import torch
+    out['cuda'] = torch.version.cuda
+except Exception:
+    pass
+print(json.dumps(out))
+"""
+
+
+def companion_problems(v: dict) -> list:
+    """torchaudio must match torch's minor version and torchvision's minor must be torch's + 15 (2.12 pairs with 0.27)."""
+    torch_v = v.get("torch")
+    if not torch_v:
+        return []
+    try:
+        major, minor = (int(x) for x in torch_v.split(".")[:2])
+    except ValueError:
+        return []
+    bad = []
+    ta, tv = v.get("torchaudio"), v.get("torchvision")
+    if ta and ta.split(".")[:2] != [str(major), str(minor)]:
+        bad.append(f"torchaudio {ta}")
+    if tv and tv.split(".")[:2] != ["0", str(minor + 15)]:
+        bad.append(f"torchvision {tv}")
+    return bad
+
+
+def repair_torch_companions(p: Params, lay: Layout, log: str, *, stream: Callable = run_stream, run: Callable = capture) -> bool:
+    """A torch upgraded in place leaves torchvision/torchaudio behind, and transformers then fails with 'operator torchvision::nms
+    does not exist'. Reinstall matching ones with torch pinned to what is installed. True when nothing needed repair or it worked."""
+    code, out = run([py(), "-c", COMPANION_CODE])
+    try:
+        v = json.loads((out.strip().splitlines() or ["{}"])[-1])
+    except ValueError:
+        return True
+    bad = companion_problems(v)
+    if not bad:
+        return True
+    cuda = v.get("cuda")
+    say(f"torch {v['torch']} is installed, but {', '.join(bad)} do not belong to it (this makes transformers fail to import). Reinstalling matching ones.")
+    cmd = [py(), "-m", "pip", "install", "-q", "--cache-dir", lay.pip_cache, f"torch=={v['torch']}", "torchvision", "torchaudio"]
+    if cuda:
+        cmd += ["--index-url", f"https://download.pytorch.org/whl/cu{cuda.replace('.', '')}"]
+    ok = stream(cmd, log_path=log, max_seconds=PIP_MAX_SECONDS) == 0
+    say("Matching torchvision/torchaudio installed." if ok else "Could not install matching torchvision/torchaudio; see the log.")
+    return ok
 
 
 def check_table(rows: list) -> bool:
@@ -1338,6 +1410,8 @@ def setup(p: Params) -> bool:
         + ("  -> this exact runtime type was seen before." if seen else "  -> new runtime type for this cache."))
     with timed("Qwen3-TTS repository (clone/copy)"):
         ensure_repo(lay)
+    with timed("torch companion packages"):
+        repair_torch_companions(p, lay, log)
     with timed("pip packages"):
         ensure_deps(p, lay, log)
     with timed("FlashAttention (wheel handling)"):

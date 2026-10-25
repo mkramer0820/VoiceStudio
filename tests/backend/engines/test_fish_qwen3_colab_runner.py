@@ -1408,7 +1408,7 @@ def test_a_torch_that_cannot_see_the_gpu_is_not_accepted(tmp_path, monkeypatch):
 
 def test_setup_falls_back_to_the_current_runtime_when_the_environment_cannot_be_built(tmp_path, monkeypatch):
     e = Env(tmp_path)
-    for n in ("runtime_check", "ensure_repo", "ensure_deps", "ensure_models", "dependency_rows", "check_table", "timing_summary", "record_fingerprint"):
+    for n in ("runtime_check", "repair_torch_companions", "ensure_repo", "ensure_deps", "ensure_models", "dependency_rows", "check_table", "timing_summary", "record_fingerprint"):
         monkeypatch.setattr(vs, n, lambda *a, **k: True)
     monkeypatch.setattr(vs, "gpu_report", lambda *a, **k: A100)
     monkeypatch.setattr(vs, "detect_environment", lambda: dict(PY313_CU13, gpu="A100", gpu_cc="8.0"))
@@ -1428,3 +1428,34 @@ def test_use_venv_is_a_normal_setting():
     assert vs.params_from({}, env={}).use_venv == "auto"
     assert vs.params_from({"use_venv": "no"}, env={}).use_venv is False
     assert vs.params_from({}, env={"USE_VENV": "true"}).use_venv is True
+
+
+# ------------------------------------------------------------------------------------------------ torch companions
+def test_companion_packages_must_pair_with_torch():
+    assert vs.companion_problems({"torch": "2.12.1", "torchaudio": "2.12.0", "torchvision": "0.27.1"}) == []
+    assert vs.companion_problems({"torch": "2.12.1", "torchaudio": "2.11.0", "torchvision": "0.26.0"}) == ["torchaudio 2.11.0", "torchvision 0.26.0"]
+    assert vs.companion_problems({"torch": "2.8.0", "torchaudio": "2.8.0", "torchvision": "0.23.0"}) == []
+    assert vs.companion_problems({"torch": "2.8.0"}) == [] and vs.companion_problems({}) == []
+
+
+def test_a_mismatched_torchvision_is_repaired_with_torch_pinned(tmp_path):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    stream = FakeStream()
+    bad = '{"torch": "2.12.1", "torchaudio": "2.11.0", "torchvision": "0.26.0", "cuda": "13.0"}'
+    assert vs.repair_torch_companions(e.p, e.lay, "log", stream=stream, run=lambda cmd: (0, bad))
+    cmd = " ".join(map(str, stream.calls[0]))
+    assert "torch==2.12.1" in cmd and "torchvision" in cmd and "torchaudio" in cmd and "whl/cu130" in cmd
+    good = FakeStream()
+    assert vs.repair_torch_companions(e.p, e.lay, "log", stream=good, run=lambda cmd: (0, '{"torch": "2.8.0", "torchaudio": "2.8.0"}')) and good.calls == []
+
+
+def test_a_failed_import_reports_the_root_cause_not_the_wrapper(tmp_path, monkeypatch):
+    pkg = tmp_path / "wrapped"
+    pkg.mkdir()
+    (pkg / "wrapped_mod.py").write_text(
+        "try:\n    raise RuntimeError('operator torchvision::nms does not exist')\n"
+        "except RuntimeError as e:\n    raise ModuleNotFoundError('Could not import module AutoProcessor') from e\n")
+    monkeypatch.setenv("PYTHONPATH", str(pkg))
+    ok, detail = vs.probe_module("wrapped_mod")
+    assert not ok and "torchvision::nms does not exist" in detail
