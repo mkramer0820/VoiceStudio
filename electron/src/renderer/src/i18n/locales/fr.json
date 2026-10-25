@@ -4137,7 +4137,7 @@
     "output_folder_resolved": "Files go to: {{path}}",
     "session_name": "Session name",
     "python": "Python path",
-    "python_hint": "The Python that has faster-qwen3-tts installed. Changing it restarts the engine on the next run.",
+    "python_hint": "Leave blank to use the project's own Qwen environment (.venv-qwen). It never uses your system Python. Changing it restarts the engine on the next run.",
     "checkpoint_root": "Checkpoint folder",
     "checkpoint_root_hint": "A folder to search for fine-tuned Qwen3-TTS checkpoints.",
     "save_settings": "Save settings",

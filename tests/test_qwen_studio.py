@@ -295,3 +295,13 @@ def test_unknown_model_is_rejected_before_anything_runs(fake):
     with pytest.raises(ValueError, match="not found"):
         pg.start_run(bad)
     assert not pg.is_running()
+
+
+def test_python_setting_falls_back_to_project_venv_only(monkeypatch):
+    from engines.qwen3_studio import registry
+
+    monkeypatch.setattr(registry, "default_python", lambda: "/repo/.venv-qwen/python")
+    assert registry.effective_python({"python": ""}) == "/repo/.venv-qwen/python"
+    assert registry.effective_python({"python": " /mine/python "}) == "/mine/python"
+    monkeypatch.setattr(registry, "default_python", lambda: "")
+    assert registry.effective_python({"python": ""}) is None  # never PATH, base or the app's venv

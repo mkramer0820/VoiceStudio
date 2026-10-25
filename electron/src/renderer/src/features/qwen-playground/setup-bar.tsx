@@ -71,7 +71,7 @@ export function SetupBar({
           <Input className="h-8" value={pg.sessionName} maxLength={80} onChange={(e) => pg.setSessionName(e.target.value)} />
         </Labeled>
         <Labeled label={t('qwenPlayground.python')} hint={t('qwenPlayground.python_hint')}>
-          <Input className="h-8 font-mono text-xs" value={python} onChange={(e) => { setPython(e.target.value); setSaved(false); }} />
+          <Input className="h-8 font-mono text-xs" placeholder={state?.python_default ?? ''} value={python} onChange={(e) => { setPython(e.target.value); setSaved(false); }} />
         </Labeled>
         <Labeled label={t('qwenPlayground.checkpoint_root')} hint={t('qwenPlayground.checkpoint_root_hint')}>
           <Input className="h-8 font-mono text-xs" value={root} onChange={(e) => { setRoot(e.target.value); setSaved(false); }} />

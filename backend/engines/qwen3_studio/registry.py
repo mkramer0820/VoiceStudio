@@ -30,6 +30,19 @@ _DEFAULTS = {"python": "", "checkpoint_root": "", "output_dir": "", "warmup_runs
              "warmup_text": "This is a short warm up sentence to settle the voice."}
 
 
+def default_python() -> str:
+    """The project's own Qwen environment (``.venv-qwen`` in the repo root), or "" if it has not been built.
+    The sidecar never falls back to any other python: not PATH, not the app's venv, not a system install."""
+    root = Path(__file__).resolve().parents[3]
+    python = root / ".venv-qwen" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return str(python) if python.is_file() else ""
+
+
+def effective_python(settings: dict) -> Optional[str]:
+    """The python the sidecar runs with: the user's setting, else the project's ``.venv-qwen``."""
+    return (settings.get("python") or "").strip() or default_python() or None
+
+
 def studio_dir() -> str:
     from core.config import DATA_DIR
 

@@ -243,7 +243,7 @@ def _engine(settings: dict):
     global _backend
     from engines import qwen3_narrator as engine
 
-    engine.set_python_override(settings.get("python") or None)
+    engine.set_python_override(registry.effective_python(settings))
     with _backend_lock:
         if _backend is None:
             _backend = engine.Qwen3NarratorBackend()
@@ -312,7 +312,7 @@ def start_run(req: RunRequest) -> dict:
         resolve_voice(take, model, settings)  # raises with a plain reason before anything loads
     from engines import qwen3_narrator as engine
 
-    engine.set_python_override(settings.get("python") or None)
+    engine.set_python_override(registry.effective_python(settings))
     ok, reason = engine.availability(ignore_checkpoint=True)
     if not ok:
         raise RuntimeError(reason)

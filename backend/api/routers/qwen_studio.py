@@ -58,11 +58,12 @@ def state():
 
     reg = _reg()
     settings = reg.load_settings()
-    engine.set_python_override(settings.get("python") or None)
+    engine.set_python_override(reg.effective_python(settings))
     ok, reason = engine.availability(ignore_checkpoint=True)
     return {
         "settings": settings,
         "output_dir_default": reg.default_output_dir(),
+        "python_default": reg.default_python(),
         "engine": {"available": ok, "reason": reason},
         "models": reg.discover_models(settings),
         "stock_speakers": list(reg.STOCK_SPEAKERS),

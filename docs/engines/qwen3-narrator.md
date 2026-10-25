@@ -15,27 +15,28 @@ macOS, Linux without CUDA and CPU are not supported by this engine.
 
 ## Why it has its own venv
 
-faster-qwen3-tts is pinned to `transformers==5.15.1` and the `qwen-tts-hf` fork, which must not
-share an interpreter with the app. The sidecar runs under that venv's Python; the app only
-talks to it over stdio.
+faster-qwen3-tts pins `qwen-tts-hf`, which wants `accelerate==1.12.0`; the app's lockfile has 1.14.0.
+Installing it into the app's `.venv` would drift from `uv.lock`, so the engine gets its own venv inside
+the project: **`.venv-qwen`** in the repo root (git-ignored). The sidecar runs under that venv's Python;
+the app only talks to it over stdio. **It never uses `PATH`, a system or base Python, or the app's `.venv`.**
+With the Python setting blank, the playground uses `.venv-qwen` if it exists; otherwise the engine reports
+"not available".
 
 ## Install
 
 ```powershell
-uv venv --python 3.11 C:\path\to\fq_env\venv
-echo "torch==2.8.0`ntorchaudio==2.8.0" > C:\path\to\fq_env\constraints.txt
-uv pip install --python C:\path\to\fq_env\venv\Scripts\python.exe torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-uv pip install --python C:\path\to\fq_env\venv\Scripts\python.exe -c C:\path\to\fq_env\constraints.txt faster-qwen3-tts==0.5.4 transformers==5.15.1
+uv venv .venv-qwen --python 3.11
+uv pip install --python .venv-qwen\Scripts\python.exe --index-strategy unsafe-best-match -r backend/engines/qwen3_narrator/requirements.txt
 ```
 
-Keep the torch constraint **without** a `+cuXXX` label (a local-version label cannot be found
-on PyPI). Do not install into the app's own `.venv`.
+`backend/engines/qwen3_narrator/requirements.txt` is the exact package set the narrator was measured in
+(torch 2.8.0+cu128, transformers 5.15.1, faster-qwen3-tts 0.5.4). Do not install into the app's own `.venv`.
 
 ## Settings (environment variables)
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `OMNIVOICE_QWEN3_NARRATOR_PYTHON` | python of the venv above | required |
+| `OMNIVOICE_QWEN3_NARRATOR_PYTHON` | python of the venv above | the playground's Python setting, else `.venv-qwen` |
 | `OMNIVOICE_QWEN3_NARRATOR_CKPT` | checkpoint folder (`config.json`, `model.safetensors`, tokenizer, `speech_tokenizer/`) | required |
 | `OMNIVOICE_QWEN3_NARRATOR_MAX_SEQ_LEN` | static KV cache length of the CUDA graph (prompt + audio frames) | 1280 |
 | `OMNIVOICE_QWEN3_NARRATOR_SPEAKER` | speaker name | first speaker in `config.json` |

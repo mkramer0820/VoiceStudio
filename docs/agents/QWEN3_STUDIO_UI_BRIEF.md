@@ -105,4 +105,4 @@ Ask the owner before: adding a table or migration, changing the playground API s
 
 ## For the manager: before relaying a worker's branch
 
-Check the author is the owner's identity, there are no attribution lines, the file list stays inside the folder named in the prompt (no Fish files, and the locale diffs are small), `git diff --cached --stat` is sane for locale files, and that `bun run typecheck`, `bun run locale:check` and the listed tests pass. Do a real GPU session yourself (the playground script pattern is in the session notes: scratch data dir, `OMNIVOICE_DATA_DIR`, the real python at `C:\Users\User\fq_env\venv`) before telling the owner it works.
+Check the author is the owner's identity, there are no attribution lines, the file list stays inside the folder named in the prompt (no Fish files, and the locale diffs are small), `git diff --cached --stat` is sane for locale files, and that `bun run typecheck`, `bun run locale:check` and the listed tests pass. Do a real GPU session yourself (the playground script pattern is in the session notes: scratch data dir, `OMNIVOICE_DATA_DIR`, the project's `.venv-qwen` python) before telling the owner it works.

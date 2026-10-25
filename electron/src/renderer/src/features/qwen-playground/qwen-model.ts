@@ -39,6 +39,7 @@ export interface QwenSettings {
 export interface QwenState {
   settings: QwenSettings;
   output_dir_default: string;
+  python_default?: string;
   engine: { available: boolean; reason: string };
   models: QwenModel[];
   stock_speakers: string[];
