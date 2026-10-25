@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "14"
+RUNNER_VERSION = "15"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -2532,6 +2532,14 @@ def max_tokens_for(text: str, pace: Optional[dict] = None) -> int:
     return int(min(SAMPLE_MAX_TOKENS, max(40, math.ceil(seconds * TOKENS_PER_SECOND))))
 
 
+def push_start_for(text: str, pace: Optional[dict] = None) -> int:
+    """Token count after which the end-of-speech logit is pushed up: this narrator's MEDIAN pace for the text plus 10%. The hard limit
+    (max_tokens_for) stays a backstop; a model that stops by itself never reaches this point."""
+    chars = len((text or "").strip())
+    seconds = chars * pace["median"] * 1.1 if pace else chars / NARRATOR_CHARS_PER_SECOND * 1.1
+    return int(max(20, math.ceil(seconds * TOKENS_PER_SECOND)))
+
+
 def wav_seconds(path: str) -> Optional[float]:
     try:
         with contextlib.closing(wave.open(path, "rb")) as w:
@@ -2540,18 +2548,70 @@ def wav_seconds(path: str) -> Optional[float]:
         return None
 
 
+STOP_HELPERS = '''import numpy as np
+from transformers import LogitsProcessor, LogitsProcessorList
+
+
+class EosRamp(LogitsProcessor):
+    """Once a generation has run longer than this narrator needs for the text, raise the end-of-speech logit a little more each step until
+    the model emits it. A model that stops by itself is never touched; this only ends a run-on, at a sentence-sized length."""
+
+    def __init__(self, eos_id, start, per_step=1.5, max_bonus=40.0):
+        self.eos_id, self.start, self.per_step, self.max_bonus, self.steps = eos_id, start, per_step, max_bonus, 0
+
+    def __call__(self, input_ids, scores):
+        self.steps += 1
+        over = self.steps - self.start
+        if over > 0:
+            scores[:, self.eos_id] = scores[:, self.eos_id] + min(self.max_bonus, over * self.per_step)
+        return scores
+
+
+def add_stop_push(tts, start):
+    """The library's generate() drops extra keyword arguments before the talker's generate, so the processor is added by wrapping the
+    talker's own generate. Returns a dict that afterwards holds the processor (state['proc'].steps = tokens generated)."""
+    talker = tts.model.talker
+    state = {"proc": None}
+    original = getattr(talker, "_vs_original_generate", None) or talker.generate
+    talker._vs_original_generate = original
+
+    def generate(*args, **kwargs):
+        proc = EosRamp(tts.model.config.talker_config.codec_eos_token_id, start)
+        state["proc"] = proc
+        procs = kwargs.pop("logits_processor", None) or LogitsProcessorList()
+        procs.append(proc)
+        kwargs["logits_processor"] = procs
+        return original(*args, **kwargs)
+
+    talker.generate = generate
+    return state
+
+
+def trim_tail(wave_array, sr, keep=0.3, floor=0.01):
+    """Cut the silence after the last audible sample down to ``keep`` seconds."""
+    w = np.asarray(wave_array, dtype=np.float32)
+    loud = np.nonzero(np.abs(w) > floor)[0]
+    if len(loud) == 0:
+        return w
+    return w[:min(len(w), int(loud[-1]) + int(keep * sr))]
+'''
+
+
 SAMPLE_CODE = '''
 import sys, torch, soundfile as sf
 from qwen_tts import Qwen3TTSModel
-ckpt, speaker, text, out, attn, seed = sys.argv[1:7]
-cap = int(sys.argv[7]) if len(sys.argv) > 7 else None  # a model that never emits its end token must not run for minutes
+''' + STOP_HELPERS + '''ckpt, speaker, text, out, attn, seed = sys.argv[1:7]
+cap = int(sys.argv[7]) if len(sys.argv) > 7 else None  # hard limit: a model that never emits its end token must not run for minutes
+start = int(sys.argv[8]) if len(sys.argv) > 8 else None  # from here on the end-of-speech logit is pushed up (see EosRamp)
 torch.manual_seed(int(seed))  # our addition: the README shows no seed argument
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(int(seed))
 tts = Qwen3TTSModel.from_pretrained(ckpt, device_map="cuda:0", dtype=torch.bfloat16, attn_implementation=attn)
+state = add_stop_push(tts, start) if start else {"proc": None}
 wavs, sr = tts.generate_custom_voice(text=text, speaker=speaker, **({"max_new_tokens": cap} if cap else {}))
-sf.write(out, wavs[0], sr)
-print("wrote", out)
+sf.write(out, trim_tail(wavs[0], sr), sr)
+proc = state["proc"]
+print("wrote", out, "| tokens generated:", proc.steps if proc else "?", "| expected about:", start, "| stopped by itself:", bool(proc and start and proc.steps <= start))
 '''
 
 
@@ -2599,7 +2659,7 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
                 say(f"{name}: the speaker name in config.json had capitals, which Qwen's lookup never finds; lowercased it (original kept as config.json.orig).")
         except (OSError, ValueError) as exc:
             say(f"Could not check the speaker name in {name}/config.json ({exc}); trying anyway.")
-        code = stream([py(), "-c", SAMPLE_CODE, ckpt, model_speaker_name(p), p.sample_text, out, attn, str(p.sample_seed), str(cap)],
+        code = stream([py(), "-c", SAMPLE_CODE, ckpt, model_speaker_name(p), p.sample_text, out, attn, str(p.sample_seed), str(cap), str(push_start_for(p.sample_text, pace))],
                       log_path=os.path.join(lay.run_logs, "samples.log"))
         if code != 0 or not os.path.isfile(out):
             say(f"{name}: no sample could be generated (see samples.log); the checkpoints are unaffected.")

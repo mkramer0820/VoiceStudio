@@ -1600,3 +1600,63 @@ def test_the_training_copy_fixes_the_text_projection_and_the_label_shift_that_br
     open(os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py"), "w").write(vs.ACCEL_LINE)
     with pytest.raises(vs.StepFailed, match="cannot be patched safely|cannot be applied"):
         vs.build_patched_script(e.lay, None)
+
+
+def _stop_helpers_namespace():
+    import types
+
+    stub = types.ModuleType("transformers")
+    stub.LogitsProcessor = type("LogitsProcessor", (), {})
+    stub.LogitsProcessorList = list
+    sys.modules["transformers"] = stub
+    ns = {}
+    code = vs.SAMPLE_CODE.split("ckpt, speaker, text, out, attn, seed")[0].replace("from qwen_tts import Qwen3TTSModel", "")
+    exec(code, ns)
+    return ns
+
+
+def test_the_stop_push_leaves_a_model_alone_that_stops_and_ends_a_run_on_near_the_expected_length(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setitem(sys.modules, "transformers", sys.modules.get("transformers"))
+    ns = _stop_helpers_namespace()
+    ramp = ns["EosRamp"](eos_id=3, start=10)
+    scores = torch.zeros(1, 8)
+    for _ in range(10):  # up to the expected length nothing changes
+        assert ramp(None, scores.clone())[0, 3].item() == 0.0
+    pushed = [ramp(None, scores.clone())[0, 3].item() for _ in range(40)]
+    assert pushed[0] > 0 and pushed == sorted(pushed) and max(pushed) == 40.0  # grows every step, capped
+    assert all(ramp(None, scores.clone())[0, k].item() == 0.0 for k in (0, 1, 2, 4, 5, 6, 7))  # only the end token moves
+
+
+def test_the_stop_push_reaches_the_talkers_generate_and_the_tail_is_trimmed(monkeypatch):
+    np = pytest.importorskip("numpy")
+    ns = _stop_helpers_namespace()
+    seen = {}
+
+    class Talker:
+        def generate(self, *a, **k):
+            seen["procs"] = k.get("logits_processor")
+            return "tokens"
+
+    tts = type("T", (), {})()
+    tts.model = type("M", (), {})()
+    tts.model.talker = Talker()
+    tts.model.config = type("C", (), {"talker_config": type("TC", (), {"codec_eos_token_id": 7})()})()
+    state = ns["add_stop_push"](tts, 25)
+    assert tts.model.talker.generate(inputs_embeds=1) == "tokens"
+    assert len(seen["procs"]) == 1 and seen["procs"][0].eos_id == 7 and seen["procs"][0].start == 25 and state["proc"] is seen["procs"][0]
+    ns["add_stop_push"](tts, 30)  # wrapping twice must not stack processors
+    tts.model.talker.generate()
+    assert len(seen["procs"]) == 1 and seen["procs"][0].start == 30
+    sr = 24000
+    wave = np.concatenate([np.zeros(sr // 2), 0.3 * np.ones(sr), np.zeros(3 * sr)]).astype(np.float32)  # 0.5 s lead, 1 s sound, 3 s silence
+    out = ns["trim_tail"](wave, sr)
+    assert abs(len(out) / sr - (0.5 + 1.0 + 0.3)) < 0.01  # silence after the sound is cut to 0.3 s, the lead is kept
+    assert len(ns["trim_tail"](np.zeros(100, dtype=np.float32), sr)) == 100  # nothing audible: untouched
+
+
+def test_the_push_starts_at_the_narrators_median_pace_not_a_constant():
+    pace = {"clips": 683, "median": 1 / 13.7, "slowest95": 1 / 11.2}
+    text = "x" * 124
+    start, cap = vs.push_start_for(text, pace), vs.max_tokens_for(text, pace)
+    assert start < cap and abs(start / vs.TOKENS_PER_SECOND - 124 / 13.7 * 1.1) < 0.2
