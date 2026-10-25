@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "10"
+RUNNER_VERSION = "12"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -2484,15 +2484,36 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
 
 
 # --------------------------------------------------------------------------------------------- final sample
+TOKENS_PER_SECOND = 12.5  # the 12 Hz tokenizer
+NARRATOR_CHARS_PER_SECOND = 15.0  # median of the narrator export (range 8 to 20 characters per second)
+SAMPLE_MAX_TOKENS = 400  # absolute ceiling, about 32 s of audio
+
+
+def max_tokens_for(text: str) -> int:
+    """Hard length limit for one generation. The model stops only when it emits its end token (nothing in the repo forces it), and the
+    default limit is 2048 tokens (164 s). This allows 1.6x the expected spoken length plus 1.5 s, so an 8 s sentence can never run to 35 s."""
+    expected = len((text or "").strip()) / NARRATOR_CHARS_PER_SECOND
+    return int(min(SAMPLE_MAX_TOKENS, max(40, math.ceil((expected * 1.6 + 1.5) * TOKENS_PER_SECOND))))
+
+
+def wav_seconds(path: str) -> Optional[float]:
+    try:
+        with contextlib.closing(wave.open(path, "rb")) as w:
+            return w.getnframes() / float(w.getframerate())
+    except (wave.Error, EOFError, OSError, ZeroDivisionError):
+        return None
+
+
 SAMPLE_CODE = '''
 import sys, torch, soundfile as sf
 from qwen_tts import Qwen3TTSModel
 ckpt, speaker, text, out, attn, seed = sys.argv[1:7]
+cap = int(sys.argv[7]) if len(sys.argv) > 7 else None  # a model that never emits its end token must not run for minutes
 torch.manual_seed(int(seed))  # our addition: the README shows no seed argument
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(int(seed))
 tts = Qwen3TTSModel.from_pretrained(ckpt, device_map="cuda:0", dtype=torch.bfloat16, attn_implementation=attn)
-wavs, sr = tts.generate_custom_voice(text=text, speaker=speaker)
+wavs, sr = tts.generate_custom_voice(text=text, speaker=speaker, **({"max_new_tokens": cap} if cap else {}))
 sf.write(out, wavs[0], sr)
 print("wrote", out)
 '''
@@ -2521,23 +2542,39 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
         return []
     attn = "flash_attention_2" if path == "flash2" else ATTN_FALLBACK_IMPL
     os.makedirs(lay.samples, exist_ok=True)
-    out, ckpt = os.path.join(lay.samples, "final.wav"), os.path.join(lay.checkpoints, names[-1])
-    say(f"== Sample from {names[-1]}: text {p.sample_text!r}, seed {p.sample_seed}, attention {attn}. UNVERIFIED API use (README at the pinned commit).")
-    try:
-        if fix_speaker_names(ckpt):
-            say(f"{names[-1]}: the speaker name in config.json had capitals, which Qwen's lookup never finds; lowercased it (original kept as config.json.orig).")
-    except (OSError, ValueError) as exc:
-        say(f"Could not check the speaker name in {names[-1]}/config.json ({exc}); trying anyway.")
-    code = stream([py(), "-c", SAMPLE_CODE, ckpt, model_speaker_name(p), p.sample_text, out, attn, str(p.sample_seed)],
-                  log_path=os.path.join(lay.run_logs, "samples.log"))
-    if code != 0 or not os.path.isfile(out):
-        say("final.wav could not be generated (see samples.log); the checkpoints are unaffected.")
-        run_log(lay, f"sample from {names[-1]} failed with code {code}")
+    cap = max_tokens_for(p.sample_text)
+    say(f"== Samples from {len(names)} checkpoint(s): text {p.sample_text!r}, seed {p.sample_seed}, attention {attn}, at most {cap} tokens "
+        f"(about {cap / TOKENS_PER_SECOND:.0f} s of audio). UNVERIFIED API use (README at the pinned commit).")
+    say("Listen to each epoch: a loss number does not tell you which one sounds right, and later epochs can lose the end-of-speech token.")
+    final = os.path.join(lay.samples, "final.wav")
+    made = []
+    for name in names:
+        ckpt = os.path.join(lay.checkpoints, name)
+        out = os.path.join(lay.samples, f"{name.replace('checkpoint-', '')}.wav")  # epoch-0.wav, epoch-1.wav, ...
+        try:
+            if fix_speaker_names(ckpt):
+                say(f"{name}: the speaker name in config.json had capitals, which Qwen's lookup never finds; lowercased it (original kept as config.json.orig).")
+        except (OSError, ValueError) as exc:
+            say(f"Could not check the speaker name in {name}/config.json ({exc}); trying anyway.")
+        code = stream([py(), "-c", SAMPLE_CODE, ckpt, model_speaker_name(p), p.sample_text, out, attn, str(p.sample_seed), str(cap)],
+                      log_path=os.path.join(lay.run_logs, "samples.log"))
+        if code != 0 or not os.path.isfile(out):
+            say(f"{name}: no sample could be generated (see samples.log); the checkpoints are unaffected.")
+            run_log(lay, f"sample from {name} failed with code {code}")
+            continue
+        secs = wav_seconds(out)
+        note = ""
+        if secs is not None:
+            note = f"{secs:.1f} s of audio" + ("  <- hit the length limit: it did not stop by itself" if secs >= cap / TOKENS_PER_SECOND * 0.97 else "")
+        say(f"{name}: {out}  {note}")
+        made.append(out)
+    if not made:
         return []
-    write_json_atomic(out[:-4] + ".json", {"checkpoint": names[-1], "text": p.sample_text, "seed": p.sample_seed, "speaker": p.speaker_name,
-                                           "attention": attn, "generated": time.strftime("%Y-%m-%d %H:%M:%S")})
-    say(f"Wrote {out}")
-    return [out]
+    shutil.copyfile(made[-1], final)
+    write_json_atomic(final[:-4] + ".json", {"checkpoint": names[-1], "text": p.sample_text, "seed": p.sample_seed, "speaker": p.speaker_name,
+                                             "attention": attn, "generated": time.strftime("%Y-%m-%d %H:%M:%S"), "epoch_samples": [os.path.basename(m) for m in made]})
+    say(f"Wrote {len(made)} sample(s) and {final} (a copy of the last epoch).")
+    return [final]
 
 
 def final_sample(p: Params, *, stream: Callable = run_stream) -> list:

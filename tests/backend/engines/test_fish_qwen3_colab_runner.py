@@ -1041,7 +1041,9 @@ def test_final_sample_uses_the_readme_api_from_the_drive_copy_and_says_when_it_c
     assert made == [os.path.join(e.lay.samples, "final.wav")]
     meta = json.load(open(os.path.join(e.lay.samples, "final.json")))
     assert meta["checkpoint"] == "checkpoint-epoch-4" and meta["seed"] == 1234 and meta["text"] == vs.DEFAULT_SAMPLE_TEXT
-    for needle in ("Qwen3TTSModel.from_pretrained", "generate_custom_voice(text=text, speaker=speaker)", 'device_map="cuda:0"', "dtype=torch.bfloat16",
+    assert meta["epoch_samples"] == [f"epoch-{n}.wav" for n in range(5)]  # one sample per epoch, final.wav is a copy of the last
+    assert all(os.path.isfile(os.path.join(e.lay.samples, f"epoch-{n}.wav")) for n in range(5))
+    for needle in ("Qwen3TTSModel.from_pretrained", "generate_custom_voice(text=text, speaker=speaker", 'device_map="cuda:0"', "dtype=torch.bfloat16",
                    "attn_implementation=attn", "sf.write"):
         assert needle in vs.SAMPLE_CODE
     for reason, kw in (("no GPU", dict(gpu=None, detect=lambda: None)), ("qwen_tts cannot be imported", dict(gpu=A100, probe=lambda n: (False, "x")))):
@@ -1555,3 +1557,11 @@ def test_a_script_copy_that_was_already_patched_by_hand_is_accepted(tmp_path):
     open(path, "w").write("x = 1\nattn_implementation=\"flash_attention_2\"\n" + line + "\n")
     out = vs.build_patched_script(e.lay, None)
     assert open(out).read().count("project_dir=") == 1
+
+
+def test_the_generation_limit_follows_the_text_so_a_short_sentence_cannot_run_for_half_a_minute():
+    eight_seconds = "x" * 124  # about 8 s of narration at 15 characters per second
+    cap = vs.max_tokens_for(eight_seconds)
+    assert cap / vs.TOKENS_PER_SECOND < 8.3 * 1.6 + 1.6  # never anywhere near 35 s
+    assert vs.max_tokens_for("Until, finally, they reached it.") < 100
+    assert vs.max_tokens_for("") == 40 and vs.max_tokens_for("y" * 5000) == vs.SAMPLE_MAX_TOKENS  # floor and ceiling
