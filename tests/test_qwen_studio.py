@@ -132,6 +132,40 @@ def test_clone_on_custom_gets_the_base_and_a_cache_path(studio, tmp_path):
     assert sent["xvec_path"].endswith(".npy")
 
 
+def test_speaker_is_never_picked_silently(studio):
+    one = _models()["custom_voice"]
+    many = {**one, "label": "Stock CustomVoice", "speakers": ["aiden", "ryan", "vivian"]}
+    assert pg.pick_speaker(None, one) == ("ss_narrator", None)  # one speaker: unambiguous
+    assert pg.pick_speaker("RYAN", many) == ("ryan", None)  # case-insensitive, the model's own spelling
+    with pytest.raises(ValueError, match="Pick a speaker.*aiden, ryan, vivian"):
+        pg.pick_speaker("", many)
+    with pytest.raises(ValueError, match="not a speaker.*stock voices you can borrow"):
+        pg.pick_speaker("bob", many)
+    with pytest.raises(ValueError, match="no built-in speakers"):
+        pg.pick_speaker(None, {**one, "speakers": []})
+
+
+def test_stock_voice_names_can_be_borrowed_with_a_warning(studio):
+    models = _models()
+    narrator, base = models["custom_voice"], models["base"]
+    assert pg.pick_speaker("ryan", narrator) == ("ryan", registry.STOCK_SPEAKERS["ryan"])  # EP09 has no trained ryan
+    assert pg.pick_speaker("ryan", base)[1] == 3061
+    assert "ryan" in narrator["borrowable_speakers"] and "ss_narrator" not in narrator["borrowable_speakers"]
+    take = _take(1, narrator["id"], voice={"speaker": "ryan"})
+    sent, info = pg.resolve_voice(take, narrator, registry.load_settings())
+    assert sent["speaker"] == "ryan" and sent["speaker_row"] == 3061 and info["borrowed"] is True
+    assert "sound different from the original ryan" in info["warning"]
+    own, own_info = pg.resolve_voice(_take(2, narrator["id"]), narrator, registry.load_settings())
+    assert "speaker_row" not in own and "warning" not in own_info  # the narrator's own voice carries no warning
+
+
+def test_a_base_model_takes_a_borrowed_voice_but_not_an_unknown_one(studio):
+    base = _models()["base"]
+    pg._check_pair(base, pg.Voice(kind="custom_voice", speaker="ryan"))
+    with pytest.raises(ValueError, match="needs a custom_voice model"):
+        pg._check_pair(base, pg.Voice(kind="custom_voice", speaker="bob"))
+
+
 # ── the runner, with a fake engine ─────────────────────────────────────────
 class FakeEngine:
     sample_rate = 24000
@@ -153,7 +187,7 @@ def _wait(job_id, timeout=10):
     end = time.time() + timeout
     while time.time() < end:
         data = pg.get_job(job_id)
-        if data["status"] != "running":
+        if data["status"] != "running" and data["finished"] is not None and not pg.is_running():
             return data
         time.sleep(0.02)
     raise AssertionError("run did not finish")

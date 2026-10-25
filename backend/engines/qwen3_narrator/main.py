@@ -222,6 +222,19 @@ def _xvector(ref_audio: str, base_dir: str, cache_path: str | None):
 
 
 @contextlib.contextmanager
+def _as_custom_voice(model, enabled: bool):
+    """Let a Base model take the custom-voice call for one generation (the type is a flag the library checks)."""
+    inner = model.model.model
+    previous = inner.tts_model_type
+    if enabled:
+        inner.tts_model_type = "custom_voice"
+    try:
+        yield
+    finally:
+        inner.tts_model_type = previous
+
+
+@contextlib.contextmanager
 def _speaker_row(model, speaker: str, vector):
     """Write ``vector`` into the codec-embedding row of ``speaker`` for one
     generation and put the trained row back afterwards, so the checkpoint's own
@@ -258,7 +271,8 @@ def _generate_chunk(model, text: str, voice: dict, language: str, seed, pad_s: f
 
     kind = voice.get("kind", "custom_voice")
     loaded = _STATE.get("type")
-    if kind == "custom_voice" and loaded != "custom_voice":
+    borrowed = voice.get("speaker_row")
+    if kind == "custom_voice" and loaded != "custom_voice" and not (borrowed is not None and loaded == "base"):
         raise ValueError(f"This model is a {loaded!r} model; a custom-voice speaker needs a custom_voice checkpoint.")
     if kind == "clone_on_custom" and loaded != "custom_voice":
         raise ValueError(f"'Clone on custom voice' needs a custom_voice checkpoint; this is a {loaded!r} model.")
@@ -287,8 +301,12 @@ def _generate_chunk(model, text: str, voice: dict, language: str, seed, pad_s: f
                 max_new_tokens=cap, **options)
         else:
             speaker = voice.get("speaker") or _STATE["speaker"]
+            if borrowed is not None:  # a stock voice name this model has no entry for: point it at the stock row
+                cfg = model.model.model.config.talker_config
+                cfg.spk_id[speaker.lower()] = int(borrowed)
+                cfg.spk_is_dialect[speaker.lower()] = False
             row = _speaker_row(model, speaker, voice["_xvec"]) if kind == "clone_on_custom" else contextlib.nullcontext()
-            with row:
+            with row, _as_custom_voice(model, borrowed is not None):
                 wavs, sr = model.generate_custom_voice(
                     text=text, speaker=speaker, language=language,
                     instruct=voice.get("instruct") or None, max_new_tokens=cap, **options)

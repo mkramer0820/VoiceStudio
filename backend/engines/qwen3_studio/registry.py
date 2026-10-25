@@ -19,6 +19,13 @@ ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 #: Folders never searched for checkpoints (they hold parts of one, not a checkpoint).
 _SKIP = {"speech_tokenizer", "samples", "logs", "config", "environment", "__pycache__", ".git"}
 _MAX_DEPTH = 6
+#: The built-in voices of the stock CustomVoice models, with their rows in the codec embedding table
+#: (read from the 0.6B CustomVoice config; assumed identical in the 1.7B one, which was not available to check).
+#: Only the stock CustomVoice models carry a trained embedding in these rows. Other models, including
+#: fine-tunes, have empty rows there, so a voice "borrowed" from this table sounds different from the original.
+STOCK_SPEAKERS = {"serena": 3066, "vivian": 3065, "uncle_fu": 3010, "ryan": 3061, "aiden": 2861,
+                  "ono_anna": 2873, "sohee": 2864, "eric": 2875, "dylan": 2878}
+
 _DEFAULTS = {"python": "", "checkpoint_root": "", "output_dir": "", "warmup_runs": 2,
              "warmup_text": "This is a short warm up sentence to settle the voice."}
 
@@ -109,7 +116,9 @@ def _entry(folder: str, model_id: str, label: str, source: str) -> Optional[dict
     info = read_checkpoint(folder)
     if info is None:
         return None
-    return {"id": model_id, "label": label, "path": os.path.abspath(folder), "source": source, **info}
+    borrowable = [] if info["type"] == "voice_design" else [n for n in STOCK_SPEAKERS if n not in info["speakers"]]
+    return {"id": model_id, "label": label, "path": os.path.abspath(folder), "source": source,
+            "borrowable_speakers": borrowable, **info}
 
 
 def _scan(root: str) -> list[dict]:

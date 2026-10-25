@@ -151,6 +151,35 @@ def _profile(profile_id: str) -> dict:
             "ref_text": row.get("ref_text") or ""}
 
 
+def pick_speaker(requested: Optional[str], model: dict) -> tuple[str, Optional[int]]:
+    """(speaker, borrowed row). A speaker the model was trained with comes back as ``(name, None)``.
+    One of the nine stock voice names the model has no trained row for is *borrowed*: ``(name, row)``,
+    and the caller must warn. A blank is accepted only when the model has exactly one speaker
+    (the fine-tuned narrator); with several, the user must choose, never a silent first-in-list."""
+    speakers = list(model.get("speakers") or [])
+    wanted = (requested or "").strip()
+    if wanted:
+        own = next((s for s in speakers if s.lower() == wanted.lower()), None)
+        if own:
+            return own, None
+        if wanted.lower() in registry.STOCK_SPEAKERS:
+            return wanted.lower(), registry.STOCK_SPEAKERS[wanted.lower()]
+        raise ValueError(f"'{wanted}' is not a speaker of {model['label']}. Its speakers: "
+                         f"{', '.join(speakers) or 'none'}; stock voices you can borrow: {', '.join(registry.STOCK_SPEAKERS)}.")
+    if len(speakers) == 1:
+        return speakers[0], None
+    if not speakers:
+        raise ValueError(f"{model['label']} has no built-in speakers. Pick a stock voice to borrow "
+                         f"({', '.join(registry.STOCK_SPEAKERS)}) or use a clone.")
+    raise ValueError(f"Pick a speaker for {model['label']}: {', '.join(speakers)}.")
+
+
+def borrowed_warning(name: str, model: dict) -> str:
+    return (f"'{name}' is borrowed from the stock CustomVoice models: {model['label']} has no trained voice in that slot, "
+            f"so it will sound different from the original {name}. For the real voice use the stock Hugging Face "
+            "CustomVoice model.")
+
+
 def resolve_voice(take: Take, model: dict, settings: dict) -> tuple[dict, dict]:
     """(voice dict for the sidecar, what the manifest records about it)."""
     v = take.voice
@@ -180,18 +209,31 @@ def resolve_voice(take: Take, model: dict, settings: dict) -> tuple[dict, dict]:
             if base is None:
                 raise ValueError("'Clone on custom voice' needs a stock Base model in the Hugging Face cache.")
             sent["base_model_path"] = base["path"]
-            sent["speaker"] = v.speaker or (model.get("speakers") or [None])[0]
+            sent["speaker"], row = pick_speaker(v.speaker, model)
+            if row is not None:
+                sent["speaker_row"] = row
             sent["xvec_path"] = os.path.join(registry.studio_dir(), "xvectors",
                                              f"{slug(os.path.basename(ref_audio), 'ref', 60)}_{slug(base['id'], 'b', 30)}.npy")
             info["base_model_id"], info["speaker"] = base["id"], sent["speaker"]
     else:
-        sent["speaker"] = v.speaker or (model.get("speakers") or [None])[0]
+        sent["speaker"], row = pick_speaker(v.speaker, model)
         info["speaker"] = sent["speaker"]
+        if row is not None:  # borrowed stock voice: say so now, in the manifest, and in the run log
+            sent["speaker_row"] = row
+            info["borrowed"] = True
+            info["warning"] = borrowed_warning(sent["speaker"], model)
     return sent, info
 
 
 def _check_pair(model: dict, voice: Voice) -> None:
-    want = {"custom_voice": "custom_voice", "clone_on_custom": "custom_voice", "clone": "base"}[voice.kind]
+    if voice.kind == "clone":
+        want = "base"
+    else:
+        want = "custom_voice"
+        # A borrowed stock voice is allowed on a Base model too: the type is only a flag, the row is what matters.
+        name = (voice.speaker or "").strip().lower()
+        if voice.kind == "custom_voice" and model["type"] == "base" and name in registry.STOCK_SPEAKERS:
+            return
     if model["type"] != want:
         raise ValueError(f"'{voice.kind}' needs a {want} model, but {model['label']} is {model['type']}.")
 
@@ -334,6 +376,9 @@ def _run(job: dict, req: RunRequest, order: list[tuple[int, int]], models: dict,
             try:
                 voice, info = resolve_voice(take, model, settings)
                 result["voice"] = info
+                if info.get("warning"):
+                    result["warnings"] = [info["warning"]]
+                    _log(job, "WARN", f"Take {index + 1}: {info['warning']}")
                 common = {"model_path": model["path"], "voice": voice, "language": take.params.language,
                           "pad_s": take.params.pad_s}
                 for key in ("temperature", "top_k", "top_p", "repetition_penalty", "chunk_chars", "max_seq_len"):
@@ -380,6 +425,8 @@ def _run(job: dict, req: RunRequest, order: list[tuple[int, int]], models: dict,
         job["finished"] = time.time()
         try:
             _persist(job)
+        except Exception:  # noqa: BLE001 - a failed last write must not leave the GPU lock held
+            logger.exception("qwen playground: could not write the final manifest for %s", job["id"])
         finally:
             _run_lock.release()
 

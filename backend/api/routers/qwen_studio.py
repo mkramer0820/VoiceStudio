@@ -65,6 +65,7 @@ def state():
         "output_dir_default": reg.default_output_dir(),
         "engine": {"available": ok, "reason": reason},
         "models": reg.discover_models(settings),
+        "stock_speakers": list(reg.STOCK_SPEAKERS),
         "profiles": _profiles(),
     }
 
