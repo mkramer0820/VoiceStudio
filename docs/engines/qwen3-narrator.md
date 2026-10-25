@@ -37,7 +37,7 @@ uv pip install --python .venv-qwen\Scripts\python.exe --index-strategy unsafe-be
 | Variable | Meaning | Default |
 |---|---|---|
 | `OMNIVOICE_QWEN3_NARRATOR_PYTHON` | python of the venv above | the playground's Python setting, else `.venv-qwen` |
-| `OMNIVOICE_QWEN3_NARRATOR_CKPT` | checkpoint folder (`config.json`, `model.safetensors`, tokenizer, `speech_tokenizer/`) | required |
+| `OMNIVOICE_QWEN3_NARRATOR_CKPT` | (engine only; the playground finds checkpoints in **Settings -> Storage -> Model locations**) checkpoint folder (`config.json`, `model.safetensors`, tokenizer, `speech_tokenizer/`) | required |
 | `OMNIVOICE_QWEN3_NARRATOR_MAX_SEQ_LEN` | static KV cache length of the CUDA graph (prompt + audio frames) | 1280 |
 | `OMNIVOICE_QWEN3_NARRATOR_SPEAKER` | speaker name | first speaker in `config.json` |
 | `OMNIVOICE_QWEN3_NARRATOR_RECV_TIMEOUT_S` | sidecar reply timeout | 600 |

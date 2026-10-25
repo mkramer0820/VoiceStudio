@@ -138,6 +138,19 @@ failed download at once. Caveats:
   mirror you chose yourself, the install fails with `HF_MIRROR_GATED` — switch
   to **Hugging Face (official)** to install them.
 
+## Model locations (your own folders)
+
+**Settings -> Storage -> Model locations** lists where the app looks for local models.
+The first row is the Hugging Face cache (the *Model cache* folder above it). Use
+*Add folder* to add any folder that holds fine-tuned checkpoints, for example
+`C:\Users\you\.cache\custom-fine-tunes\Qwen3TTS` or `E:\Qwen3TTS_Checkpoints`.
+A folder that is itself a checkpoint works, and so does a folder with checkpoints up
+to six levels down. Each row says how many models were found ("Models found: 3",
+"Folder missing") and *Models found here* lists them with their type, size, speakers
+and path. *Remove from list* only removes the row; your files are never deleted.
+The Qwen playground reads this list. An old "Checkpoint folder" set in the playground
+is imported once as "Imported checkpoint folder".
+
 ## Cancelling a download
 
 the engine's **Weights** list in **Model Catalogue** lets you cancel an in-flight install. Cancellation stops

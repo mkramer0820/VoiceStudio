@@ -24,7 +24,7 @@ The page warns when a voice type and model type do not match, but never blocks i
 
 ## Running
 
-Set the **output folder**, a **session name**, and (if needed) the **Python path** and **checkpoint folder** (saved with *Save settings*; changing the Python path restarts the engine on the next run). *Warm-up runs* render throw-away text before the first real take of each voice so a cold start does not spoil it. *Group by model* reorders the run so the same model and voice run back to back; the page shows how many model loads the current order needs. Results keep the order you wrote the takes in.
+Set the **output folder**, a **session name**, and (if needed) the **Python path** (saved with *Save settings*; changing the Python path restarts the engine on the next run). Where models live is not set here: use *Manage model folders* (or open **Settings -> Storage -> Model locations**). The model list shows where each model comes from, for example `ss_narrator, Production`. A saved session whose model is no longer found still opens; its take shows "Model not found" with the old path. *Warm-up runs* render throw-away text before the first real take of each voice so a cold start does not spoil it. *Group by model* reorders the run so the same model and voice run back to back; the page shows how many model loads the current order needs. Results keep the order you wrote the takes in.
 
 *Run all*, *Run selected*, *Cancel* (after the current render) and *Unload GPU* (stops the engine and frees the memory). Only one run goes at a time.
 

@@ -31,6 +31,7 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 | OmniVoice LoRA path and local Train dialog | Done, unverified | `omnivoice/training/lora.py` | not part of the Qwen plan |
 | Agent docs (this folder) | Done | `docs/agents/` | keep this file current |
 | Push branch / pull request | Branch pushed 2026-10-25; no PR | n/a | PR only if the owner asks |
+| Model locations in Settings -> Storage (shared list, `/api/settings/storage/model-locations`, native folder picker, playground reads it, "model not found" warning on takes) | Done, unverified (never seen rendered) | `backend/core/model_locations.py`, `model-locations-settings.tsx`, `authorizeModelLocation` IPC; `tests/test_model_locations.py`, vitest, IPC test; [brief](MODEL_LOCATIONS_BRIEF.md) | owner check on screen; other engines can read the list the same way; rows cannot be renamed in the UI (API supports it); no Browse button on the output folder |
 | Qwen playground page (`/qwen-playground`) | Done, unverified (never seen rendered; no real run) | `electron/src/renderer/src/features/qwen-playground/`, [user page](../engines/qwen3-playground.md); vitest (model + page), typecheck, locale:check | manager's real GPU session; translations of the `qwenPlayground` namespace (English placeholders in 20 locales); no folder-browse button (needs a new IPC); story mode (prompt 2) |
 | Load a trained Qwen model into the app | Not built | n/a | after the best epoch is chosen |
 

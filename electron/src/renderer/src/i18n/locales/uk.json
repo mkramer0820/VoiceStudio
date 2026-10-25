@@ -4284,7 +4284,7 @@
     "type_custom_voice": "Narrator model (custom voice)",
     "type_base": "Voice-clone model (base)",
     "type_voice_design": "Voice-design model",
-    "model_line": "{{type}}, {{size}}",
+    "model_line": "{{type}}, size {{size}}",
     "speakers": "Speakers: {{list}}",
     "no_speakers": "No built-in speakers",
     "manage_folders": "Manage model folders",
