@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "9"
+RUNNER_VERSION = "10"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -2276,10 +2276,11 @@ def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) 
     src = os.path.join(lay.local_repo, "finetuning", "sft_12hz.py")
     with open(src, encoding="utf-8") as fh:
         text = fh.read()
-    if text.count(ACCEL_LINE) != 1 or (impl and text.count(FLASH_LINE) != 1):
+    already_fixed = ACCEL_FIXED in text or 'log_with="tensorboard", project_dir=' in text  # someone patched the local copy by hand
+    if (text.count(ACCEL_LINE) != 1 and not already_fixed) or (impl and text.count(FLASH_LINE) != 1):
         raise StepFailed("sft_12hz.py does not contain the expected lines exactly once, so it cannot be patched safely "
                          "(the repo is not the pinned commit?).")
-    text = text.replace(ACCEL_LINE, ACCEL_FIXED)
+    text = text.replace(ACCEL_LINE, ACCEL_FIXED)  # no-op when the line is already fixed
     note = "# Copy of Qwen's sft_12hz.py written by VoiceStudio: a TensorBoard project_dir was added to the Accelerator."
     if impl:
         text = text.replace(FLASH_LINE, f'attn_implementation="{impl}"')

@@ -1546,3 +1546,12 @@ def test_a_checkpoint_made_with_a_capitalised_name_can_be_repaired_without_losin
     assert data["tts_model_type"] == "custom_voice"
     assert "SS_Narrator" in (ck / "config.json.orig").read_text()
     assert vs.fix_speaker_names(str(ck)) is False  # already fine: untouched
+
+
+def test_a_script_copy_that_was_already_patched_by_hand_is_accepted(tmp_path):
+    e = _flow_env(tmp_path)
+    path = os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py")
+    line = 'accelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", project_dir="/content/tensorboard")'
+    open(path, "w").write("x = 1\nattn_implementation=\"flash_attention_2\"\n" + line + "\n")
+    out = vs.build_patched_script(e.lay, None)
+    assert open(out).read().count("project_dir=") == 1
