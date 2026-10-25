@@ -29,7 +29,7 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 | Colab runner and notebook (Drive cache, GPU-aware, safe checkpoint copy, timing run) | Done, unverified (fakes only) | `qwen3_colab_runner.py`, `notebooks/` | first real Colab run |
 | OmniVoice LoRA path and local Train dialog | Done, unverified | `omnivoice/training/lora.py` | not part of the Qwen plan |
 | Agent docs (this folder) | Done | `docs/agents/` | keep this file current |
-| **Colab training runs** | **In progress**: run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6, 8 epochs) gave a narrator-like voice at epoch 2 (owner listened) | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare all epochs by ear, then one targeted change at a time |
+| **Colab training runs** | **In progress**: run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6, 8 epochs) gave a narrator-like voice at epoch 2 (owner listened) | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare all epochs by ear (fast sampler `E:\qwen3TTS\upload\epoch_test_fast.py` written, never run on a GPU), then one targeted change at a time |
 | Push branch / pull request | Not started (owner decision) | n/a | owner's call |
 | Load a trained Qwen model into the app | Not built | n/a | after a trained model exists |
 
