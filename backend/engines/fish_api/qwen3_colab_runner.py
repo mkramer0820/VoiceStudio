@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "6"
+RUNNER_VERSION = "7"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -1354,13 +1354,16 @@ def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Op
                  f"torch {env['torch']}, CUDA {env.get('cuda') or 'none'}" if env.get("torch") else "PyTorch is not installed in this runtime"))
     rows.append(("gpu", "PASS" if gpu else "FAIL", f"{gpu.name}, {gpu.vram_gb:g} GB, compute capability {env.get('gpu_cc')}" if gpu
                  else "no GPU: Runtime > Change runtime type > pick the GPU"))
+    wheel_ok = False
     if p.flash_wheel:
-        fits, why_not = wheel_fits(p.flash_wheel, env)
-        rows.append(("your FLASH_WHEEL", "PASS" if fits else "INFO", why_not if fits else "will NOT be used: " + why_not))
+        wheel_ok, why_not = wheel_fits(p.flash_wheel, env)
+        rows.append(("your FLASH_WHEEL", "PASS" if wheel_ok else "INFO", why_not if wheel_ok else "will NOT be used: " + why_not))
     notes = []
-    if env.get("python") not in TESTED_PYTHON:
+    if wheel_ok:
+        pass  # the wheel you gave fits this runtime, so a new Python/CUDA is not a problem
+    elif env.get("python") not in TESTED_PYTHON:
         notes.append(f"Python {env.get('python_version')} is newer than the 3.10-3.12 these packages were built for")
-    if env.get("cuda_tag") and env["cuda_tag"] != "cu12":
+    if not wheel_ok and env.get("cuda_tag") and env["cuda_tag"] != "cu12":
         notes.append(f"CUDA {env.get('cuda')} is newer than the CUDA 12 that FlashAttention packages exist for")
     if notes:
         rows.append(("newer runtime", "INFO", "; ".join(notes) + ". Expect no ready-made FlashAttention package (PyTorch's built-in attention is used, "
@@ -1370,6 +1373,8 @@ def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Op
         if path == "flash2":
             if functional()[0]:
                 rows.append(("FlashAttention 2", "PASS", "already installed and working"))
+            elif wheel_ok:
+                rows.append(("FlashAttention 2", "PASS", "the wheel you gave (FLASH_WHEEL) fits this runtime and will be installed"))
             elif find_cached_wheel(lay, env):
                 rows.append(("FlashAttention 2", "PASS", "a cached wheel for this exact runtime is on Drive"))
             elif prebuilt_wheel_name(env) and exists(FLASH_URL.format(name=prebuilt_wheel_name(env).replace("+", "%2B"))):

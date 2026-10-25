@@ -1498,3 +1498,14 @@ def test_a_wheel_url_with_an_encoded_plus_is_saved_and_read_with_the_plus():
     assert vs.wheel_fits(url, runtime) == (True, "matches this runtime")
     assert not vs.wheel_fits(url, dict(runtime, torch="2.12.1", torch_mm="2.12"))[0]
     assert vs.wheel_tags(url) == {"python": "3.13", "torch": "2.11.*", "cuda": "cu130"}
+
+
+def test_the_runtime_check_trusts_a_fitting_flash_wheel_instead_of_announcing_a_fallback(tmp_path, capsys):
+    url = "https://example.org/flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl"
+    e = Env(tmp_path, flash_wheel=url)
+    vs.ensure_layout(e.p, create_run=False)
+    env = {"python": "cp313", "python_version": "3.13.16", "torch": "2.11.0", "torch_mm": "2.11", "cuda": "13.0", "cuda_tag": "cu13", "cxx11abi": True,
+           "platform": "linux-x86_64", "gpu_cc": "8.0"}
+    assert vs.runtime_check(e.p, e.lay, env=env, gpu=A100, exists=lambda u: True, functional=lambda: (False, "no"))
+    out = capsys.readouterr().out
+    assert "fits this runtime and will be installed" in out and "SDPA" not in out and "Expect no ready-made" not in out
