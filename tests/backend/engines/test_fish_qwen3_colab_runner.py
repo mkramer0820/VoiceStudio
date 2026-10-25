@@ -1565,3 +1565,15 @@ def test_the_generation_limit_follows_the_text_so_a_short_sentence_cannot_run_fo
     assert cap / vs.TOKENS_PER_SECOND < 8.3 * 1.6 + 1.6  # never anywhere near 35 s
     assert vs.max_tokens_for("Until, finally, they reached it.") < 100
     assert vs.max_tokens_for("") == 40 and vs.max_tokens_for("y" * 5000) == vs.SAMPLE_MAX_TOKENS  # floor and ceiling
+
+
+def test_the_generation_limit_comes_from_the_narrators_own_pace_when_it_can_be_measured(tmp_path):
+    folder = make_dataset(tmp_path / "pace_ds")
+    pace = vs.dataset_pace(folder)
+    assert pace is None or (pace["slowest95"] >= pace["median"] > 0)  # the tiny test dataset may be too small to measure
+    slow = {"clips": 683, "median": 1 / 15.5, "slowest95": 1 / 10.0}  # the owner's data: the slowest 5% speak 10 characters per second
+    eight = "x" * 124
+    cap_seconds = vs.max_tokens_for(eight, slow) / vs.TOKENS_PER_SECOND
+    assert 14.0 < cap_seconds < 15.5 and cap_seconds < 35  # 124 characters x 0.1 s x 1.15 + 0.5 s: it follows the data, not a constant
+    assert vs.max_tokens_for(eight, {**slow, "slowest95": 1 / 20.0}) < vs.max_tokens_for(eight, slow)  # a faster narrator gets a shorter limit
+    assert vs.dataset_pace(str(tmp_path / "nothing_here")) is None

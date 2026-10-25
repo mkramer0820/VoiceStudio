@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "12"
+RUNNER_VERSION = "13"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -2489,11 +2489,32 @@ NARRATOR_CHARS_PER_SECOND = 15.0  # median of the narrator export (range 8 to 20
 SAMPLE_MAX_TOKENS = 400  # absolute ceiling, about 32 s of audio
 
 
-def max_tokens_for(text: str) -> int:
+def dataset_pace(folder: str) -> Optional[dict]:
+    """How fast this narrator really speaks, measured on the training clips themselves: seconds per character (clip length including its
+    trailing silence divided by its text). ``slowest95`` is the pace of the slowest 5% of clips. None when it cannot be read."""
+    try:
+        rows = [json.loads(line) for line in open(os.path.join(folder, "train.jsonl"), encoding="utf-8") if line.strip()]
+    except (OSError, ValueError):
+        return None
+    paces = []
+    for row in rows:
+        secs, chars = wav_seconds(os.path.join(folder, row.get("audio", ""))), len((row.get("text") or "").strip())
+        if secs and chars >= 8:
+            paces.append(secs / chars)
+    if len(paces) < 5:
+        return None
+    paces.sort()
+    return {"clips": len(paces), "median": paces[len(paces) // 2], "slowest95": paces[min(len(paces) - 1, int(len(paces) * 0.95))]}
+
+
+def max_tokens_for(text: str, pace: Optional[dict] = None) -> int:
     """Hard length limit for one generation. The model stops only when it emits its end token (nothing in the repo forces it), and the
-    default limit is 2048 tokens (164 s). This allows 1.6x the expected spoken length plus 1.5 s, so an 8 s sentence can never run to 35 s."""
-    expected = len((text or "").strip()) / NARRATOR_CHARS_PER_SECOND
-    return int(min(SAMPLE_MAX_TOKENS, max(40, math.ceil((expected * 1.6 + 1.5) * TOKENS_PER_SECOND))))
+    default limit is 2048 tokens (164 s). With ``pace`` (see dataset_pace) the limit is this narrator's slowest observed pace times the text
+    length plus 15% and half a second: no training clip was ever spoken slower, so anything longer is the model running on. Without it, a
+    generic rate is used."""
+    chars = len((text or "").strip())
+    seconds = chars * pace["slowest95"] * 1.15 + 0.5 if pace else chars / NARRATOR_CHARS_PER_SECOND * 1.6 + 1.5
+    return int(min(SAMPLE_MAX_TOKENS, max(40, math.ceil(seconds * TOKENS_PER_SECOND))))
 
 
 def wav_seconds(path: str) -> Optional[float]:
@@ -2542,9 +2563,16 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
         return []
     attn = "flash_attention_2" if path == "flash2" else ATTN_FALLBACK_IMPL
     os.makedirs(lay.samples, exist_ok=True)
-    cap = max_tokens_for(p.sample_text)
-    say(f"== Samples from {len(names)} checkpoint(s): text {p.sample_text!r}, seed {p.sample_seed}, attention {attn}, at most {cap} tokens "
-        f"(about {cap / TOKENS_PER_SECOND:.0f} s of audio). UNVERIFIED API use (README at the pinned commit).")
+    pace = None
+    try:
+        pace = dataset_pace(prepare_dataset(p, lay))
+    except (StepFailed, OSError, ValueError):
+        pass
+    cap = max_tokens_for(p.sample_text, pace)
+    why = (f"from your {pace['clips']} training clips: the slowest 5% speak at {1 / pace['slowest95']:.1f} characters per second" if pace
+           else "from a generic speaking rate, because the training clips could not be read")
+    say(f"== Samples from {len(names)} checkpoint(s): text {p.sample_text!r}, seed {p.sample_seed}, attention {attn}.")
+    say(f"Length limit {cap} tokens (about {cap / TOKENS_PER_SECOND:.1f} s), {why}. UNVERIFIED API use (README at the pinned commit).")
     say("Listen to each epoch: a loss number does not tell you which one sounds right, and later epochs can lose the end-of-speech token.")
     final = os.path.join(lay.samples, "final.wav")
     made = []
