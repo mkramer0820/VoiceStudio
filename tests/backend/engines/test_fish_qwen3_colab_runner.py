@@ -1341,3 +1341,13 @@ def test_a_wheel_you_provide_is_tried_first_and_a_bad_one_falls_back_without_com
     none = FakeStream()
     assert vs.ensure_flash_attn(e3.p, e3.lay, PY313_CU13, A100, "log", stream=none, functional=lambda: (False, "no")) == "not available (using SDPA)"
     assert none.calls == []
+
+
+def test_a_provided_wheel_is_checked_against_python_torch_and_cuda_by_name():
+    name = "flash_attn-2.8.3+cu126torch2.12-cp312-cp312-linux_x86_64.whl"
+    good = {"python": "cp312", "python_version": "3.12.12", "torch": "2.12.0", "torch_mm": "2.12", "cuda": "12.6"}
+    assert vs.wheel_fits(name, good)[0]
+    ok, why = vs.wheel_fits(name, dict(good, python="cp313", python_version="3.13.5", cuda="13.0"))
+    assert not ok and "Python 3.12" in why and "CUDA 12.6" in why
+    assert not vs.wheel_fits(name, dict(good, torch_mm="2.9", torch="2.9.0"))[0]
+    assert vs.wheel_fits("weird.whl", good)[0]

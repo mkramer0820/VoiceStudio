@@ -1022,8 +1022,12 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
                 os.makedirs(wheel_dir(lay, env), exist_ok=True)
                 wheel = os.path.join(wheel_dir(lay, env), os.path.basename(wheel.split("?")[0]) or "flash_attn_provided.whl")
                 download(p.flash_wheel, wheel)
+            fits, why_not = wheel_fits(wheel, env)
             if not os.path.isfile(wheel):
                 say("That file does not exist, so it is ignored.")
+            elif not fits:
+                say(f"The wheel you provided does not fit this runtime: {why_not}. Not installed (nothing wasted). "
+                    "Use a runtime with the matching Python/torch/CUDA, or the normal options follow.")
             elif stream(pip + [wheel], log_path=log, max_seconds=PIP_MAX_SECONDS) == 0 and functional()[0]:
                 return "provided wheel"
             else:
@@ -1091,6 +1095,24 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
 
 
 # --------------------------------------------------------------------------------------------- setup
+def wheel_fits(name: str, env: dict) -> tuple:
+    """(ok, why) for a flash_attn wheel FILE NAME against this runtime: Python, torch, CUDA, platform. Reads the name only."""
+    m = re.match(r"flash_attn-[^-]+?(?:\+cu(\d+)torch(\d+\.\d+))?-(cp\d+)-cp\d+-(\w+)\.whl$", os.path.basename(name.split("?")[0]))
+    if not m:
+        return True, "unrecognised file name, so it will be tried"
+    cu, torch_mm, py, plat = m.groups()
+    problems = []
+    if py != env.get("python"):
+        problems.append(f"built for Python {py[2]}.{py[3:]}, this runtime has {env.get('python_version')}")
+    if torch_mm and env.get("torch_mm") and torch_mm != env["torch_mm"]:
+        problems.append(f"built for torch {torch_mm}, this runtime has {env['torch']}")
+    if cu and env.get("cuda") and cu != env["cuda"].replace(".", "")[:len(cu)]:
+        problems.append(f"built for CUDA {cu[:2]}.{cu[2:]}, this runtime has {env['cuda']}")
+    if plat.startswith("linux") and env.get("platform", "linux").startswith("win"):
+        problems.append("built for Linux")
+    return (not problems), "; ".join(problems) or "matches this runtime"
+
+
 PIP_MAX_SECONDS = 25 * 60  # any single pip step is stopped after this long
 TESTED_PYTHON = ("cp310", "cp311", "cp312")  # what the Qwen3-TTS package and FlashAttention wheels were checked against by their authors
 
@@ -1109,6 +1131,9 @@ def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Op
                  f"torch {env['torch']}, CUDA {env.get('cuda') or 'none'}" if env.get("torch") else "PyTorch is not installed in this runtime"))
     rows.append(("gpu", "PASS" if gpu else "FAIL", f"{gpu.name}, {gpu.vram_gb:g} GB, compute capability {env.get('gpu_cc')}" if gpu
                  else "no GPU: Runtime > Change runtime type > pick the GPU"))
+    if p.flash_wheel:
+        fits, why_not = wheel_fits(p.flash_wheel, env)
+        rows.append(("your FLASH_WHEEL", "PASS" if fits else "INFO", why_not if fits else "will NOT be used: " + why_not))
     notes = []
     if env.get("python") not in TESTED_PYTHON:
         notes.append(f"Python {env.get('python_version')} is newer than the 3.10-3.12 these packages were built for")
