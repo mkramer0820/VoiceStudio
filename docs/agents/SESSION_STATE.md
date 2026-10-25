@@ -75,6 +75,7 @@ Use [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md). In short: confirm the expo
 - Large shell heredocs fail; write a script file instead. `npx tsc` is not the compiler; use `bun run typecheck`.
 - A worktree's `node_modules` may be a junction to the real one. Create and remove junctions with absolute paths; unlink with `cmd /c rmdir` before removing the worktree. Never delete through a junction.
 - The shell's working directory can stay inside a worktree between commands: use absolute paths.
+- Google Drive can hold two folders with the same name. Colab then resolves the name to one of them, possibly an empty copy. The notebook and runner used to create the Drive root folder when they could not see it (sync lag), which made that second copy; they now stop with a clear message and create nothing. If you see `Qwen3TTS (1)` in `G:\My Drive`, an old run made it.
 - The owner's Drive holds personal documents. Never list, read or search `G:\` beyond the one folder the owner names.
 - Known failing tests that are not ours: one torchaudio-load test and the hardcoded-CJK test (`story-model.ts`).
 - Quirk: choosing no chapters sends `chapters: [""]` (an empty list means "all"). Explorer counts include clips unticked in the clip list.

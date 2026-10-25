@@ -289,10 +289,26 @@ class Layout:
         return Layout(p, p.run_id + "-timing")
 
 
+def similar_drive_folders(root: str) -> list:
+    """Names next to ``root`` that contain 'qwen' or 'tts' (nothing else of the owner's Drive is listed)."""
+    try:
+        names = sorted(os.listdir(os.path.dirname(root.rstrip("/"))))
+    except OSError:
+        return []
+    return [n for n in names if "qwen" in n.lower() or "tts" in n.lower()][:10]
+
+
 def ensure_layout(p: Params, *, create_run: bool = True) -> Layout:
     lay = Layout(p)
     if p.drive_root.startswith(DRIVE_MOUNT + "/") and not os.path.isdir(f"{DRIVE_MOUNT}/MyDrive"):
         raise StepFailed("Google Drive is not mounted. Run the 'mount Drive' cell first (or drive.mount('/content/drive')).")
+    if p.drive_root.startswith(DRIVE_MOUNT + "/") and not os.path.isdir(p.drive_root):
+        # Never create the Drive root: if Colab cannot see the real folder yet (sync lag), creating it here makes a SECOND folder
+        # with the same name, and Colab can then keep resolving the name to the empty one.
+        raise StepFailed(f"The Drive folder {p.drive_root} does not exist, so nothing was created. Create it in Google Drive with exactly "
+                         "that name and wait until it has finished syncing, or change DRIVE_ROOT. Drive allows two folders with the same "
+                         "name; if an earlier run created an empty copy, delete that copy. "
+                         f"Similar folders in My Drive: {similar_drive_folders(p.drive_root) or 'none'}.")
     created = []
     run_only = {lay.run, lay.run_config, lay.run_logs, lay.checkpoints, lay.samples, lay.environment}
     for folder in lay.folders():

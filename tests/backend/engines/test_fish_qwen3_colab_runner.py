@@ -181,6 +181,37 @@ def test_a_second_run_gets_its_own_folder(tmp_path):
     assert vs.params_from(dict(drive_root=a.drive), env={}).run_id != ""  # a timestamp when none is given
 
 
+def test_a_missing_drive_folder_is_never_created(tmp_path, monkeypatch):
+    """A second folder with the same name made Colab resolve the name to an empty copy; the runner must stop instead."""
+    mount = (tmp_path / "drive").as_posix()
+    os.makedirs(f"{mount}/MyDrive/Qwen3TTS (1)")  # a look-alike next to the missing folder
+    monkeypatch.setattr(vs, "DRIVE_MOUNT", mount)
+    p = vs.params_from({"drive_root": f"{mount}/MyDrive/Qwen3TTS", "local_root": str(tmp_path / "content")}, env={})
+    with pytest.raises(vs.StepFailed, match=r"does not exist, so nothing was created.*Qwen3TTS \(1\)"):
+        vs.ensure_layout(p)
+    assert not os.path.exists(f"{mount}/MyDrive/Qwen3TTS")
+    os.makedirs(f"{mount}/MyDrive/Qwen3TTS")  # once the folder is really there, the layout is built inside it
+    vs.ensure_layout(p)
+    assert os.path.isdir(f"{mount}/MyDrive/Qwen3TTS/cache")
+
+
+def test_the_mount_cell_does_not_create_a_missing_drive_folder(tmp_path, monkeypatch):
+    import time as _time
+
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+    nb = _notebook(folder_name="set")
+    mount_cell = next("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code" and "drive.mount" in "".join(c["source"]))
+    google, colab = type(sys)("google"), type(sys)("google.colab")
+    colab.drive = type("D", (), {"mount": staticmethod(lambda p: None)})
+    google.colab = colab
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    ns = {"DRIVE_ROOT": "/content/drive/MyDrive/Qwen3TTS_not_there", "DATA_SOURCE": str(tmp_path / "x.zip")}
+    with pytest.raises(FileNotFoundError, match="does not exist, so nothing was created"):
+        exec(mount_cell, ns)
+    assert not os.path.exists("/content/drive/MyDrive/Qwen3TTS_not_there")
+
+
 def test_unmounted_drive_is_a_clear_stop():
     p = vs.params_from({"drive_root": "/content/drive/MyDrive/X"}, env={})
     if not os.path.isdir("/content/drive/MyDrive"):

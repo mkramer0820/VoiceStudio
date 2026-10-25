@@ -234,6 +234,8 @@ A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gend
 
 **Owner decisions.** Whether Blackwell should keep SDPA as the default or try FlashAttention 2 first (one parameter, `ATTN_FALLBACK`); whether the first real run should be the timing run (recommended); the H100 rate; whether to keep `KEEP_ALL=True` once Drive space is known.
 
+**The Drive root is never created by the runner.** If `DRIVE_ROOT` (under `/content/drive`) does not exist, the notebook's mount cell and `ensure_layout` stop with a message and the list of look-alike folder names (only names containing qwen or tts) and create nothing. Reason: when Colab could not yet see a folder still syncing up from the owner's PC, `os.makedirs` made a second folder with the same name, and Colab then resolved the name to the empty one. Tests: `test_a_missing_drive_folder_is_never_created`, `test_the_mount_cell_does_not_create_a_missing_drive_folder`.
+
 **Cancelling a run.** `run_stream` starts the training in its own process group and `stop_process` ends it (SIGTERM, then SIGKILL) when the caller is interrupted or fails, so the notebook's stop button no longer leaves `sft_12hz.py` running on the GPU (an earlier build did). `train()` also syncs the epochs that already finished. Compute units are used while the runtime is connected, so the notebook checklist says to follow the stop button with *Runtime > Disconnect and delete runtime*. Covered by `test_interrupting_a_run_stops_the_child_process_too`; not tried on Colab.
 
 ## 11. Not verified
