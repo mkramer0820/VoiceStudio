@@ -9,11 +9,13 @@ vary, and they are validated to be shell-safe before they reach a script.
 """
 from __future__ import annotations
 
+import base64
 import dataclasses
 import json
 import math
 import os
 import shlex
+import zlib
 from typing import Optional
 
 from . import qwen3_colab_runner as runner
@@ -356,8 +358,12 @@ Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's offici
 
 
 def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAULT_FOLDER_NAME, zip_name: Optional[str] = None,
-                    settings: Optional[TrainSettings] = None) -> str:
-    """The Colab notebook for one export (nbformat 4). Same input, same text."""
+                    settings: Optional[TrainSettings] = None, embed_runner: bool = False, flash_wheel: str = "",
+                    smoke_run: bool = False) -> str:
+    """The Colab notebook for one export (nbformat 4). Same input, same text.
+
+    ``embed_runner`` stores the runner script inside the notebook (compressed), so the notebook alone is enough besides the data zip.
+    ``flash_wheel`` pre-fills FLASH_WHEEL; ``smoke_run`` pre-sets the timing run."""
     st = settings or TrainSettings()
     zip_name = zip_name or folder_name + ".zip"
     root = drive_root(st)
@@ -377,13 +383,13 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "KEEP_FINAL = True",
         "ATTN_FALLBACK = 'auto'  # 'auto': FlashAttention 2 when a ready-made package exists for this runtime, otherwise PyTorch's built-in attention (patched copy of the script, unverified); True: always the patched copy; False: require FlashAttention 2",
         "USE_VENV = 'auto'  # 'auto': when this runtime has no FlashAttention package, build an isolated Python 3.12 + torch environment that has one (a few minutes, once per runtime). True: always. False: never.",
-        "FLASH_WHEEL = ''  # optional: the full path of a flash_attn .whl you put on Drive (or a URL) for THIS runtime's Python/torch/CUDA; tried first. Leave empty for the automatic choice.",
+        f"FLASH_WHEEL = {_py(flash_wheel)}  # optional: the full path of a flash_attn .whl you put on Drive (or a URL) for THIS runtime's Python/torch/CUDA; tried first. Leave empty for the automatic choice.",
         "BUILD_FLASH_ATTN = False  # True: compile FlashAttention from source when no ready-made package exists. Takes an hour or more, may fail on a new Python/CUDA, and uses compute units the whole time. Leave False.",
         "RESTART = False  # True lets a RUN_ID you re-use replace its own checkpoints (the official script cannot resume)",
         "SAMPLE_TEXT = " + _py(DEFAULT_SAMPLE_TEXT) + "  # sentence for final.wav after training",
         "SAMPLE_SEED = 1234",
         "CACHE_MODELS_ON_DRIVE = True  # False: download models straight to /content (nothing cached on Drive)",
-        "SMOKE_RUN = False  # True: a short timing run (one epoch on the first SMOKE_CLIPS clips, scratch folder) instead of real training",
+        f"SMOKE_RUN = {bool(smoke_run)}  # True: a short timing run (one epoch on the first SMOKE_CLIPS clips, scratch folder) instead of real training",
         "SMOKE_CLIPS = 40",
         "UNITS_PER_HOUR = None  # this runtime's compute units per hour; empty = looked up for known GPUs (owner's figures, unverified)",
         "UNITS_AVAILABLE = 100",
@@ -424,12 +430,13 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "elif os.path.isfile(os.path.join(DATA_SOURCE, SCRIPT)):",
         "    fresh = open(os.path.join(DATA_SOURCE, SCRIPT), 'rb').read()",
         "have = open(cached, 'rb').read() if os.path.isfile(cached) else None",
-        "# The newer runner wins, so a fixed script can be dropped into the cache folder without re-uploading the zip.",
-        "if fresh is not None and (have is None or _version(fresh) >= _version(have)):",
-        "    if have != fresh:",
-        "        open(cached, 'wb').write(fresh)",
-        "elif fresh is not None:",
-        "    print('Using the newer runner already in', cached, '(version', _version(have), 'over the zip\\'s', str(_version(fresh)) + ')')",
+        *_embedded_lines(embed_runner),
+        "# The newest runner wins (zip, this notebook, or the copy cached on Drive), so a fixed script never needs the zip to be rebuilt.",
+        "best = max([c for c in (fresh, EMBEDDED, have) if c is not None], key=_version, default=None)",
+        "if best is not None and best != have:",
+        "    open(cached, 'wb').write(best)",
+        "elif have is not None:",
+        "    print('Using the runner already cached in', cached)",
         "if not os.path.isfile(cached):",
         "    raise FileNotFoundError(SCRIPT + ' not found: check DATA_SOURCE (it must point at the export zip or folder, which contains it).')",
         "if CACHE not in sys.path:",
@@ -476,6 +483,15 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
                        "kernelspec": {"display_name": "Python 3", "name": "python3"}, "language_info": {"name": "python"}},
           "nbformat": 4, "nbformat_minor": 5}
     return json.dumps(nb, ensure_ascii=False, indent=1) + "\n"
+
+
+def _embedded_lines(embed: bool) -> list:
+    if not embed:
+        return ["EMBEDDED = None"]
+    blob = base64.b64encode(zlib.compress(runner_source().encode("utf-8"), 9)).decode("ascii")
+    return ["import base64, zlib",
+            "# The runner script, stored inside this notebook (compressed), so nothing else has to be uploaded next to it.",
+            f"EMBEDDED = zlib.decompress(base64.b64decode('{blob}'))"]
 
 
 def write_default_notebook(path: str) -> None:

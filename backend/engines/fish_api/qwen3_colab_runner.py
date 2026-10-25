@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 import zipfile
@@ -34,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "5"
+RUNNER_VERSION = "6"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -1154,7 +1155,7 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
         try:
             if wheel.lower().startswith(("http://", "https://")):
                 os.makedirs(wheel_dir(lay, env), exist_ok=True)
-                wheel = os.path.join(wheel_dir(lay, env), os.path.basename(wheel.split("?")[0]) or "flash_attn_provided.whl")
+                wheel = os.path.join(wheel_dir(lay, env), wheel_basename(wheel) or "flash_attn_provided.whl")
                 download(p.flash_wheel, wheel)
             fits, why_not = wheel_fits(wheel, env)
             if not os.path.isfile(wheel):
@@ -1229,9 +1230,14 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
 
 
 # --------------------------------------------------------------------------------------------- setup
+def wheel_basename(path_or_url: str) -> str:
+    """The file name of a wheel given as a path or URL, with %2B and friends decoded (pip rejects a wheel named ...%2Bcu130...)."""
+    return urllib.parse.unquote(os.path.basename((path_or_url or "").split("?")[0]))
+
+
 def wheel_fits(name: str, env: dict) -> tuple:
     """(ok, why) for a flash_attn wheel FILE NAME against this runtime: Python, torch, CUDA, platform. Reads the name only."""
-    m = re.match(r"flash_attn-[^-]+?(?:\+cu(\d+)torch(\d+\.\d+))?-(cp\d+)-cp\d+-(\w+)\.whl$", os.path.basename(name.split("?")[0]))
+    m = re.match(r"flash_attn-[^-]+?(?:\+cu(\d+)torch(\d+\.\d+))?-(cp\d+)-cp\d+-(\w+)\.whl$", wheel_basename(name))
     if not m:
         return True, "unrecognised file name, so it will be tried"
     cu, torch_mm, py, plat = m.groups()
@@ -1273,7 +1279,7 @@ def use_existing_venv(p: Params) -> bool:
 
 
 def wheel_tags(name: str) -> Optional[dict]:
-    m = re.match(r"flash_attn-[^-]+?(?:\+cu(\d+)torch(\d+\.\d+))?-cp(\d)(\d+)-cp\d+-", os.path.basename((name or "").split("?")[0]))
+    m = re.match(r"flash_attn-[^-]+?(?:\+cu(\d+)torch(\d+\.\d+))?-cp(\d)(\d+)-cp\d+-", wheel_basename(name))
     if not m:
         return None
     cu, torch_mm, major, minor = m.groups()

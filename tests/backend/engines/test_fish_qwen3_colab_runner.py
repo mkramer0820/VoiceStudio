@@ -1476,3 +1476,25 @@ def test_a_cudnn_mismatch_is_caught_in_the_setup_table(tmp_path, monkeypatch):
     assert {r[0]: r[1] for r in rows}["torch convolution (cuDNN)"] == "FAIL"
     monkeypatch.setattr(vs, "capture", lambda cmd, **k: (0, "ok"))
     assert _REAL_CONV()[0]
+
+
+# ------------------------------------------------------------------------------------------------ a notebook that carries the runner
+def test_an_embedded_runner_is_written_to_the_cache_and_a_newer_cached_one_wins(tmp_path, monkeypatch):
+    nb = qwen3_colab.render_notebook(folder_name="set", embed_runner=True, flash_wheel="https://example.org/flash_attn-x.whl", smoke_run=True)
+    assert "FLASH_WHEEL = 'https://example.org/flash_attn-x.whl'" in nb.replace('"', "'") or "https://example.org/flash_attn-x.whl" in nb
+    assert "SMOKE_RUN = True" in nb
+    cell = next("".join(c["source"]) for c in json.loads(nb)["cells"] if c["cell_type"] == "code" and "drive.mount" in "".join(c["source"]))
+    start = cell.index("EMBEDDED = zlib")
+    ns = {}
+    exec("import base64, zlib\n" + cell[start:cell.index("\n", start)], ns)
+    assert ns["EMBEDDED"].decode("utf-8").replace("\r\n", "\n") == qwen3_colab.runner_source()
+    assert "EMBEDDED = None" in qwen3_colab.render_notebook()  # the default notebook stays small and identical to the committed copy
+
+
+def test_a_wheel_url_with_an_encoded_plus_is_saved_and_read_with_the_plus():
+    url = "https://github.com/x/y/releases/download/v1/flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl?raw=1"
+    assert vs.wheel_basename(url) == "flash_attn-2.8.3+cu130torch2.11-cp313-cp313-linux_x86_64.whl"
+    runtime = {"python": "cp313", "python_version": "3.13.16", "torch": "2.11.0", "torch_mm": "2.11", "cuda": "13.0"}
+    assert vs.wheel_fits(url, runtime) == (True, "matches this runtime")
+    assert not vs.wheel_fits(url, dict(runtime, torch="2.12.1", torch_mm="2.12"))[0]
+    assert vs.wheel_tags(url) == {"python": "3.13", "torch": "2.11.*", "cuda": "cu130"}
