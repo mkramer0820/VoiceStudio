@@ -1,6 +1,6 @@
 # Qwen3-TTS fine-tuning: what happened on Colab, what we learned, where we are
 
-Written 2026-10-25 for the next agent (any agent). Read this before touching the Colab runner or advising the owner on training settings. NEXT_SESSION_PROMPT.md is the short ready-made prompt that points here.md](NEXT_SESSION_PROMPT.md). The deep design reference stays in [../engines/fish-audio-handoff.md](../engines/fish-audio-handoff.md) section 10c.
+Written 2026-10-25 for the next agent (any agent). Read this before touching the Colab runner or advising the owner on training settings. [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md) is the short ready-made prompt that points here. The deep design reference stays in [../engines/fish-audio-handoff.md](../engines/fish-audio-handoff.md) section 10c.
 
 **Runtime setup (Python, torch, CUDA, the FlashAttention wheel, all the Colab traps): [../engines/qwen3-tts-colab-runtime.md](../engines/qwen3-tts-colab-runtime.md). Find a wheel for a new runtime with `python scripts/find_flash_wheel.py`.**
 
