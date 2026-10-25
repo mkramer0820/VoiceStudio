@@ -7,6 +7,7 @@ Works for any coding agent or human. Read in this order and stop when you have w
 | Where the work stands, what is done, what is not ready, what to do next | [SESSION_STATE.md](SESSION_STATE.md) | ~2 min |
 | **Qwen3 fine-tuning: what happened on Colab, what we learned, current recipe (read before touching the runner or advising on settings)** | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | ~5 min |
 | **Setting up a Colab runtime: Python, torch, CUDA, the FlashAttention wheel, and every trap we hit (read before any new training phase)** | [../engines/qwen3-tts-colab-runtime.md](../engines/qwen3-tts-colab-runtime.md) | ~5 min |
+| **Next job: run the fine-tuned voice locally on the RTX 3070 with faster-qwen3-tts as a backend (ready-to-paste prompt, facts, plan)** | [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md) | ~3 min |
 | A ready prompt to start the next session | [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md) | ~1 min |
 | Rules, limits, check commands, a code map (for delegated workers; everyone benefits) | [SUBAGENT_BRIEF.md](SUBAGENT_BRIEF.md) | ~3 min |
 | Writing a prompt for a worker you delegate to | [SUBAGENT_PROMPT_TEMPLATE.md](SUBAGENT_PROMPT_TEMPLATE.md) | ~1 min |
