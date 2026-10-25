@@ -8,7 +8,7 @@ The single state-of-the-work document for everything Fish in VoiceStudio: the AP
 |---|---|---|
 | `main` | none of the Fish work | untouched |
 | `ext/fish-api` | **the active line**: everything below, plus the Qwen3-TTS export, loudness matching, reference chooser, Colab runner and notebook, the staged Explorer with the chapter checklist, and the agent docs | pushed 2026-10-25; no PR |
-| `ext/fish-qwen3-export`, `ext/fish-training-data` | older names for lines now contained in `ext/fish-api` | superseded |
+| `ext/fish-qwen3-export`, `ext/fish-training-data` | were fully contained in `ext/fish-api` | deleted 2026-10-25 |
 
 No release, version bump or tag is involved. Per `CLAUDE.md`, versions only change when the owner asks.
 

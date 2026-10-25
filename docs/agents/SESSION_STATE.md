@@ -10,7 +10,7 @@
 - Target: fine-tune **Qwen3-TTS 1.7B Base** on the narrator voice, then other speakers with the same notebook.
 
 ## Where the code is
-- Branch **`ext/fish-api`** holds everything (the Qwen3 export, loudness matching, reference chooser, staged Explorer, the Colab runner and notebook, the docs). It was merged from `ext/fish-qwen3-export` and pushed to origin on 2026-10-25. `ext/fish-qwen3-export` and `ext/fish-training-data` are older names for lines now contained in it. `main` has none of it. No pull request exists; do not open one or push `main` unless the owner asks.
+- Branch **`ext/fish-api`** holds everything (the Qwen3 export, loudness matching, reference chooser, staged Explorer, the Colab runner and notebook, the docs). It was merged from `ext/fish-qwen3-export` and pushed to origin on 2026-10-25. The older branches `ext/fish-qwen3-export` and `ext/fish-training-data` were fully contained in it and were deleted on 2026-10-25 (locally and on origin). `main` has none of it. No pull request exists; do not open one or push `main` unless the owner asks.
 - Colab does not need our branch: the export carries the runner, and Colab clones only the public Qwen3-TTS repository.
 
 ## Project board (update your row when you finish)
