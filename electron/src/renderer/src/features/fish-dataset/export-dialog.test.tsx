@@ -320,7 +320,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     omniOn(dialog); // untick
     qwenOn(dialog);
     expect(within(dialog).getByLabelText('fishDataset.qtr_epochs')).toHaveValue(3);
-    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(2e-5);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(2e-6);
     expect(within(dialog).getByLabelText('fishDataset.qtr_batch_size')).toHaveValue(2);
     expect(within(dialog).queryByLabelText('fishDataset.tr_steps')).not.toBeInTheDocument();
     expect(within(dialog).getByText('fishDataset.qtr_colab_only')).toBeInTheDocument();

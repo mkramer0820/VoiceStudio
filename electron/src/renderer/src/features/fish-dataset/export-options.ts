@@ -216,7 +216,7 @@ export type QwenNumberKey = 'epochs' | 'learning_rate' | 'batch_size';
 export type QwenTextKey = 'base_model' | 'tokenizer_model' | 'drive_folder';
 export const QWEN_NUMBERS: Record<QwenNumberKey, NumberSpec & { advanced?: boolean }> = {
   epochs: { def: 3, min: 1, max: 100, step: '1' },
-  learning_rate: { def: 2e-5, min: 1e-7, max: 1e-3, step: 'any' },
+  learning_rate: { def: 2e-6, min: 1e-7, max: 1e-3, step: 'any' },
   batch_size: { def: 2, min: 1, max: 256, step: '1' },
 };
 export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advanced?: boolean }> = {

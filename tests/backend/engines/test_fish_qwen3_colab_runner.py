@@ -150,7 +150,7 @@ def test_settings_from_training_settings_json_reach_the_run_and_the_provenance(t
     plan = vs.plan_commands(env.p, env.lay, "/content/ds", 4)
     flags = plan["train"]
     assert flags[flags.index("--num_epochs") + 1] == "2" and flags[flags.index("--batch_size") + 1] == "4"
-    assert flags[flags.index("--speaker_name") + 1] == "Sunny" and flags[flags.index("--lr") + 1] == "2e-05"
+    assert flags[flags.index("--speaker_name") + 1] == "sunny"  # lowercased: Qwen looks the name up lowercased and flags[flags.index("--lr") + 1] == "2e-05"
     assert flags[flags.index("--output_model_path") + 1].startswith(env.content)  # local first, never straight to Drive
     assert qwen3_colab.commands(qwen3_colab.settings_from({"epochs": 7}), "Sunny", "x")["train"].count("--num_epochs 7") == 1
 
@@ -1524,3 +1524,25 @@ def test_the_runtime_check_trusts_a_fitting_flash_wheel_instead_of_announcing_a_
     assert vs.runtime_check(e.p, e.lay, env=env, gpu=A100, exists=lambda u: True, functional=lambda: (False, "no"))
     out = capsys.readouterr().out
     assert "fits this runtime and will be installed" in out and "SDPA" not in out and "Expect no ready-made" not in out
+
+
+# ------------------------------------------------------------------------------------------------ speaker name case
+def test_the_model_gets_a_lowercase_speaker_name_because_qwen_looks_it_up_lowercased():
+    p = vs.params_from({"speaker_name": "SS_Narrator", "drive_root": "/content/drive/MyDrive/X"}, env={})
+    assert vs.model_speaker_name(p) == "ss_narrator"
+    cmd = vs.plan_commands(p, vs.Layout(p), "/d", 2)["train"]
+    assert cmd[cmd.index("--speaker_name") + 1] == "ss_narrator"
+    assert p.speaker_name == "SS_Narrator"  # folders and logs keep the name as typed
+
+
+def test_a_checkpoint_made_with_a_capitalised_name_can_be_repaired_without_losing_the_original(tmp_path):
+    ck = tmp_path / "checkpoint-epoch-5"
+    ck.mkdir()
+    cfg = ck / "config.json"
+    cfg.write_text(json.dumps({"tts_model_type": "custom_voice", "talker_config": {"spk_id": {"SS_Narrator": 3000}, "spk_is_dialect": {"SS_Narrator": False}}}))
+    assert vs.fix_speaker_names(str(ck)) is True
+    data = json.loads(cfg.read_text())
+    assert data["talker_config"]["spk_id"] == {"ss_narrator": 3000} and data["talker_config"]["spk_is_dialect"] == {"ss_narrator": False}
+    assert data["tts_model_type"] == "custom_voice"
+    assert "SS_Narrator" in (ck / "config.json.orig").read_text()
+    assert vs.fix_speaker_names(str(ck)) is False  # already fine: untouched

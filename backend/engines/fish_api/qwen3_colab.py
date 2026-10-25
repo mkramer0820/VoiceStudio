@@ -48,7 +48,7 @@ class TrainSettings:
     saving once per epoch are fixed inside ``sft_12hz.py`` and are not options, so they are not offered here."""
 
     epochs: int = 3  # sft_12hz.py --num_epochs (default 3)
-    learning_rate: float = 2e-5  # --lr (default 2e-5; the README's step 3 example uses 2e-6)
+    learning_rate: float = 2e-6  # --lr. The script's own default (2e-5) makes the 1.7B model produce noise and never stop (Qwen3-TTS issue #39); 2e-6 is the README's step-3 value and the one people report working
     batch_size: int = 2  # --batch_size (default 2; the README example uses 32)
     base_model: str = BASE_MODEL  # --init_model_path
     tokenizer_model: str = TOKENIZER  # prepare_data.py --tokenizer_model_path

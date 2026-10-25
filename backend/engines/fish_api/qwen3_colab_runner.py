@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "8"
+RUNNER_VERSION = "9"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -114,7 +114,7 @@ class Params:
     data_source: str = ""  # a folder or .zip anywhere on Drive, or an unzipped folder under /content
     speaker_name: str = "speaker"
     epochs: int = 3
-    lr: float = 2e-5
+    lr: float = 2e-6  # NOT the script's 2e-5 default: that gives noise and a model that never stops (Qwen3-TTS issue #39)
     batch_size: object = 2  # an int, or "auto"
     base_model: str = BASE_MODEL
     tokenizer_model: str = TOKENIZER
@@ -2292,6 +2292,32 @@ def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) 
     return out
 
 
+def model_speaker_name(p: Params) -> str:
+    """The name stored inside the model. Qwen's inference looks the requested name up lowercased (``speaker.lower() in spk_id``) but
+    sft_12hz.py stores it as typed, so a name with capitals can never be found; the stored name is therefore always lowercase."""
+    return p.speaker_name.lower()
+
+
+def fix_speaker_names(checkpoint_dir: str) -> bool:
+    """Lowercase the speaker names in a finished checkpoint's config.json (from a run made before this fix). The original is kept as
+    config.json.orig; nothing else changes. True when the file was changed."""
+    cfg = os.path.join(checkpoint_dir, "config.json")
+    with open(cfg, encoding="utf-8") as fh:
+        data = json.load(fh)
+    talker = data.get("talker_config") or {}
+    changed = False
+    for key in ("spk_id", "spk_is_dialect"):
+        names = talker.get(key) or {}
+        lowered = {n.lower(): v for n, v in names.items()}
+        if lowered != names:
+            talker[key], changed = lowered, True
+    if changed:
+        if not os.path.exists(cfg + ".orig"):
+            shutil.copyfile(cfg, cfg + ".orig")
+        write_json_atomic(cfg, data)
+    return changed
+
+
 def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patched: Optional[str] = None, codes: Optional[str] = None,
                   out_dir: Optional[str] = None, epochs: Optional[int] = None) -> dict:
     """The official training command with this run's values (checkpoints go to local /content first)."""
@@ -2302,7 +2328,7 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
                 "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard")},
         "train": [py(), "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
                   "--output_model_path", out_dir or lay.local_checkpoints, "--train_jsonl", codes or lay.codes_local, "--batch_size", str(batch),
-                  "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", p.speaker_name],
+                  "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", model_speaker_name(p)],
         "prepare": [py(), "-u", os.path.join(lay.patched, "prepare_progress.py"), "--tokenizer_model_path", local_model_dir(lay, p.tokenizer_model),
                     "--input_jsonl", "train.jsonl", "--output_jsonl", lay.codes + ".partial"],
     }
@@ -2496,7 +2522,12 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
     os.makedirs(lay.samples, exist_ok=True)
     out, ckpt = os.path.join(lay.samples, "final.wav"), os.path.join(lay.checkpoints, names[-1])
     say(f"== Sample from {names[-1]}: text {p.sample_text!r}, seed {p.sample_seed}, attention {attn}. UNVERIFIED API use (README at the pinned commit).")
-    code = stream([py(), "-c", SAMPLE_CODE, ckpt, p.speaker_name, p.sample_text, out, attn, str(p.sample_seed)],
+    try:
+        if fix_speaker_names(ckpt):
+            say(f"{names[-1]}: the speaker name in config.json had capitals, which Qwen's lookup never finds; lowercased it (original kept as config.json.orig).")
+    except (OSError, ValueError) as exc:
+        say(f"Could not check the speaker name in {names[-1]}/config.json ({exc}); trying anyway.")
+    code = stream([py(), "-c", SAMPLE_CODE, ckpt, model_speaker_name(p), p.sample_text, out, attn, str(p.sample_seed)],
                   log_path=os.path.join(lay.run_logs, "samples.log"))
     if code != 0 or not os.path.isfile(out):
         say("final.wav could not be generated (see samples.log); the checkpoints are unaffected.")
@@ -2509,8 +2540,8 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
 
 
 def final_sample(p: Params, *, stream: Callable = run_stream) -> list:
-    use_existing_venv(p)
     """Notebook cell: generate samples/final.wav for this run (optional, unverified)."""
+    use_existing_venv(p)
     return generate_samples(p, find_run(p), stream=stream)
 
 

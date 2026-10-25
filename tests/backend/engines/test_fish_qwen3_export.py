@@ -266,7 +266,7 @@ def test_training_settings_accept_only_what_the_official_script_takes(bad):
     with pytest.raises(ValueError):
         qwen3_colab.settings_from(bad)
     ok = qwen3_colab.settings_from({"epochs": 5, "drive_folder": "A/b-c"})
-    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 2, 2e-5)  # the script's own defaults
+    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 2, 2e-6)  # epochs and batch are the script's defaults; the learning rate is the value people report working (issue #39)
 
 
 def test_the_estimate_follows_the_scripts_loop_not_an_audio_rate():
