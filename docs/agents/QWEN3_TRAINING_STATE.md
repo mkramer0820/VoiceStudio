@@ -2,6 +2,8 @@
 
 Written 2026-10-25 for the next agent (any agent). Read this before touching the Colab runner or advising the owner on training settings. It supersedes the "first real Colab run" steps in [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md). The deep design reference stays in [../engines/fish-audio-handoff.md](../engines/fish-audio-handoff.md) section 10c.
 
+**Runtime setup (Python, torch, CUDA, the FlashAttention wheel, all the Colab traps): [../engines/qwen3-tts-colab-runtime.md](../engines/qwen3-tts-colab-runtime.md). Find a wheel for a new runtime with `python scripts/find_flash_wheel.py`.**
+
 ## Status in five lines
 - Branch `ext/fish-qwen3-export` (local only, never pushed). Latest work is committed; tests: `python -m pytest tests/backend/engines/test_fish_qwen3_colab_runner.py tests/backend/engines/test_fish_qwen3_export.py` (150+ pass) and the vitest file `export-dialog.test.tsx` (40 pass).
 - Run 1 (the official script's defaults) produced **noise from every epoch** although the loss fell normally. The base model spoke fine in the same runtime, so the environment was not the cause.
