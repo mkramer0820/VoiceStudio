@@ -68,6 +68,10 @@ The five canonical roles, each label string equal to its name. See `docs/agents/
 
 Single-context: `docs/adr/` plus a root `CONTEXT.md` that is created lazily and does not exist yet — skip it when absent. See `docs/agents/domain.md`.
 
+### Qwen3-TTS work
+
+Before any Qwen3-TTS work (the `qwen3-narrator` engine, the Qwen playground or story mode, voices, checkpoints, fine-tuning), read `docs/engines/qwen3-finetune-findings.md`. It records what is verified about the fine-tuned narrator (EP09) and the stock models, what the owner heard, and what is still unknown. The UI/story-mode work plan is `docs/agents/QWEN3_STUDIO_UI_BRIEF.md`. Never describe a take only with library terms (ICL, x-vector): say which model, voice and mode it really runs.
+
 ### Fish Audio integration
 
 When changing the Fish API or Story Studio paths on `ext/fish-api`, read `docs/engines/fish-audio-handoff.md` first. It records the required remote-audio preservation and explicit single/multi-speaker request-mode behavior, the current state of the Fish work, and what not to change. Start at `docs/agents/README.md`: it indexes the current session state, a ready prompt for the next session, delegation briefs, and layout/git/check rules, for any agent.

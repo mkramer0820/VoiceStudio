@@ -14,6 +14,7 @@ metadata and the backend fallback mirror it.
 
 ### Added
 
+- Qwen3-TTS narrator engine for a local NVIDIA GPU: runs your fine-tuned checkpoint (or the stock models) in its own environment with CUDA graphs, with a multi-take playground backend, a model registry, warm-up, per-take manifests, and clearly flagged borrowed stock voices — thanks @mkramer0820!
 - Opt-in Fish Audio cloud engine (s2.1-pro, s2-pro, drama-3) with lossless WAV output at a configurable sample rate and archived untouched masters — thanks @mkramer0820!
 - Fish story board: stage a multi-voice story, assign a Fish voice to selected lines, set output options, and submit only when you confirm — thanks @mkramer0820!
 - Fish story board: add voices by id or from the public library, preview the exact schema-checked requests before sending, advanced generation settings, the free `s2.1-pro-free` test model, and readable story and run folders — thanks @mkramer0820!
