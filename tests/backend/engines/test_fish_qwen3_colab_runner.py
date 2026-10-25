@@ -1712,3 +1712,24 @@ def test_fast_setup_keeps_pips_cache_and_the_models_off_drive(tmp_path):
     assert not os.listdir(fast.lay.models) if os.path.isdir(fast.lay.models) else True  # nothing cached on Drive
     assert vs.params_from({}, env={}).fast_setup is True and vs.params_from({"fast_setup": "no"}, env={}).fast_setup is False
     assert "FAST_SETUP = True" in qwen3_colab.render_notebook() and "fast_setup=FAST_SETUP" in qwen3_colab.render_notebook()
+
+
+def test_samples_load_the_local_checkpoint_when_it_is_complete_and_fall_back_to_drive(tmp_path):
+    import shutil
+
+    e = _synced_run(tmp_path, epochs=2)
+    seen = []
+
+    def stream(cmd, *a, **k):
+        seen.append(cmd[3])
+        open(cmd[6], "wb").write(b"RIFF")
+        return 0
+
+    vs.generate_samples(e.p, e.lay, stream=stream, gpu=A100, probe=lambda n: (True, "ok"))
+    assert seen and all(c.startswith(e.lay.local_checkpoints) for c in seen)  # loaded from /content, not from the Drive backup
+    assert vs.checkpoint_load_path(e.lay, "checkpoint-epoch-0") == os.path.join(e.lay.local_checkpoints, "checkpoint-epoch-0")
+    shutil.rmtree(os.path.join(e.lay.local_checkpoints, "checkpoint-epoch-1"))  # a new session: only the Drive copy exists
+    assert vs.checkpoint_load_path(e.lay, "checkpoint-epoch-1") == os.path.join(e.lay.checkpoints, "checkpoint-epoch-1")
+    with open(os.path.join(e.lay.local_checkpoints, "checkpoint-epoch-0", "model.safetensors"), "ab") as fh:
+        fh.write(b"x")  # a local copy that is not the same size is not trusted
+    assert vs.checkpoint_load_path(e.lay, "checkpoint-epoch-0") == os.path.join(e.lay.checkpoints, "checkpoint-epoch-0")

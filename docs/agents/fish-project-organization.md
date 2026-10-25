@@ -70,7 +70,7 @@ npx vitest run src/renderer/src/features/fish-dataset src/renderer/src/features/
 - Every user-facing string through i18n, in all 21 locale files; `locale:check` shows no missing keys and no orphans.
 - Docs updated in the same change: `docs/engines/fish-audio.md` for behavior, the handoff for state, and `docs/STRUCTURE.md` when you add a router, a service or an engine adapter (`tests/test_structure_doc.py` pins those counts and fails if they drift).
 - A one-line `CHANGELOG.md` entry per user-visible change (about 400 characters at most; a test enforces the style).
-- You have said plainly what you could not verify. The UI has only ever been tested with component tests, not driven by hand; GPU training has never run; the Colab bundle has never been run on Colab.
+- You have said plainly what you could not verify. The UI has only ever been tested with component tests, not driven by hand; GPU training has run on one Colab A100 (see QWEN3_TRAINING_STATE.md); other GPUs, `USE_VENV` and the Blackwell path have not.
 
 ## Decide, or ask the owner
 

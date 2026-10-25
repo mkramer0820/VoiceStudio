@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "17"
+RUNNER_VERSION = "18"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -2419,8 +2419,8 @@ def _preflight(p: Params, lay: Layout, gpu: Optional[Gpu]) -> tuple:
 def _announce_patch(path: str, lay: Layout) -> Optional[str]:
     if path != "sdpa":
         patched = build_patched_script(lay, None)
-        say(f"Training script: a copy of Qwen's sft_12hz.py with one change, a TensorBoard log directory ({patched}); attention is untouched "
-            "(FlashAttention 2). Qwen's cached repo is unchanged.")
+        say(f"Training script: a copy of Qwen's sft_12hz.py ({patched}) with a TensorBoard log directory, the text projection and the label/sub-talker "
+            "alignment fixes; attention is untouched (FlashAttention 2). Qwen's repo is unchanged.")
         return patched
     patched = build_patched_script(lay)
     say("*" * 78)
@@ -2641,6 +2641,18 @@ print("wrote", out, "| tokens generated:", proc.steps if proc else "?", "| expec
 '''
 
 
+def checkpoint_load_path(lay: Layout, name: str) -> str:
+    """Where a model is LOADED from. Drive holds the backup; loading from it is slow, so use the local copy this run keeps in /content when
+    it is complete (same size as the verified Drive copy). Falls back to Drive, e.g. in a new session."""
+    drive, local = os.path.join(lay.checkpoints, name), os.path.join(lay.local_checkpoints, name)
+    try:
+        if os.path.getsize(os.path.join(local, "model.safetensors")) == os.path.getsize(os.path.join(drive, "model.safetensors")):
+            return local
+    except OSError:
+        pass
+    return drive
+
+
 def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, gpu: Optional[Gpu] = None,
                      probe: Callable = probe_module, detect: Callable = detect_gpu) -> list:
     """After training (never during it): one WAV, samples/final.wav, from the final checkpoint as persisted on Drive. Usage follows the
@@ -2678,7 +2690,7 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
     final = os.path.join(lay.samples, "final.wav")
     made = []
     for name in names:
-        ckpt = os.path.join(lay.checkpoints, name)
+        ckpt = checkpoint_load_path(lay, name)
         out = os.path.join(lay.samples, f"{name.replace('checkpoint-', '')}.wav")  # epoch-0.wav, epoch-1.wav, ...
         try:
             if fix_speaker_names(ckpt):

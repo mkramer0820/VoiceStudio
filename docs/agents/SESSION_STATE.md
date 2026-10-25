@@ -1,78 +1,59 @@
-# Session state: Fish pipeline, training data and the Qwen3-TTS Colab run
+# Session state: Fish pipeline, training data and the Qwen3-TTS Colab runs
 
-**Read [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) first for anything about Colab or Qwen3 training: it records the real runs, the root causes and the current recipe, and corrects older lines below.**
-
-Short and current. If a line here is wrong, correct it when you find out. Details live in [../engines/fish-audio-handoff.md](../engines/fish-audio-handoff.md).
+**Read [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) first for anything about Colab or Qwen3 training, and [../engines/qwen3-tts-colab-runtime.md](../engines/qwen3-tts-colab-runtime.md) before setting up a runtime (Python, torch, CUDA, the FlashAttention wheel, every trap).** Details of the Fish side live in [../engines/fish-audio-handoff.md](../engines/fish-audio-handoff.md). If a line here is wrong, correct it when you find out.
 
 ## The project in five lines
 - VoiceStudio is a local-first voice app. This work is a pipeline around Fish Audio's cloud TTS for the owner's private audiobooks.
 - Stage a story, render it through the Fish API, keep every response untouched in a run folder, and remember voices (the voice library).
-- The **Training data** screen indexes those run folders (a folder of chapters, about 2,500 narrator clips), lets the owner filter, listen, measure and choose clips, and exports a training set.
-- Training happens **outside this repo's machine, on Google Colab** (the owner's GPU is too small). The export writes everything Colab needs.
-- First target: fine-tune **Qwen3-TTS 1.7B Base** on the narrator voice, then other speakers with the same notebook.
+- The **Training data** screen indexes those run folders (about 2,500 narrator clips in a folder of chapters), lets the owner filter, listen, measure and choose clips, and exports a training set.
+- Training happens **on Google Colab** (the owner's GPU is too small). The export writes the dataset, a notebook and the runner; the notebook alone (the runner is inside it) plus the dataset zip is all Colab needs.
+- Target: fine-tune **Qwen3-TTS 1.7B Base** on the narrator voice, then other speakers with the same notebook.
 
 ## Where the code is
-- Branch to use: **`ext/fish-qwen3-export`**. It holds everything below. It is **local only (not pushed)**. `origin/ext/fish-api` and `origin/ext/fish-training-data` are older and lack the Qwen3, Colab, reference-clip and Explorer work. `main` has none of it. No pull request exists. Check with `git status` and `git log --oneline -5`.
-- Colab does not need our branch: the export carries a standard-library runner and a notebook, and Colab clones only the public Qwen3-TTS repository.
+- Branch **`ext/fish-api`** holds everything (the Qwen3 export, loudness matching, reference chooser, staged Explorer, the Colab runner and notebook, the docs). It was merged from `ext/fish-qwen3-export` and pushed to origin on 2026-10-25. `ext/fish-qwen3-export` and `ext/fish-training-data` are older names for lines now contained in it. `main` has none of it. No pull request exists; do not open one or push `main` unless the owner asks.
+- Colab does not need our branch: the export carries the runner, and Colab clones only the public Qwen3-TTS repository.
 
 ## Project board (update your row when you finish)
 
-Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** (tests pass), **Done, unverified** (built and tested with fakes or component tests, never run on real hardware or viewed on screen). Do not write Done for anything only partly covered. When you finish a project, change its row in the same commit as your work: status, the branch or commit that proves it, and what is left. Add a row for new work. Move anything unfinished to "Still open".
+Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** (tests pass), **Done, unverified** (built and tested with fakes or component tests, never run on real hardware or viewed on screen), **Done, verified on Colab**. Do not write Done for anything only partly covered.
 
 | Project | Status | Where / proof | What is left |
 |---|---|---|---|
 | Fish engine, story board, preview, jobs, voice library, apply-settings | Done | `fish_api/`, `fish-story/`; backend and vitest tests | nothing |
-| Training data screen, measure audio, Explorer with staged Apply and chapter checklist | Done, unverified (never viewed) | `fish-dataset/`, `dataset.py`; tests | owner to look at it |
+| Training data screen, measure audio, Explorer with staged Apply and chapter checklist | Done, used by the owner for two exports | `fish-dataset/`, `dataset.py`; tests | nothing known |
 | Export formats (jsonl, `.lab`, LJSpeech, OmniVoice bundle, Qwen3-TTS folder) | Done | `dataset.py`, `qwen3_export.py`; tests | nothing |
-| Loudness matching on export (default -22 dB) | Done | `dataset.py` `apply_loudness`; real-sample trial | nothing |
-| Reference clip chooser (shortlist, Suggest, one reference) | Done, unverified (never viewed) | `export-reference.tsx`, `rank_references` | owner to try it |
-| Colab runner and notebook (Drive cache, GPU-aware, safe checkpoint copy, timing run) | Done, unverified (fakes only) | `qwen3_colab_runner.py`, `notebooks/` | first real Colab run |
+| Qwen3 export: loudness match, reference chooser, **1 s trailing silence by default**, validated defaults (10 epochs, batch 4, lr 1e-6), notebook with the FlashAttention wheel pre-filled, refuses to export on an outdated backend | Done | `qwen3_export.py`, `qwen3_colab.py`; tests | a checkbox for the silence in the dialog (the payload field `trailing_silence_s` works) |
+| Colab runner and notebook (runtime check, wheel handling, patched training script, fast setup, per-epoch samples) | **Done, verified on an A100** (runs of 2026-10-24/25) | `qwen3_colab_runner.py`, `notebooks/`, [runtime guide](../engines/qwen3-tts-colab-runtime.md) | other GPUs, `USE_VENV` |
+| **Colab training runs** | Run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6) gave a narrator-like voice, epochs 4 to 8 best; run 3 (3 hours, 10 epochs) done or in progress | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare run 3 by ear, then one change at a time |
+| Fast per-epoch sample test (faster-qwen3-tts, CUDA graphs) | Done, verified on an A100 (about 0.9x real time per worker, 3 to 6 workers) | owner's `epoch_test_fast.py` (see the state doc) | not in the repo; a stable copy could move to `scripts/` |
+| FlashAttention wheel finder | Done | `scripts/find_flash_wheel.py`; test | nothing |
+| Trailing-silence padder for older exports | Done | `scripts/pad_qwen3_dataset.py`; test | nothing |
 | OmniVoice LoRA path and local Train dialog | Done, unverified | `omnivoice/training/lora.py` | not part of the Qwen plan |
 | Agent docs (this folder) | Done | `docs/agents/` | keep this file current |
-| **Colab training runs** | **In progress**: run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6, 8 epochs) gave a narrator-like voice at epoch 2 (owner listened) | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare all epochs by ear (fast sampler `E:\qwen3TTS\upload\epoch_test_fast.py` written, never run on a GPU), then one targeted change at a time |
-| Push branch / pull request | Not started (owner decision) | n/a | owner's call |
-| Load a trained Qwen model into the app | Not built | n/a | after a trained model exists |
+| Push branch / pull request | Branch pushed 2026-10-25; no PR | n/a | PR only if the owner asks |
+| Load a trained Qwen model into the app | Not built | n/a | after the best epoch is chosen |
 
-## Done, and how it was checked
-Checked means automated tests pass (backend pytest, frontend vitest, typecheck, locale parity, docs drift). It does **not** mean seen on screen or run on a GPU.
-
-| Area | State |
-|---|---|
-| Fish engine, story board, preview, jobs, resume, load past runs, voice library, apply-settings | Done, tested |
-| Training data screen: index, speakers, filters, play, measure audio (peak, level, pauses, silences), select all/none | Done, tested |
-| Explorer: staged multi-select with **Apply** (chapters checklist with level columns, tags with Any/All, several length bars), facets that ignore their own filter | Done, tested |
-| Export formats: jsonl, Fish `.lab`, LJSpeech, OmniVoice (+ training bundle), **Qwen3-TTS folder** | Done, tested |
-| Loudness matching on export (default -22 dB, editable, per-chapter before/after report) | Done, tested on a real-data sample |
-| Reference clip: shortlist by star, listen, ranked Suggest, one chosen reference | Done, tested |
-| Colab runner (`voicestudio_qwen3_colab.py`) and notebook: Drive cache, GPU-aware attention path, safe checkpoint copy, progress, timing run with compute-unit projection | Built, tested **with fakes only** |
-| In-repo LoRA for the OmniVoice trainer and a local Train dialog | Built, tested on tiny CPU models; not used for the Qwen plan |
-
-## Not verified (nothing below has happened yet)
-- Colab was run on a real A100 (see QWEN3_TRAINING_STATE.md for what was verified). Still unverified: the Blackwell SDPA copy, the isolated uv environment (`USE_VENV`), interrupting a training run on Colab, and which epoch gives the best voice.
-- **The UI has never been viewed.** Layout, wording and the Explorer/export dialog were checked by component tests with mocked text.
-- Compute-unit rates in the notebook are the owner's figures, not confirmed. Batch sizes and memory numbers are estimates.
-- Qwen's inference call used for the final sample is taken from its README and unconfirmed.
-- **Python 3.13 / CUDA 13 Colab runtimes:** no FlashAttention package exists; an earlier build compiled it automatically and wasted an hour of compute. Fixed (runtime check first, no compile unless asked, time caps, SDPA fallback), tests only. Built (fakes only, unrun on Colab): `USE_VENV` isolated uv environment with Python 3.12 + torch + the FlashAttention wheel; see handoff 10c.
-- **Training quality (READ FIRST):** the official sft_12hz.py mis-trains the end-of-speech token (double label shift, missing text_projection); the runner patches a COPY (unverified on a GPU).  lr 2e-5 gave noise; use lr 2e-6, 3 epochs, 1 s trailing silence, listen to every epoch. Details and issue numbers in handoff 10c ("Fine-tuning findings"). Retrain on `narrator_sil.zip` not yet done.
-- **Cancelling:** the runner now stops the training process when the cell is interrupted (tested with a fake process), but this has not been tried on Colab. Billing stops only when the runtime is disconnected and deleted; finished epochs are already on Drive, the epoch in progress is lost (no resume).
+## Verified on real hardware, and not
+- **Verified on a Colab A100 40 GB (Python 3.13, torch 2.11 cu130):** the runtime check, the FlashAttention wheel install and GPU test, model download, code preparation, the timing run, training with progress lines, per-epoch checkpoint copy to Drive with verification, sampling, the fast sample test.
+- **Not verified:** the isolated Python 3.12 environment (`USE_VENV`), Blackwell (G4) and T4 paths, the other GPUs' batch sizes, interrupting a run on Colab, the Explorer/export dialog by eye beyond what the owner used, compute-unit rates (the owner's figures).
+- **Unproven claims to avoid:** why one epoch sounds better than another; that the patched training script alone (vs. lr and padding) fixed the noise: run 2 changed all three together.
 
 ## Not built (on purpose)
-True resume with optimizer state (the official script saves weights only), per-epoch sample audio, TensorBoard, a per-file hash manifest, loading a trained Qwen model into the app, Fish S2 local, Qwen validation split (the official scripts have none).
+True resume with optimizer state (the official script saves weights only), TensorBoard (the official script writes no events), a per-file hash manifest, loading a trained Qwen model into the app, Fish S2 local, a Qwen validation split (the official scripts have none).
 
 ## Owner decisions already made
-- Colab, not local; target `Qwen/Qwen3-TTS-12Hz-1.7B-Base`; narrator first (pilot of about 60 minutes of audio, later more). Export audio is 24 kHz mono 16-bit, all Fish tags removed, loudness matched (owner's good range is -19 to -23 dB, default -22).
-- Everything cached and saved on Google Drive (the owner's Drive is mounted locally as `G:\`; default folder `My Drive\Qwen3TTS\`). Never lose data: no overwriting, no deleting by default.
-- Wants progress logs that prove the job is alive. A fast first look: run the notebook with `SMOKE_RUN = True` before the real run.
-- Colab budget: 100 compute units. The A100 is the planned first runtime; the G4 (Blackwell) is optional and uses a fallback attention path.
+- Colab, not local; target `Qwen/Qwen3-TTS-12Hz-1.7B-Base`; narrator first. Clips 4 to 20 s, 24 kHz mono 16-bit, all Fish tags removed, loudness matched (default -22 dB), speaker `SS_Narrator`, one shared reference clip.
+- Everything cached and saved on Google Drive, in the folder **`Qwen3TTS`** (the owner's Drive is mounted locally as `G:\`). Never lose data: no overwriting, no deleting by default. "Local" means Colab's `/content`, which is wiped when the runtime is deleted; Drive is the backup, and models are loaded from `/content`.
+- Wants progress logs that prove the job is alive, and every epoch sampled and listened to. Colab budget: 100 compute units; the A100 40 GB is the runtime in use.
+- Never start Colab sessions, upload, train or spend units without the owner's explicit go; give scripts and cells as text first, before any other work, when the owner is sitting in a live session.
 
 ## Still open (ask the owner)
-1. Clip length range: decided, 4 to 20 s (683 clips, 105 minutes).
-2. Which GPU runtime they actually pick, and whether the timing run projection fits their 100 units.
-3. Whether to push `ext/fish-qwen3-export` (and open a pull request). Do not push without being told.
-4. Whether `KEEP_ALL=True` (every epoch kept, several GB each) is fine for their Drive space.
+1. Which epochs of the 3-hour run sound best, and whether more data helped.
+2. Whether to try lr 5e-6, freezing the speaker encoder, or more epochs (see the state doc's next steps).
+3. Whether `KEEP_ALL=True` (every epoch kept, about 4.2 GB each) is fine for their Drive space.
 
-## What to do next: the first real Colab run
-Use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) (the timing run and first run are done). In short: ask the owner how the epochs of run 2 compare, then make one targeted change at a time. Fix whatever breaks (most likely install, FlashAttention or memory) in `qwen3_colab_runner.py` with a test, and report. **Never start a Colab session, upload data or spend credits without the owner's go.**
+## What to do next
+Use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
 
 ## Traps already hit
 - Windows + Git Bash: a plain `git add` can rewrite the locale JSON files' CRLF line endings (a 79,000-line diff). Stage them with `git hash-object -w --no-filters <f>` then `git update-index --cacheinfo 100644,<hash>,<f>`. Read and write files with `newline=""`.
