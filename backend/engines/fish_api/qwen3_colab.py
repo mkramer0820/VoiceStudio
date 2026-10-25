@@ -350,7 +350,7 @@ Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's offici
 1. **Runtime > Change runtime type > pick the GPU.** A100, H100 and L4 use the original script (FlashAttention 2). The **G4** (RTX PRO 6000 Blackwell) uses a patched SDPA copy by default (unverified). A **T4** cannot run FlashAttention 2 and needs `ATTN_FALLBACK = True` (unverified, may run out of memory).
 2. **Compute units.** A runtime uses units while connected, idle or not, and each GPU type has its own rate (see Colab's runtime menu). Run once with `SMOKE_RUN = True` for a short timing run that projects time and units, then set it back to `False`.
 3. Copy the export zip (or folder) to Drive and set `DATA_SOURCE` below to it.
-4. Run the cells top to bottom. The first run on a new runtime type installs and may build FlashAttention; later runs reuse the Drive cache.
+4. Run the cells top to bottom. The first run on a new runtime type installs packages and downloads models; later runs reuse the Drive cache. FlashAttention is used only when a ready-made package exists for the runtime (newest Colab runtimes, such as Python 3.13 with a new CUDA, often have none): then PyTorch's built-in attention is used and **nothing is compiled** unless you set `BUILD_FLASH_ATTN = True`.
 5. When finished, **disconnect and delete the runtime** (last cell, or Runtime > Disconnect and delete runtime).
 6. **To cancel fast:** press the stop button on the running cell (it stops the training and first saves the epochs that already finished), then **Runtime > Disconnect and delete runtime**. Compute units are used while the runtime is connected, not while a cell is running, so disconnecting is what stops the spending. Finished epochs stay on Drive; the epoch in progress is lost, because the official script cannot resume. If anything looks stuck, go straight to Disconnect and delete runtime."""
 
@@ -375,7 +375,9 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "KEEP_LAST_N = 0  # only with KEEP_ALL = False: keep the newest N epochs (plus KEEP_FIRST / KEEP_FINAL)",
         "KEEP_FIRST = False",
         "KEEP_FINAL = True",
-        "ATTN_FALLBACK = 'auto'  # 'auto': FlashAttention 2 on A100/H100/L4, patched SDPA copy on Blackwell/G4; True: force SDPA (unverified); False: force FlashAttention 2",
+        "ATTN_FALLBACK = 'auto'  # 'auto': FlashAttention 2 when a ready-made package exists for this runtime, otherwise PyTorch's built-in attention (patched copy of the script, unverified); True: always the patched copy; False: require FlashAttention 2",
+        "FLASH_WHEEL = ''  # optional: the full path of a flash_attn .whl you put on Drive (or a URL) for THIS runtime's Python/torch/CUDA; tried first. Leave empty for the automatic choice.",
+        "BUILD_FLASH_ATTN = False  # True: compile FlashAttention from source when no ready-made package exists. Takes an hour or more, may fail on a new Python/CUDA, and uses compute units the whole time. Leave False.",
         "RESTART = False  # True lets a RUN_ID you re-use replace its own checkpoints (the official script cannot resume)",
         "SAMPLE_TEXT = " + _py(DEFAULT_SAMPLE_TEXT) + "  # sentence for final.wav after training",
         "SAMPLE_SEED = 1234",
@@ -409,14 +411,24 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "CACHE = os.path.join(DRIVE_ROOT, 'cache')",
         "os.makedirs(CACHE, exist_ok=True)",
         "cached = os.path.join(CACHE, SCRIPT)",
+        "import re",
+        "def _version(b):",
+        "    m = re.search(rb'^RUNNER_VERSION\\s*=\\s*\"(\\d+)\"', b or b'', re.M)",
+        "    return int(m.group(1)) if m else 0",
         "fresh = None",
         "if DATA_SOURCE.lower().endswith('.zip') and os.path.isfile(DATA_SOURCE):",
         "    with zipfile.ZipFile(DATA_SOURCE) as z:",
-        "        fresh = z.read(SCRIPT) if SCRIPT in z.namelist() else None",
+        "        hits = [n for n in z.namelist() if n == SCRIPT or n.endswith('/' + SCRIPT)]",
+        "        fresh = z.read(hits[0]) if hits else None",
         "elif os.path.isfile(os.path.join(DATA_SOURCE, SCRIPT)):",
         "    fresh = open(os.path.join(DATA_SOURCE, SCRIPT), 'rb').read()",
-        "if fresh is not None and (not os.path.isfile(cached) or open(cached, 'rb').read() != fresh):",
-        "    open(cached, 'wb').write(fresh)",
+        "have = open(cached, 'rb').read() if os.path.isfile(cached) else None",
+        "# The newer runner wins, so a fixed script can be dropped into the cache folder without re-uploading the zip.",
+        "if fresh is not None and (have is None or _version(fresh) >= _version(have)):",
+        "    if have != fresh:",
+        "        open(cached, 'wb').write(fresh)",
+        "elif fresh is not None:",
+        "    print('Using the newer runner already in', cached, '(version', _version(have), 'over the zip\\'s', str(_version(fresh)) + ')')",
         "if not os.path.isfile(cached):",
         "    raise FileNotFoundError(SCRIPT + ' not found: check DATA_SOURCE (it must point at the export zip or folder, which contains it).')",
         "if CACHE not in sys.path:",
@@ -426,7 +438,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LR,",
         "    batch_size=BATCH_SIZE, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
         "    keep_first=KEEP_FIRST, keep_final=KEEP_FINAL, sample_text=SAMPLE_TEXT, sample_seed=SAMPLE_SEED, cache_models_on_drive=CACHE_MODELS_ON_DRIVE,",
-        "    attn_fallback=ATTN_FALLBACK, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
+        "    attn_fallback=ATTN_FALLBACK, build_flash_attn=BUILD_FLASH_ATTN, flash_wheel=FLASH_WHEEL, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
         "    compare_epoch_seconds=COMPARE_EPOCH_SECONDS, compare_units_per_hour=COMPARE_UNITS_PER_HOUR), env={})",
         "print('Runner', vs.RUNNER_VERSION, 'loaded from', cached)",
     ])

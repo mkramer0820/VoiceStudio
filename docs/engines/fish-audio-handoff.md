@@ -238,6 +238,8 @@ A tag-to-`instruct` mapping for OmniVoice style attributes (whisper, pitch, gend
 
 **Cancelling a run.** `run_stream` starts the training in its own process group and `stop_process` ends it (SIGTERM, then SIGKILL) when the caller is interrupted or fails, so the notebook's stop button no longer leaves `sft_12hz.py` running on the GPU (an earlier build did). `train()` also syncs the epochs that already finished. Compute units are used while the runtime is connected, so the notebook checklist says to follow the stop button with *Runtime > Disconnect and delete runtime*. Covered by `test_interrupting_a_run_stops_the_child_process_too`; not tried on Colab.
 
+**New Colab runtimes (Python 3.13 / CUDA 13).** Setup now starts with `runtime_check` (seconds, nothing installed): it prints Python, torch, CUDA, GPU and whether a FlashAttention 2 package exists. FlashAttention is never compiled unless `BUILD_FLASH_ATTN=True` (then capped at 90 min; every pip step is capped at 25 min); with no usable package the patched SDPA copy of `sft_12hz.py` is used (`attention_choice(..., flash_installed=False)`). `FLASH_WHEEL` accepts a wheel path/URL tried first. The notebook loader prefers the higher `RUNNER_VERSION` between the zip and the Drive cache and finds the runner in nested zips. Not run on Colab. Not built: a separate Python 3.12 / torch 2.8 virtual environment.
+
 ## 11. Not verified
 
 No live Fish call was made while building the later features, so voice-library details rely on the fields the existing voice listing already returns. The screens were tested with component tests, not driven by hand in the running app. LoRA on Fish S2 or Qwen3-TTS is unresearched.

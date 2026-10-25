@@ -97,10 +97,13 @@ ENV = {"python": "cp312", "python_version": "3.12.1", "platform": "linux-x86_64"
 
 
 @pytest.fixture(autouse=True)
-def _clean_times():
+def _clean_times(monkeypatch):
     vs._TIMES.clear()
+    vs._FLASH["ok"] = None
+    monkeypatch.setattr(vs, "flash_functional", lambda: (True, "test"))  # tests assume FlashAttention 2 works unless they say otherwise
     yield
     vs._TIMES.clear()
+    vs._FLASH["ok"] = None
 
 
 # ------------------------------------------------------------------------------------------------ the script itself
@@ -306,10 +309,12 @@ class FakeStream:
     """Records commands; behaviour per command can be scripted."""
 
     def __init__(self, handler=None):
-        self.calls, self.handler = [], handler
+        self.calls, self.handler, self.limits = [], handler, []
 
-    def __call__(self, cmd, *, cwd=None, env=None, log_path=None, on_line=None):
+    def __call__(self, cmd, *, cwd=None, env=None, log_path=None, on_line=None, max_seconds=None):
         self.calls.append(list(cmd))
+        self.max_seconds = max_seconds
+        self.limits.append(max_seconds)
         return self.handler(cmd, cwd, env, on_line) if self.handler else 0
 
 
@@ -358,7 +363,7 @@ def test_flash_cache_hit_prebuilt_and_build_decisions(tmp_path):
 
 
 def test_flash_builds_once_and_saves_the_wheel_when_no_prebuilt_exists(tmp_path, monkeypatch):
-    e = Env(tmp_path)
+    e = Env(tmp_path, build_flash_attn=True)  # compiling is opt-in
     vs.ensure_layout(e.p, create_run=False)
     state = {"works": False}
     env = dict(ENV, torch_mm="2.9")  # not in the release
@@ -374,7 +379,7 @@ def test_flash_builds_once_and_saves_the_wheel_when_no_prebuilt_exists(tmp_path,
     monkeypatch.setattr(vs.shutil, "which", lambda name: "/usr/local/cuda/bin/nvcc")
     s = FakeStream(stream)
     got = vs.ensure_flash_attn(e.p, e.lay, env, A100, "log", stream=s, functional=lambda: (state["works"], "x"), exists=lambda u: pytest.fail("not offered"))
-    assert got == "built"
+    assert got == "built" and vs.BUILD_MAX_SECONDS in s.limits  # a build is time-limited
     assert os.path.isfile(os.path.join(e.lay.wheelhouse, "sm80", "flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl"))
     assert not [d for d in os.listdir(os.path.join(e.lay.wheelhouse, "sm80")) if d.startswith("build-")]
     assert vs.find_cached_wheel(e.lay, env) is not None
@@ -390,7 +395,7 @@ def test_flash_is_skipped_on_the_sdpa_path_and_without_a_gpu(tmp_path):
 
 
 def test_a_cached_wheel_that_fails_on_the_gpu_is_rejected_not_deleted(tmp_path):
-    e = Env(tmp_path)
+    e = Env(tmp_path, build_flash_attn=True)
     vs.ensure_layout(e.p, create_run=False)
     folder = os.path.join(e.lay.wheelhouse, "sm80")
     os.makedirs(folder)
@@ -1107,7 +1112,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
     monkeypatch.delitem(sys.modules, "voicestudio_qwen3_colab", raising=False)
     ns = {"DRIVE_ROOT": drive_root, "DATA_SOURCE": archive, "SPEAKER_NAME": "Sunny", "EPOCHS": 2, "LR": 2e-5, "BATCH_SIZE": 2, "BASE_MODEL": vs.BASE_MODEL,
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
-          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "RESTART": False,
+          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
           "COMPARE_UNITS_PER_HOUR": None}
     saved_path = list(sys.path)
@@ -1222,3 +1227,117 @@ def test_progress_lines_replace_the_raw_step_lines_on_screen(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 0 and "some warning" in out and "Epoch 0 | Step 0" not in out
     assert "Epoch 0 | Step 0" in open(tmp_path / "x.log").read()  # the raw line is still in the log
+
+
+# ------------------------------------------------------------------------------------------------ no automatic compile; the attention path follows what is installed
+PY313_CU13 = dict(ENV, python="cp313", torch_mm="2.9", cuda_tag="cu13")  # a newest Colab runtime: no ready-made FlashAttention package
+
+
+def test_a_runtime_without_a_ready_made_flash_package_is_never_compiled_unasked(tmp_path, monkeypatch):
+    monkeypatch.setattr(vs.shutil, "which", lambda name: "/usr/local/cuda/bin/nvcc")
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    assert vs.prebuilt_wheel_name(PY313_CU13) is None
+    stream = FakeStream()
+    got = vs.ensure_flash_attn(e.p, e.lay, PY313_CU13, A100, "log", stream=stream, functional=lambda: (False, "not importable"),
+                               exists=lambda u: pytest.fail("no wheel should be asked for"))
+    assert got == "not available (using SDPA)" and stream.calls == []  # nothing was installed, built or downloaded
+    assert vs._FLASH["ok"] is False
+    path, why = vs.current_attention(A100, e.p, probe=True)
+    assert path == "sdpa" and "not installed" in why and "BUILD_FLASH_ATTN" in why
+
+
+def test_forcing_flash_attention_without_a_package_stops_with_the_options(tmp_path):
+    e = Env(tmp_path, attn_fallback=False)
+    vs.ensure_layout(e.p, create_run=False)
+    with pytest.raises(vs.StepFailed, match="BUILD_FLASH_ATTN=True.*ATTN_FALLBACK='auto'|ATTN_FALLBACK='auto'.*BUILD_FLASH_ATTN=True"):
+        vs.ensure_flash_attn(e.p, e.lay, PY313_CU13, A100, "log", stream=FakeStream(), functional=lambda: (False, "x"))
+
+
+def test_the_default_attention_path_only_changes_when_flash_is_known_missing():
+    assert vs.attention_choice(A100, "auto")[0] == "flash2"  # not known yet: the hardware default
+    assert vs.attention_choice(A100, "auto", flash_installed=True)[0] == "flash2"
+    assert vs.attention_choice(A100, "auto", flash_installed=False)[0] == "sdpa"
+    assert vs.attention_choice(A100, False, flash_installed=False)[0] == "flash2"  # forced: the owner asked for it
+    assert vs.attention_choice(A100, True, flash_installed=True)[0] == "sdpa"
+
+
+def test_a_step_that_runs_past_its_limit_is_stopped(tmp_path):
+    import time
+
+    script = tmp_path / "forever.py"
+    script.write_text("import time\nprint('x', flush=True)\nwhile True:\n    time.sleep(0.05)\n")
+    start = time.time()
+    code = vs.run_stream([sys.executable, str(script)], log_path=str(tmp_path / "x.log"), max_seconds=1)
+    assert code != 0 and time.time() - start < 20  # ended by the limit, not waited for
+
+
+def test_build_flash_attn_is_a_normal_setting():
+    assert vs.params_from({"build_flash_attn": "yes"}, env={}).build_flash_attn is True
+    assert vs.params_from({}, env={}).build_flash_attn is False
+    assert vs.params_from({}, env={"BUILD_FLASH_ATTN": "true"}).build_flash_attn is True
+
+
+# ------------------------------------------------------------------------------------------------ the runtime check comes first
+def _rt_env(**kw):
+    return {**ENV, "python_version": "3.12.4", "torch": "2.8.0", "cuda": "12.6", **kw}
+
+
+def test_the_runtime_check_reports_a_normal_runtime_and_stops_for_a_broken_one(tmp_path, capsys):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    ok = vs.runtime_check(e.p, e.lay, env=_rt_env(), gpu=A100, exists=lambda u: True, functional=lambda: (True, "x"))
+    out = capsys.readouterr().out
+    assert ok and "already installed and working" in out and "Time limits" in out
+    assert not vs.runtime_check(e.p, e.lay, env=_rt_env(torch=None, cuda=None), gpu=None, exists=lambda u: True, functional=lambda: (False, "x"))
+    assert not vs.runtime_check(e.p, e.lay, env=_rt_env(), gpu=A100, exists=lambda u: False, functional=lambda: (True, "x"))  # no network
+
+
+def test_the_runtime_check_names_the_new_python_and_cuda_and_promises_no_compile(tmp_path, capsys):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    env = dict(PY313_CU13, python_version="3.13.5", torch="2.9.0", cuda="13.0")
+    asked = []
+    ok = vs.runtime_check(e.p, e.lay, env=env, gpu=A100, exists=lambda u: (asked.append(u), True)[1], functional=lambda: (False, "no"))
+    out = capsys.readouterr().out
+    assert ok  # a new runtime is not a failure: the fallback path is used
+    assert "3.13.5" in out and "CUDA 13.0" in out and "Nothing is compiled" in out
+    assert not [u for u in asked if "Dao-AILab" in u]  # no flash-attn package was even asked for: none exists for this runtime
+
+
+def test_a_failed_runtime_check_stops_setup_before_anything_slow(tmp_path, monkeypatch):
+    e = Env(tmp_path)
+    monkeypatch.setattr(vs, "runtime_check", lambda *a, **k: False)
+    for name in ("ensure_repo", "ensure_deps", "ensure_models", "ensure_flash_attn"):
+        monkeypatch.setattr(vs, name, lambda *a, **k: pytest.fail("a slow step started after a failed runtime check"))
+    with pytest.raises(vs.StepFailed, match="runtime check failed"):
+        vs.setup(e.p)
+
+
+def test_a_wheel_you_provide_is_tried_first_and_a_bad_one_falls_back_without_compiling(tmp_path):
+    wheel = tmp_path / "flash_attn-2.8.3+cu130torch2.9cxx11abiTRUE-cp313-cp313-linux_x86_64.whl"
+    wheel.write_bytes(b"x")
+    e = Env(tmp_path, flash_wheel=str(wheel))
+    vs.ensure_layout(e.p, create_run=False)
+    state = {"works": False}
+
+    def installs(cmd, *_):
+        if str(wheel) in cmd:
+            state["works"] = True
+        return 0
+
+    stream = FakeStream(installs)
+    got = vs.ensure_flash_attn(e.p, e.lay, PY313_CU13, A100, "log", stream=stream, functional=lambda: (state["works"], "x"))
+    assert got == "provided wheel" and vs._FLASH["ok"] is True and stream.limits == [vs.PIP_MAX_SECONDS]
+    # a wheel that does not work: the normal options follow, and with no package and no build opt-in nothing is compiled
+    e2 = Env(tmp_path / "b", flash_wheel=str(wheel))
+    vs.ensure_layout(e2.p, create_run=False)
+    bad = FakeStream()
+    got = vs.ensure_flash_attn(e2.p, e2.lay, PY313_CU13, A100, "log", stream=bad, functional=lambda: (False, "no"))
+    assert got == "not available (using SDPA)" and len(bad.calls) == 1  # only the attempt to install the provided wheel
+    # a path that does not exist is ignored
+    e3 = Env(tmp_path / "c", flash_wheel=str(tmp_path / "missing.whl"))
+    vs.ensure_layout(e3.p, create_run=False)
+    none = FakeStream()
+    assert vs.ensure_flash_attn(e3.p, e3.lay, PY313_CU13, A100, "log", stream=none, functional=lambda: (False, "no")) == "not available (using SDPA)"
+    assert none.calls == []

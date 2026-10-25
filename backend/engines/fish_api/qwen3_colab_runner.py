@@ -34,7 +34,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "1"
+RUNNER_VERSION = "2"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -120,6 +120,8 @@ class Params:
     keep_first: bool = False  # only with keep_all False: also keep the first epoch
     keep_final: bool = True  # only with keep_all False: also keep the final epoch
     attn_fallback: object = "auto"  # "auto": FlashAttention 2 on Ampere/Ada/Hopper, SDPA on Blackwell; True: force SDPA; False: force FA2
+    flash_wheel: str = ""  # optional: a flash_attn .whl on Drive (full path) or a URL, tried before anything automatic
+    build_flash_attn: bool = False  # True: compile FlashAttention from source when no ready-made package exists (an hour or more, may fail)
     restart: bool = False
     local_root: str = "/content"
     cache_models_on_drive: bool = True  # False: download models straight to /content (nothing cached on Drive)
@@ -161,7 +163,8 @@ class Params:
             if not 1 <= self.batch_size <= 256:
                 raise StepFailed("BATCH_SIZE must be 1-256 or 'auto'.")
         self.attn_fallback = "auto" if str(self.attn_fallback).strip().lower() in ("auto", "") else _truthy(self.attn_fallback)
-        for key in ("restart", "smoke_run", "keep_all", "keep_first", "keep_final", "cache_models_on_drive", "sample_after_training"):
+        self.flash_wheel = str(self.flash_wheel or "").strip()
+        for key in ("restart", "build_flash_attn", "smoke_run", "keep_all", "keep_first", "keep_final", "cache_models_on_drive", "sample_after_training"):
             setattr(self, key, _truthy(getattr(self, key)))
         if not self.keep_all and not (self.keep_last_n or self.keep_first or self.keep_final):
             raise StepFailed("KEEP_ALL is off but KEEP_LAST_N, KEEP_FIRST and KEEP_FINAL keep nothing: that would delete every checkpoint.")
@@ -205,7 +208,7 @@ def _truthy(v) -> bool:
 
 
 _ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "base_model", "tokenizer_model", "run_id",
-               "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "restart", "cache_models_on_drive", "sample_after_training",
+               "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "sample_after_training",
                "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour")
 
@@ -374,16 +377,21 @@ def stop_process(proc) -> None:
 
 
 def run_stream(cmd: list, *, cwd: Optional[str] = None, env: Optional[dict] = None, log_path: Optional[str] = None,
-               on_line: Optional[Callable] = None) -> int:
+               on_line: Optional[Callable] = None, max_seconds: Optional[float] = None) -> int:
     """Run a command, echo its output and append it to a log file (on Drive). Returns the exit code. If the caller is
     interrupted (the notebook's stop button) or raises, the command is stopped too."""
     say("$ " + " ".join(cmd))
     log = open(log_path, "a", encoding="utf-8") if log_path else None
     proc = None
+    timer = None
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **(env or {})}, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1,
                                 **({"start_new_session": True} if os.name == "posix" else {}))
+        if max_seconds:
+            timer = threading.Timer(max_seconds, stop_process, args=(proc,))  # a step that runs past its limit is stopped, not waited for
+            timer.daemon = True
+            timer.start()
         for line in proc.stdout:  # type: ignore[union-attr]
             handled = bool(on_line(line)) if on_line else False  # True: the caller printed its own, richer line instead
             if not handled:
@@ -394,6 +402,8 @@ def run_stream(cmd: list, *, cwd: Optional[str] = None, env: Optional[dict] = No
                 log.flush()
         return proc.wait()
     finally:
+        if timer is not None:
+            timer.cancel()
         stop_process(proc)
         if log:
             log.close()
@@ -535,8 +545,9 @@ GPU_TABLE = [
 ]
 
 
-def attention_choice(gpu: Optional[Gpu], mode) -> tuple:
-    """(path, why). path is 'flash2', 'sdpa' or 'refuse'. mode is Params.attn_fallback: 'auto', True or False."""
+def attention_choice(gpu: Optional[Gpu], mode, *, flash_installed: Optional[bool] = None) -> tuple:
+    """(path, why). path is 'flash2', 'sdpa' or 'refuse'. mode is Params.attn_fallback: 'auto', True or False.
+    ``flash_installed``: None = not known yet (use the hardware default); False = FlashAttention 2 is not usable in this runtime."""
     if gpu is None:
         return "refuse", "no GPU"
     if mode is True:
@@ -548,6 +559,9 @@ def attention_choice(gpu: Optional[Gpu], mode) -> tuple:
             return "flash2", ("ATTN_FALLBACK=False on a Blackwell GPU: you forced FlashAttention 2, which its README does not list "
                               "(Ampere, Ada, Hopper only) and which is likely to fail")
         return "refuse", "FlashAttention 2 cannot run on this GPU and ATTN_FALLBACK=False forbids the fallback"
+    if gpu.flash_ok and flash_installed is False:
+        return "sdpa", ("FlashAttention 2 is not installed in this runtime (no ready-made package exists for it, and it is not compiled "
+                        "unless BUILD_FLASH_ATTN=True), so the patched copy of the script with PyTorch's built-in SDPA attention is used (unverified)")
     if gpu.flash_ok:
         return "flash2", "Ampere/Ada/Hopper GPU: the original script with FlashAttention 2"
     if gpu.blackwell:
@@ -556,6 +570,22 @@ def attention_choice(gpu: Optional[Gpu], mode) -> tuple:
                         "attention (unverified). Set ATTN_FALLBACK=False to force FlashAttention 2 instead")
     return "refuse", ("this GPU (" + gpu.arch + ") cannot run FlashAttention 2 and its architecture is not one this script knows how to handle by default; "
                       "set ATTN_FALLBACK=True to try the patched SDPA copy (unverified)")
+
+
+_FLASH = {"ok": None}  # is FlashAttention 2 usable in this runtime? None until setup (or the first probe) has decided
+
+
+def flash_installed() -> bool:
+    """Probed once and remembered; set by ensure_flash_attn."""
+    if _FLASH["ok"] is None:
+        _FLASH["ok"] = bool(flash_functional()[0])
+    return bool(_FLASH["ok"])
+
+
+def current_attention(gpu: Optional[Gpu], p: Optional[Params], *, probe: bool = False) -> tuple:
+    """attention_choice for these parameters. ``probe`` asks the runtime whether FlashAttention 2 really works (use after setup)."""
+    mode = p.attn_fallback if p is not None else "auto"
+    return attention_choice(gpu, mode, flash_installed=flash_installed() if probe else _FLASH["ok"])
 
 
 def parse_nvidia_smi(text: str) -> Optional[Gpu]:
@@ -604,7 +634,7 @@ def gpu_report(p: Optional[Params] = None, gpu: Optional[Gpu] = None, *, detect:
     else:
         say(f"Suggested batch size for this GPU: {rec} (a guess from the memory size, not measured). Use BATCH_SIZE='auto' to take it.")
     say(f"Architecture: {gpu.arch}")
-    path, why = attention_choice(gpu, p.attn_fallback if p is not None else "auto")
+    path, why = current_attention(gpu, p)
     say(f"Attention path: {path.upper()}. {why}.")
     if path == "sdpa":
         say("The patched copy is written under /content only; Qwen's cached repo is never modified. UNVERIFIED: not run by the author.")
@@ -705,7 +735,7 @@ def dependency_rows(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, pr
     for mod in CHECK_MODULES:
         ok, detail = probe(mod)
         rows.append((mod, "PASS" if ok else "FAIL", detail))
-    path, why = attention_choice(gpu, p.attn_fallback)
+    path, why = current_attention(gpu, p, probe=True)
     if gpu is not None and gpu.cc:
         ok, detail = (arch_probe or torch_arch_probe)(gpu.cc)
         rows.append(("torch kernels for this GPU", "PASS" if ok else "FAIL", detail))
@@ -957,7 +987,17 @@ def build_jobs() -> int:
     return max(1, min(cpus, int(mem_gb // 3) if mem_gb else cpus))
 
 
-def ensure_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], log: str, *, stream: Callable = run_stream,
+BUILD_MAX_SECONDS = 90 * 60  # a requested FlashAttention build is stopped after this long
+
+
+def ensure_flash_attn(*args, **kwargs) -> str:
+    """Make FlashAttention 2 usable if a ready-made package exists. Remembers whether it is, so the attention path follows."""
+    how = _install_flash_attn(*args, **kwargs)
+    _FLASH["ok"] = how in ("installed already", "provided wheel", "cached wheel", "prebuilt wheel", "built")
+    return how
+
+
+def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], log: str, *, stream: Callable = run_stream,
                       functional: Callable = flash_functional, exists: Callable = url_exists,
                       download: Callable = download_file) -> str:
     """Make flash_attn importable. Returns how: 'skipped', 'installed already', 'cached wheel', 'prebuilt wheel' or 'built'."""
@@ -974,6 +1014,23 @@ def ensure_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], log
         say(f"Already installed and working in this runtime: {detail}")
         return "installed already"
     pip = [sys.executable, "-m", "pip", "install", "-q", "--no-deps", "--cache-dir", lay.pip_cache]
+    if p.flash_wheel:
+        say(f"FLASH_WHEEL is set: trying {p.flash_wheel} first.")
+        wheel = p.flash_wheel
+        try:
+            if wheel.lower().startswith(("http://", "https://")):
+                os.makedirs(wheel_dir(lay, env), exist_ok=True)
+                wheel = os.path.join(wheel_dir(lay, env), os.path.basename(wheel.split("?")[0]) or "flash_attn_provided.whl")
+                download(p.flash_wheel, wheel)
+            if not os.path.isfile(wheel):
+                say("That file does not exist, so it is ignored.")
+            elif stream(pip + [wheel], log_path=log, max_seconds=PIP_MAX_SECONDS) == 0 and functional()[0]:
+                return "provided wheel"
+            else:
+                say("The wheel you provided did not install or does not work on this runtime and GPU (the wrong Python, torch, CUDA or GPU "
+                    "architecture is the usual reason); trying the normal options instead.")
+        except (urllib.error.URLError, OSError) as exc:
+            say(f"Could not fetch the wheel you provided ({exc}); trying the normal options instead.")
     cached = find_cached_wheel(lay, env)
     if cached:
         say(f"Cached wheel for this runtime on Drive: {os.path.basename(cached)}  (expected: seconds to a minute)")
@@ -997,6 +1054,18 @@ def ensure_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], log
     else:
         say("No prebuilt wheel for this runtime "
             f"(python {env.get('python')}, torch {env.get('torch_mm')}, {env.get('cuda_tag')}); the {FLASH_TAG} release covers Linux x86_64, CUDA 12, torch 2.4-2.8.")
+    if not p.build_flash_attn:
+        here = f"python {env.get('python')}, torch {env.get('torch_mm')}, {env.get('cuda_tag')}"
+        if p.attn_fallback is False:
+            raise StepFailed(f"ATTN_FALLBACK=False needs FlashAttention 2, but there is no ready-made package for this runtime ({here}). "
+                             "Set ATTN_FALLBACK='auto' to use PyTorch's built-in attention instead, or BUILD_FLASH_ATTN=True to compile it "
+                             "(an hour or more, it may fail, and compute units are used the whole time).")
+        say("FlashAttention 2 has no ready-made package for this runtime, and it is NOT compiled here: that can take an hour or more, may fail "
+            "on a new Python/CUDA combination, and every minute uses compute units.")
+        say("Training will use PyTorch's built-in SDPA attention through a patched COPY of Qwen's script (the cached repo is not touched). "
+            "UNVERIFIED: not run by the author. To compile FlashAttention anyway, set BUILD_FLASH_ATTN = True.")
+        return "not available (using SDPA)"
+    say(f"BUILD_FLASH_ATTN is on: building FlashAttention, stopped after {BUILD_MAX_SECONDS // 60} minutes if it has not finished.")
     say("Building FlashAttention from source ONCE; the wheel is then saved to the Drive wheelhouse for this runtime type.")
     say("Expected time: commonly tens of minutes, and over an hour on a few CPU cores (an estimate; not measured here).")
     if shutil.which("nvcc") is None and not os.path.exists("/usr/local/cuda/bin/nvcc"):
@@ -1007,10 +1076,11 @@ def ensure_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], log
     out_dir = os.path.join(wheel_dir(lay, env), f"build-{int(time.time())}")
     os.makedirs(out_dir)
     code = stream([sys.executable, "-m", "pip", "wheel", "flash-attn", "--no-build-isolation", "--no-deps", "-w", out_dir,
-                   "--cache-dir", lay.pip_cache], env={"MAX_JOBS": str(build_jobs())}, log_path=log)
+                   "--cache-dir", lay.pip_cache], env={"MAX_JOBS": str(build_jobs())}, log_path=log, max_seconds=BUILD_MAX_SECONDS)
     wheels = [f for f in os.listdir(out_dir) if f.endswith(".whl")]
     if code != 0 or not wheels:
-        raise StepFailed("The FlashAttention build failed; see the log. A T4 or other pre-Ampere GPU cannot use it at all.")
+        raise StepFailed("The FlashAttention build failed or ran past its time limit; see the log. Set BUILD_FLASH_ATTN = False to use PyTorch's "
+                         "built-in attention instead. A T4 or other pre-Ampere GPU cannot use FlashAttention at all.")
     final = os.path.join(wheel_dir(lay, env), wheels[0])
     os.replace(os.path.join(out_dir, wheels[0]), final)
     shutil.rmtree(out_dir, ignore_errors=True)  # the empty build folder we just made
@@ -1021,17 +1091,70 @@ def ensure_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], log
 
 
 # --------------------------------------------------------------------------------------------- setup
+PIP_MAX_SECONDS = 25 * 60  # any single pip step is stopped after this long
+TESTED_PYTHON = ("cp310", "cp311", "cp312")  # what the Qwen3-TTS package and FlashAttention wheels were checked against by their authors
+
+
+def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Optional[Gpu] = None,
+                  exists: Callable = None, functional: Callable = None) -> bool:
+    """The first thing setup does, in seconds: Python, PyTorch and CUDA of this runtime and what they mean for the run, BEFORE anything
+    slow starts. False means stop now. Nothing is installed, downloaded or compiled here."""
+    exists = exists or url_exists
+    functional = functional or flash_functional
+    env = env or detect_environment()
+    gpu = gpu if gpu is not None else detect_gpu()
+    say("== Runtime check (seconds; nothing is installed, downloaded or compiled yet)")
+    rows = [("python", "INFO", env.get("python_version") or "unknown")]
+    rows.append(("torch / CUDA", "PASS" if env.get("torch") else "FAIL",
+                 f"torch {env['torch']}, CUDA {env.get('cuda') or 'none'}" if env.get("torch") else "PyTorch is not installed in this runtime"))
+    rows.append(("gpu", "PASS" if gpu else "FAIL", f"{gpu.name}, {gpu.vram_gb:g} GB, compute capability {env.get('gpu_cc')}" if gpu
+                 else "no GPU: Runtime > Change runtime type > pick the GPU"))
+    notes = []
+    if env.get("python") not in TESTED_PYTHON:
+        notes.append(f"Python {env.get('python_version')} is newer than the 3.10-3.12 these packages were built for")
+    if env.get("cuda_tag") and env["cuda_tag"] != "cu12":
+        notes.append(f"CUDA {env.get('cuda')} is newer than the CUDA 12 that FlashAttention packages exist for")
+    if notes:
+        rows.append(("newer runtime", "INFO", "; ".join(notes) + ". Expect no ready-made FlashAttention package (PyTorch's built-in attention is used, "
+                     "nothing is compiled). If package installs fail below, check Runtime > Change runtime type for an older runtime version."))
+    if gpu is not None:
+        path, why = attention_choice(gpu, p.attn_fallback)
+        if path == "flash2":
+            if functional()[0]:
+                rows.append(("FlashAttention 2", "PASS", "already installed and working"))
+            elif find_cached_wheel(lay, env):
+                rows.append(("FlashAttention 2", "PASS", "a cached wheel for this exact runtime is on Drive"))
+            elif prebuilt_wheel_name(env) and exists(FLASH_URL.format(name=prebuilt_wheel_name(env).replace("+", "%2B"))):
+                rows.append(("FlashAttention 2", "PASS", "a ready-made package exists (a minute or two)"))
+            elif p.build_flash_attn:
+                rows.append(("FlashAttention 2", "INFO", f"no ready-made package; BUILD_FLASH_ATTN is on, so it WILL be compiled (up to {BUILD_MAX_SECONDS // 60} minutes)"))
+            elif p.attn_fallback is False:
+                rows.append(("FlashAttention 2", "FAIL", "no ready-made package and ATTN_FALLBACK=False forbids the fallback: set ATTN_FALLBACK='auto' or BUILD_FLASH_ATTN=True"))
+            else:
+                rows.append(("FlashAttention 2", "INFO", "no ready-made package for this runtime: PyTorch SDPA attention will be used through a patched "
+                             "COPY of Qwen's script (unverified). Nothing is compiled."))
+        else:
+            rows.append(("attention", "INFO" if path == "sdpa" else "FAIL", why))
+    for name, url in (("github.com", "https://github.com"), ("huggingface.co", "https://huggingface.co")):
+        ok = exists(url)
+        rows.append((name, "PASS" if ok else "FAIL", "reachable" if ok else "not reachable from this runtime (needed to fetch code and models)"))
+    ok = check_table(rows)
+    say(f"Time limits: any pip step stops after {PIP_MAX_SECONDS // 60} minutes; a requested FlashAttention build after {BUILD_MAX_SECONDS // 60}.")
+    return ok
+
+
 def ensure_deps(p: Params, lay: Layout, log: str, *, probe: Callable = probe_module, stream: Callable = run_stream) -> None:
     say("== Python packages")
     base = [sys.executable, "-m", "pip", "install", "-q", "--cache-dir", lay.pip_cache]
     if probe("qwen_tts")[0] and os.path.isfile(os.path.join(lay.local_repo, SOURCE_MARKER)):
         say("qwen_tts is already importable in this runtime (skipping the editable install).")
-    elif stream(base + ["-e", lay.local_repo], log_path=log) != 0:
-        raise StepFailed("pip install -e of the Qwen3-TTS repository failed; see the log.")
+    elif stream(base + ["-e", lay.local_repo], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
+        raise StepFailed("pip install -e of the Qwen3-TTS repository failed or ran past its time limit; see the log. If this runtime is much newer "
+                         "than Python 3.12 / CUDA 12, try an older runtime version under Runtime > Change runtime type.")
     missing = [m for m in ("accelerate", "tensorboard", "librosa", "soundfile", "safetensors", "huggingface_hub") if not probe(m)[0]]
     if missing:
         say("Installing: " + ", ".join(missing))
-        if stream(base + [m.replace("_", "-") for m in missing], log_path=log) != 0:
+        if stream(base + [m.replace("_", "-") for m in missing], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
             raise StepFailed("pip install of " + ", ".join(missing) + " failed; see the log.")
     else:
         say("accelerate, tensorboard, librosa, soundfile, safetensors, huggingface_hub: already present.")
@@ -1043,6 +1166,9 @@ def setup(p: Params) -> bool:
     say("Setup time is billed like any other runtime time; the table at the end shows where it went.")
     lay = ensure_layout(p, create_run=False)
     log = new_log(lay, p, "setup")
+    with timed("runtime check"):
+        if not runtime_check(p, lay):
+            raise StepFailed("The runtime check failed (see the table above). Nothing slow was started and no compute units were spent on installs.")
     gpu = gpu_report(p)
     with timed("environment fingerprint"):
         env = detect_environment()
@@ -1921,7 +2047,7 @@ def preflight(p: Params, lay: Layout, gpu: Gpu, path: str, batch: int) -> None:
         rows.append(("free space Drive", "INFO", "could not be read"))
     rows.append(("bfloat16", "PASS" if gpu.cc and gpu.cc[0] >= 8 else "FAIL" if gpu.cc is None else "INFO",
                  "native on this GPU" if gpu.cc and gpu.cc[0] >= 8 else "not native on this GPU (emulated, slow)" if gpu.cc else "unknown GPU architecture"))
-    rows.append(("attention", "PASS" if path in ("flash2", "sdpa") else "FAIL", attention_choice(gpu, p.attn_fallback)[1]))
+    rows.append(("attention", "PASS" if path in ("flash2", "sdpa") else "FAIL", current_attention(gpu, p, probe=True)[1]))
     rows.append(("batch size", "PASS" if batch >= 1 else "FAIL", f"{batch}"))
     say("== Preflight")
     if not check_table(rows):
@@ -1933,7 +2059,7 @@ def _preflight(p: Params, lay: Layout, gpu: Optional[Gpu]) -> tuple:
     gpu_report(p, gpu)
     if gpu is None:
         raise StepFailed("No GPU: select a GPU runtime first.")
-    path, why = attention_choice(gpu, p.attn_fallback)
+    path, why = current_attention(gpu, p, probe=True)
     if path == "refuse":
         raise StepFailed("Qwen's sft_12hz.py hard-codes FlashAttention 2, and " + why + ". Choose an A100, H100, L4 or G4 runtime, or set ATTN_FALLBACK=True.")
     if gpu.vram_gb < BATCH_BY_VRAM[0][0] and p.batch_size != "auto":
@@ -2080,7 +2206,7 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
     if not probe("qwen_tts")[0]:
         say("Sample skipped: qwen_tts cannot be imported in this runtime (run setup).")
         return []
-    path, _why = attention_choice(gpu, p.attn_fallback)
+    path, _why = current_attention(gpu, p, probe=True)
     if path == "refuse":
         say("Sample skipped: no usable attention path on this GPU.")
         return []
