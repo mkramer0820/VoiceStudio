@@ -39,7 +39,7 @@ _HEARTBEAT_S = 5.0
 _DRIFT_WARN_MIB = 64
 
 _MODEL = None
-_STATE: dict = {"ramp": None, "baseline_mib": 0.0, "speaker": None}
+_STATE: dict = {"ramp": None, "baseline_mib": 0.0, "speaker": None, "key": None, "hooked": False, "type": None}
 
 _send_lock = threading.Lock()
 
@@ -122,28 +122,41 @@ def _heartbeating(stdout, stage: str):
         thread.join(timeout=_HEARTBEAT_S + 1)
 
 
-def _speaker_from_config(ckpt: str) -> str:
+def _read_config(ckpt: str) -> dict:
     try:
-        cfg = json.load(open(os.path.join(ckpt, "config.json"), encoding="utf-8"))
-        names = list((cfg.get("talker_config") or {}).get("spk_id") or {})
-        if names:
-            return names[0]
+        return json.load(open(os.path.join(ckpt, "config.json"), encoding="utf-8"))
     except Exception:  # noqa: BLE001
-        pass
-    return "ss_narrator"
+        return {}
 
 
-def _load_model(stdout):
+def _speaker_from_config(ckpt: str) -> str:
+    names = list((_read_config(ckpt).get("talker_config") or {}).get("spk_id") or {})
+    return names[0] if names else "ss_narrator"
+
+
+def _unload_model() -> None:
     global _MODEL
-    if _MODEL is not None:
+    _MODEL = None
+    _STATE["key"] = None
+    _flush()
+
+
+def _load_model(stdout, ckpt: str | None = None, max_seq: int | None = None):
+    """The resident model for ``ckpt``. Asking for another checkpoint (or cache
+    length) unloads the current one first: one model on the GPU at a time."""
+    global _MODEL
+    ckpt = ckpt or os.environ.get("OMNIVOICE_QWEN3_NARRATOR_CKPT", "")
+    max_seq = max_seq or _env_int("OMNIVOICE_QWEN3_NARRATOR_MAX_SEQ_LEN", 1280)
+    if _MODEL is not None and _STATE["key"] == (ckpt, max_seq):
         return _MODEL
-    ckpt = os.environ.get("OMNIVOICE_QWEN3_NARRATOR_CKPT", "")
     if not ckpt or not os.path.isfile(os.path.join(ckpt, "config.json")):
         raise FileNotFoundError(
-            "OMNIVOICE_QWEN3_NARRATOR_CKPT must point at a checkpoint folder "
-            f"(with config.json and model.safetensors); got {ckpt!r}"
+            "OMNIVOICE_QWEN3_NARRATOR_CKPT (or the request's model_path) must point at a checkpoint "
+            f"folder (with config.json and model.safetensors); got {ckpt!r}"
         )
-    max_seq = _env_int("OMNIVOICE_QWEN3_NARRATOR_MAX_SEQ_LEN", 1280)
+    if _MODEL is not None:
+        _log(f"unloading {_STATE['key'][0]} to load {ckpt}")
+        _unload_model()
     _send(stdout, {"op": "progress", "stage": "loading_model", "percent": 0})
     with _heartbeating(stdout, "loading_model"):
         import torch  # noqa: PLC0415
@@ -156,33 +169,129 @@ def _load_model(stdout):
         )
         _STATE["eos_id"] = _MODEL.model.model.config.talker_config.codec_eos_token_id
         _STATE["max_seq"] = max_seq
+        _STATE["type"] = _read_config(ckpt).get("tts_model_type")
         _STATE["speaker"] = os.environ.get("OMNIVOICE_QWEN3_NARRATOR_SPEAKER") or _speaker_from_config(ckpt)
+        _STATE["key"] = (ckpt, max_seq)
 
-        # fast_generate() has no logits hook but calls the module-level
-        # sample_logits() once per frame; wrap that one name.
-        original = G.sample_logits
+        if not _STATE["hooked"]:
+            # fast_generate() has no logits hook but calls the module-level
+            # sample_logits() once per frame; wrap that one name, once.
+            original = G.sample_logits
 
-        def _pushed(logits, **kw):
-            ramp = _STATE["ramp"]
-            return original(ramp.apply(logits) if ramp is not None else logits, **kw)
+            def _pushed(logits, **kw):
+                ramp = _STATE["ramp"]
+                return original(ramp.apply(logits) if ramp is not None else logits, **kw)
 
-        G.sample_logits = _pushed
+            G.sample_logits = _pushed
+            _STATE["hooked"] = True
     _flush()
     _STATE["baseline_mib"] = _vram_mb()[0]
     _send(stdout, {"op": "progress", "stage": "loading_model", "percent": 100})
     return _MODEL
 
 
-def _generate_chunk(model, text: str, speaker: str, language: str, seed, pad_s: float, slow: float, median: float):
+_XVEC_CACHE: dict = {}
+
+
+def _xvector(ref_audio: str, base_dir: str, cache_path: str | None):
+    """The speaker embedding (x-vector) of ``ref_audio``, made once by the stock
+    Base model on the CPU (a custom_voice checkpoint has no speaker encoder),
+    then cached in memory and, if ``cache_path`` is given, on disk as .npy."""
+    import numpy as np  # noqa: PLC0415
     import torch  # noqa: PLC0415
 
+    key = (os.path.abspath(ref_audio), os.path.getmtime(ref_audio), os.path.abspath(base_dir))
+    if key in _XVEC_CACHE:
+        return _XVEC_CACHE[key]
+    if cache_path and os.path.isfile(cache_path) and os.path.getmtime(cache_path) >= key[1]:
+        vec = torch.from_numpy(np.load(cache_path))
+    else:
+        from qwen_tts import Qwen3TTSModel  # noqa: PLC0415
+
+        _log(f"extracting x-vector of {os.path.basename(ref_audio)} with {base_dir} on the CPU")
+        base = Qwen3TTSModel.from_pretrained(base_dir, device_map="cpu", dtype=torch.bfloat16)
+        item = base.create_voice_clone_prompt(ref_audio=ref_audio, ref_text="", x_vector_only_mode=True)[0]
+        vec = item.ref_spk_embedding.detach().float().cpu().reshape(-1)
+        del base, item
+        gc.collect()
+        if cache_path:
+            os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+            np.save(cache_path, vec.numpy())
+    _XVEC_CACHE[key] = vec
+    return vec
+
+
+@contextlib.contextmanager
+def _speaker_row(model, speaker: str, vector):
+    """Write ``vector`` into the codec-embedding row of ``speaker`` for one
+    generation and put the trained row back afterwards, so the checkpoint's own
+    voice is untouched. The custom_voice path reads the speaker only from that row."""
+    import torch  # noqa: PLC0415
+
+    inner = model.model.model
+    index = inner.config.talker_config.spk_id[speaker.lower()]
+    weight = inner.talker.get_input_embeddings().weight
+    with torch.no_grad():
+        original = weight[index].clone()
+        weight[index] = vector.to(device=weight.device, dtype=weight.dtype)
+    try:
+        yield
+    finally:
+        with torch.no_grad():
+            weight[index] = original
+
+
+#: Sampling options a request may set; anything absent keeps the library default.
+_SAMPLING = ("temperature", "top_k", "top_p", "repetition_penalty")
+
+
+def _ref_frames(path: str) -> int:
+    import soundfile as sf  # noqa: PLC0415
+
+    info = sf.info(path)
+    return int(info.frames / info.samplerate * logic.FRAME_HZ) + 1
+
+
+def _generate_chunk(model, text: str, voice: dict, language: str, seed, pad_s: float, slow: float, median: float,
+                    params: dict):
+    import torch  # noqa: PLC0415
+
+    kind = voice.get("kind", "custom_voice")
+    loaded = _STATE.get("type")
+    if kind == "custom_voice" and loaded != "custom_voice":
+        raise ValueError(f"This model is a {loaded!r} model; a custom-voice speaker needs a custom_voice checkpoint.")
+    if kind == "clone_on_custom" and loaded != "custom_voice":
+        raise ValueError(f"'Clone on custom voice' needs a custom_voice checkpoint; this is a {loaded!r} model.")
+    if kind == "clone" and loaded != "base":
+        raise ValueError(
+            f"This model is a {loaded!r} model and cannot clone from a reference clip (a fine-tuned custom_voice "
+            "checkpoint has no speaker encoder). Use a Base model for clones."
+        )
+    reserve = logic.PROMPT_RESERVE + (_ref_frames(voice["ref_audio"]) if kind == "clone" else 0)
     start, cap = logic.token_limits(len(text), slow, median)
-    cap = min(cap, logic.max_audio_frames(_STATE["max_seq"]))
+    cap = min(cap, logic.max_audio_frames(_STATE["max_seq"], reserve))
+    if cap < start:
+        raise ValueError(
+            f"The cache ({_STATE['max_seq']} frames) is too small for this voice's reference plus the text; "
+            "use a shorter reference clip or raise max_seq_len."
+        )
     ramp = _STATE["ramp"] = logic.EosRamp(_STATE["eos_id"], start)
     if seed is not None:
         torch.manual_seed(int(seed))
+    options = {k: params[k] for k in _SAMPLING if params.get(k) is not None}
     try:
-        wavs, sr = model.generate_custom_voice(text=text, speaker=speaker, language=language, max_new_tokens=cap)
+        if kind == "clone":
+            wavs, sr = model.generate_voice_clone(
+                text=text, language=language, ref_audio=voice["ref_audio"], ref_text=voice.get("ref_text", ""),
+                xvec_only=bool(voice.get("xvec_only", False)), instruct=voice.get("instruct") or None,
+                max_new_tokens=cap, **options)
+        else:
+            speaker = voice.get("speaker") or _STATE["speaker"]
+            row = _speaker_row(model, speaker, voice["_xvec"]) if kind == "clone_on_custom" else contextlib.nullcontext()
+            with row:
+                wavs, sr = model.generate_custom_voice(
+                    text=text, speaker=speaker, language=language,
+                    instruct=voice.get("instruct") or None, max_new_tokens=cap, **options)
         wave = logic.pad_tail(wavs[0], sr, pad_s)
     finally:
         _STATE["ramp"] = None
@@ -196,12 +305,20 @@ def _handle_synthesize(msg: dict, stdout) -> None:
     text = msg.get("text")
     if not text or not isinstance(text, str):
         raise ValueError("synthesize: missing or non-string 'text'")
-    model = _load_model(stdout)
+    model = _load_model(stdout, msg.get("model_path"), msg.get("max_seq_len"))
     slow = float(msg.get("slow_s_per_char") or logic.SLOW_S_PER_CHAR)
     median = float(msg.get("median_s_per_char") or logic.MEDIAN_S_PER_CHAR)
     chunk_chars = int(msg.get("chunk_chars") or logic.default_chunk_chars(_STATE["max_seq"], slow))
     pad_s = max(0.0, float(msg.get("pad_s", 0.3)))
-    speaker = msg.get("speaker") or _STATE["speaker"]
+    voice = dict(msg.get("voice") or {})
+    if msg.get("speaker") and "speaker" not in voice:
+        voice["speaker"] = msg["speaker"]
+    voice.setdefault("kind", "custom_voice")
+    if voice["kind"] == "clone_on_custom":
+        for need in ("ref_audio", "base_model_path"):
+            if not voice.get(need):
+                raise ValueError(f"voice.{need} is required for 'clone_on_custom'")
+        voice["_xvec"] = _xvector(voice["ref_audio"], voice["base_model_path"], voice.get("xvec_path"))
     language = msg.get("language") or "Auto"
     chunks = logic.split_chunks(text, chunk_chars)
     if not chunks:
@@ -210,7 +327,7 @@ def _handle_synthesize(msg: dict, stdout) -> None:
     with _heartbeating(stdout, "generating"):
         for i, chunk in enumerate(chunks):
             seed = None if msg.get("seed") is None else int(msg["seed"]) + i
-            wave, rate, info = _generate_chunk(model, chunk, speaker, language, seed, pad_s, slow, median)
+            wave, rate, info = _generate_chunk(model, chunk, voice, language, seed, pad_s, slow, median, msg)
             waves.append(wave)
             report.append(info)
             if info["how"] == "hit the limit":

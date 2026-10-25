@@ -33,10 +33,26 @@ logger = logging.getLogger("omnivoice.qwen3_narrator")
 PYTHON_ENV = "OMNIVOICE_QWEN3_NARRATOR_PYTHON"
 CKPT_ENV = "OMNIVOICE_QWEN3_NARRATOR_CKPT"
 SIDECAR_SCRIPT: Path = Path(__file__).parent / "main.py"
+#: Request options passed through to the sidecar. ``model_path`` swaps the
+#: resident checkpoint, ``voice`` is {"kind": "custom_voice", "speaker", "instruct"}
+#: or {"kind": "clone", "ref_audio", "ref_text", "xvec_only", "instruct"}.
+_FORWARDED = (
+    "speaker", "language", "seed", "chunk_chars", "pad_s", "model_path", "max_seq_len", "voice",
+    "temperature", "top_k", "top_p", "repetition_penalty", "slow_s_per_char", "median_s_per_char",
+)
+
+
+_python_override: str | None = None
+
+
+def set_python_override(path: str | None) -> None:
+    """Use this python for the sidecar instead of the environment variable (the studio's setting)."""
+    global _python_override
+    _python_override = (path or "").strip() or None
 
 
 def configured_python() -> Path | None:
-    value = os.environ.get(PYTHON_ENV, "").strip()
+    value = (_python_override or os.environ.get(PYTHON_ENV, "")).strip()
     return Path(value) if value else None
 
 
@@ -45,17 +61,18 @@ def configured_checkpoint() -> Path | None:
     return Path(value) if value else None
 
 
-def availability() -> tuple[bool, str]:
-    """(usable, reason). Looks at files only; it never imports torch or starts the sidecar."""
+def availability(ignore_checkpoint: bool = False) -> tuple[bool, str]:
+    """(usable, reason). Looks at files only; it never imports torch or starts the sidecar.
+    ``ignore_checkpoint`` is for callers that name the model per request."""
     python = configured_python()
     if python is None:
         return False, f"Set {PYTHON_ENV} to the python of the engine's venv (see docs/engines/qwen3-narrator.md)."
     if not python.is_file():
         return False, f"{PYTHON_ENV} points at {python}, which does not exist."
     ckpt = configured_checkpoint()
-    if ckpt is None:
+    if ckpt is None and not ignore_checkpoint:
         return False, f"Set {CKPT_ENV} to the fine-tuned checkpoint folder."
-    for name in ("config.json", "model.safetensors"):
+    for name in ("config.json", "model.safetensors") if ckpt is not None else ():
         if not (ckpt / name).is_file():
             return False, f"{CKPT_ENV} points at {ckpt}, which has no {name}."
     if not SIDECAR_SCRIPT.is_file():
@@ -112,11 +129,12 @@ class Qwen3NarratorBackend(SubprocessBackend):
     def generate(self, text: str, **kw) -> "torch.Tensor":
         """Synthesize ``text``; long text is chunked inside the sidecar.
 
-        kwargs forwarded: ``speaker``, ``language``, ``seed``, ``chunk_chars``
-        (override the cache-derived chunk size), ``pad_s`` (silence after each
-        chunk, default 0.3 s).
+        kwargs forwarded: see ``_FORWARDED``. ``pad_s`` is the silence after each
+        chunk (default 0.3 s), ``chunk_chars`` overrides the cache-derived chunk
+        size. After the call ``last_reply_meta`` holds the sidecar's per-chunk
+        report (``chunks``, ``complete``, VRAM).
         """
-        forwarded = {k: kw[k] for k in ("speaker", "language", "seed", "chunk_chars", "pad_s") if kw.get(k) is not None}
+        forwarded = {k: kw[k] for k in _FORWARDED if kw.get(k) is not None}
         with self._job_lock:
             return super().generate(text, **forwarded)
 

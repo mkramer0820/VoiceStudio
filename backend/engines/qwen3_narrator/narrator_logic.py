@@ -37,9 +37,10 @@ def classify(steps: int, start: int, cap: int) -> str:
     return "hit the limit" if steps >= cap else ("pushed to stop" if steps > start else "stopped by itself")
 
 
-def max_audio_frames(max_seq_len: int) -> int:
-    """Frames of audio one generation may use: the cache minus the prompt."""
-    return max(40, min(700, int(max_seq_len) - PROMPT_RESERVE))
+def max_audio_frames(max_seq_len: int, reserve: int = PROMPT_RESERVE) -> int:
+    """Frames of audio one generation may use: the cache minus the prompt
+    (``reserve``; a clone's reference clip adds its own frames to it)."""
+    return max(0, min(700, int(max_seq_len) - int(reserve)))
 
 
 def default_chunk_chars(max_seq_len: int, slow: float = SLOW_S_PER_CHAR) -> int:

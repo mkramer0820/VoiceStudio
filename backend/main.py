@@ -747,6 +747,7 @@ def _phase_a_build_inner() -> None:
     from api.routers import fish_story as _fish_story_router  # noqa: E402
     from api.routers import fish_dataset as _fish_dataset_router  # noqa: E402
     from api.routers import fish_training as _fish_training_router  # noqa: E402
+    from api.routers import qwen_studio as _qwen_studio_router  # noqa: E402
     _router_modules.extend([
         system, profiles, profile_images, exports, generation, voice_convert, dub_core, dub_generate,
         dub_export, dub_translate, projects, glossary, engines, tools,
@@ -756,7 +757,7 @@ def _phase_a_build_inner() -> None:
         audiobook, longform_jobs, pronunciation, settings_router,
         media_tools_router, auth_router, _mcp_bindings_router,
         _telephony_twilio_router, _calls_router, _fish_audio_router, _fish_story_router, _fish_dataset_router,
-        _fish_training_router,
+        _fish_training_router, _qwen_studio_router,
     ])
     # Download-acceleration state, once, for triage-from-logs (FDL-03).
     try:

@@ -908,6 +908,8 @@ class SubprocessBackend(TTSBackend):
                 raise RuntimeError(
                     f"{self.id} sidecar returned unexpected op: {reply.get('op')!r}"
                 )
+            # Everything but the audio, for callers that want an engine's own report.
+            self.last_reply_meta = {k: v for k, v in reply.items() if k != "audio_pcm_b64"}
             pcm_b64 = reply.get("audio_pcm_b64", "")
             pcm = base64.b64decode(pcm_b64)
             audio_format = reply.get("audio_format", "s16le")

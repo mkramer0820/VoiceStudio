@@ -15,6 +15,15 @@ import pytest
 from engines.qwen3_narrator import narrator_logic as logic
 
 
+@pytest.fixture(autouse=True)
+def _no_python_override():
+    from engines import qwen3_narrator
+
+    qwen3_narrator.set_python_override(None)
+    yield
+    qwen3_narrator.set_python_override(None)
+
+
 # -- registry ---------------------------------------------------------------
 
 
@@ -101,8 +110,9 @@ def test_generate_forwards_only_known_options(monkeypatch):
     monkeypatch.setattr(SubprocessBackend, "generate", lambda self, text, **kw: seen.update(kw))
     backend = Qwen3NarratorBackend.__new__(Qwen3NarratorBackend)
     backend._job_lock = threading.Lock()
-    backend.generate("hi", seed=3, pad_s=0.5, ref_audio="x.wav", num_step=9)
-    assert seen == {"seed": 3, "pad_s": 0.5}
+    voice = {"kind": "clone", "ref_audio": "x.wav", "ref_text": "hi"}
+    backend.generate("hi", seed=3, pad_s=0.5, voice=voice, model_path="m", ref_audio="x.wav", num_step=9)
+    assert seen == {"seed": 3, "pad_s": 0.5, "voice": voice, "model_path": "m"}
 
 
 # -- chunking to fit the cache ----------------------------------------------

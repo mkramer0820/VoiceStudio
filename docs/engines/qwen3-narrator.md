@@ -68,8 +68,19 @@ clip, 18.6 s); steady 4158 MiB allocated / 4240 MiB reserved. First call 10.6 s 
 capture), then 2.25x real time (183.6 s of audio in 81.7 s over 24 lines). Close other GPU
 programs before measuring: browsers and video players hold 1–3 GB.
 
+What was found about the fine-tuned model itself (weights, model types, instruct, clone experiments, open questions): [qwen3-finetune-findings.md](qwen3-finetune-findings.md).
+
 ## Troubleshooting
 
 `is_available()` names the missing piece: unset or wrong python path, unset checkpoint, or a
 checkpoint folder without `config.json` / `model.safetensors`. Out-of-memory at load: lower
 `MAX_SEQ_LEN` (smaller cache, smaller chunks) and close other GPU programs.
+
+## Alternative implementation idea: Qwen3-TTS in C
+
+[gabriele-mastrapasqua/qwen3-tts](https://github.com/gabriele-mastrapasqua/qwen3-tts) (MIT) is a pure C inference engine for Qwen3-TTS: no Python or PyTorch, CPU by default, with optional Apple Metal and NVIDIA CUDA backends (`make cuda`). Read from its README on 2026-10-25; none of it has been run here.
+
+- **Speed claim:** about 0.44 real-time factor for the 1.7B model on an RTX 4060-class GPU. Ours measured 2.25x real time (a factor of about 0.44) on an RTX 3070, so the two are comparable.
+- **Clones as small files:** a reference clip is processed once into a `.qvoice` (a 25 MB "graft") or an 8 KB x-vector `.bin`, then reused on the **CustomVoice** model, where `--instruct` and emotion controls keep working. This is the same idea as the "clone on custom voice" experiment in the Qwen playground.
+- **Caveats:** its CUDA server mode is marked work in progress and never qualified; Windows is supported through WSL2; it needs the model converted to its own format, and it is **not known** whether a fine-tuned checkpoint such as the narrator's loads in it.
+- **Not adopted.** Revisit if the Python sidecar becomes a bottleneck (install size, startup time or memory), and test first that the fine-tuned narrator loads and sounds the same.
