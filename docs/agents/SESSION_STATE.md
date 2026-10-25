@@ -50,7 +50,7 @@ Checked means automated tests pass (backend pytest, frontend vitest, typecheck, 
 - **The UI has never been viewed.** Layout, wording and the Explorer/export dialog were checked by component tests with mocked text.
 - Compute-unit rates in the notebook are the owner's figures, not confirmed. Batch sizes and memory numbers are estimates.
 - Qwen's inference call used for the final sample is taken from its README and unconfirmed.
-- **Python 3.13 / CUDA 13 Colab runtimes:** no FlashAttention package exists; an earlier build compiled it automatically and wasted an hour of compute. Fixed (runtime check first, no compile unless asked, time caps, SDPA fallback), tests only. Idea not built yet: a uv venv with Python 3.12 + torch 2.8 cu12 + the prebuilt FlashAttention wheel.
+- **Python 3.13 / CUDA 13 Colab runtimes:** no FlashAttention package exists; an earlier build compiled it automatically and wasted an hour of compute. Fixed (runtime check first, no compile unless asked, time caps, SDPA fallback), tests only. Built (fakes only, unrun on Colab): `USE_VENV` isolated uv environment with Python 3.12 + torch + the FlashAttention wheel; see handoff 10c.
 - **Cancelling:** the runner now stops the training process when the cell is interrupted (tested with a fake process), but this has not been tried on Colab. Billing stops only when the runtime is disconnected and deleted; finished epochs are already on Drive, the epoch in progress is lost (no resume).
 
 ## Not built (on purpose)

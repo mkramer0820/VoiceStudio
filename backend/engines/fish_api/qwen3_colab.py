@@ -376,6 +376,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "KEEP_FIRST = False",
         "KEEP_FINAL = True",
         "ATTN_FALLBACK = 'auto'  # 'auto': FlashAttention 2 when a ready-made package exists for this runtime, otherwise PyTorch's built-in attention (patched copy of the script, unverified); True: always the patched copy; False: require FlashAttention 2",
+        "USE_VENV = 'auto'  # 'auto': when this runtime has no FlashAttention package, build an isolated Python 3.12 + torch environment that has one (a few minutes, once per runtime). True: always. False: never.",
         "FLASH_WHEEL = ''  # optional: the full path of a flash_attn .whl you put on Drive (or a URL) for THIS runtime's Python/torch/CUDA; tried first. Leave empty for the automatic choice.",
         "BUILD_FLASH_ATTN = False  # True: compile FlashAttention from source when no ready-made package exists. Takes an hour or more, may fail on a new Python/CUDA, and uses compute units the whole time. Leave False.",
         "RESTART = False  # True lets a RUN_ID you re-use replace its own checkpoints (the official script cannot resume)",
@@ -438,7 +439,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LR,",
         "    batch_size=BATCH_SIZE, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
         "    keep_first=KEEP_FIRST, keep_final=KEEP_FINAL, sample_text=SAMPLE_TEXT, sample_seed=SAMPLE_SEED, cache_models_on_drive=CACHE_MODELS_ON_DRIVE,",
-        "    attn_fallback=ATTN_FALLBACK, build_flash_attn=BUILD_FLASH_ATTN, flash_wheel=FLASH_WHEEL, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
+        "    attn_fallback=ATTN_FALLBACK, use_venv=USE_VENV, build_flash_attn=BUILD_FLASH_ATTN, flash_wheel=FLASH_WHEEL, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
         "    compare_epoch_seconds=COMPARE_EPOCH_SECONDS, compare_units_per_hour=COMPARE_UNITS_PER_HOUR), env={})",
         "print('Runner', vs.RUNNER_VERSION, 'loaded from', cached)",
     ])

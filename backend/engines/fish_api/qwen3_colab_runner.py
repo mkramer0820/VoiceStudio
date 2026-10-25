@@ -34,7 +34,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "2"
+RUNNER_VERSION = "3"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -121,6 +121,7 @@ class Params:
     keep_final: bool = True  # only with keep_all False: also keep the final epoch
     attn_fallback: object = "auto"  # "auto": FlashAttention 2 on Ampere/Ada/Hopper, SDPA on Blackwell; True: force SDPA; False: force FA2
     flash_wheel: str = ""  # optional: a flash_attn .whl on Drive (full path) or a URL, tried before anything automatic
+    use_venv: object = "auto"  # "auto": build an isolated Python 3.12 environment when this runtime has no FlashAttention package; True: always; False: never
     build_flash_attn: bool = False  # True: compile FlashAttention from source when no ready-made package exists (an hour or more, may fail)
     restart: bool = False
     local_root: str = "/content"
@@ -164,6 +165,7 @@ class Params:
                 raise StepFailed("BATCH_SIZE must be 1-256 or 'auto'.")
         self.attn_fallback = "auto" if str(self.attn_fallback).strip().lower() in ("auto", "") else _truthy(self.attn_fallback)
         self.flash_wheel = str(self.flash_wheel or "").strip()
+        self.use_venv = "auto" if str(self.use_venv).strip().lower() in ("auto", "") else _truthy(self.use_venv)
         for key in ("restart", "build_flash_attn", "smoke_run", "keep_all", "keep_first", "keep_final", "cache_models_on_drive", "sample_after_training"):
             setattr(self, key, _truthy(getattr(self, key)))
         if not self.keep_all and not (self.keep_last_n or self.keep_first or self.keep_final):
@@ -208,7 +210,7 @@ def _truthy(v) -> bool:
 
 
 _ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "base_model", "tokenizer_model", "run_id",
-               "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "sample_after_training",
+               "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "sample_after_training",
                "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour")
 
@@ -374,6 +376,13 @@ def stop_process(proc) -> None:
             return
         except subprocess.TimeoutExpired:
             continue
+
+
+PYTHON = [sys.executable]  # the interpreter every step uses; switched to the isolated environment's once that exists
+
+
+def py() -> str:
+    return PYTHON[0]
 
 
 def run_stream(cmd: list, *, cwd: Optional[str] = None, env: Optional[dict] = None, log_path: Optional[str] = None,
@@ -655,8 +664,35 @@ def resolve_batch(p: Params, gpu: Optional[Gpu]) -> int:
     return int(p.batch_size)
 
 
+ENV_PROBE_CODE = (
+    "import sys, os, json\n"
+    "e = {'python': 'cp%d%d' % sys.version_info[:2], 'python_version': sys.version.split()[0], 'platform': sys.platform + '-' + os.uname().machine,\n"
+    "     'torch': None, 'torch_mm': None, 'cuda': None, 'cuda_tag': None, 'cxx11abi': None}\n"
+    "try:\n"
+    "    import torch\n"
+    "    e['torch'] = str(torch.__version__).split('+')[0]; e['torch_mm'] = '.'.join(e['torch'].split('.')[:2]); e['cuda'] = torch.version.cuda\n"
+    "    e['cuda_tag'] = ('cu' + torch.version.cuda.split('.')[0]) if torch.version.cuda else None; e['cxx11abi'] = bool(torch.compiled_with_cxx11_abi())\n"
+    "except Exception:\n"
+    "    pass\n"
+    "print(json.dumps(e))\n")
+
+
+def _environment_from(python: str) -> dict:
+    code, out = capture([python, "-c", ENV_PROBE_CODE])
+    try:
+        return json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise StepFailed(f"Could not read Python/torch/CUDA from the isolated environment ({python}): {out[-300:]}")
+
+
 def detect_environment() -> dict:
     """Python, torch, CUDA and GPU of this runtime. Fields are None where they cannot be read (no torch yet)."""
+    if py() != sys.executable:
+        env = _environment_from(py())
+        gpu = detect_gpu()
+        env["gpu"] = gpu.name if gpu else None
+        env["gpu_cc"] = ".".join(map(str, gpu.cc)) if gpu and gpu.cc else None
+        return env
     env = {"python": f"cp{sys.version_info[0]}{sys.version_info[1]}", "python_version": sys.version.split()[0],
            "platform": f"{sys.platform}-{os.uname().machine}" if hasattr(os, "uname") else sys.platform,
            "torch": None, "torch_mm": None, "cuda": None, "cuda_tag": None, "cxx11abi": None}
@@ -709,7 +745,7 @@ def record_fingerprint(lay: Layout, env: dict) -> bool:
 
 # --------------------------------------------------------------------------------------------- dependency checks
 def probe_module(name: str) -> tuple:
-    code, out = capture([sys.executable, "-c", f"import {name} as m; print(getattr(m, '__version__', 'ok'))"])
+    code, out = capture([py(), "-c", f"import {name} as m; print(getattr(m, '__version__', 'ok'))"])
     last = (out.strip().splitlines() or [""])[-1]
     return code == 0, (last if code == 0 else last[:160] or "import failed")
 
@@ -765,7 +801,7 @@ def dependency_rows(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, pr
 def torch_arch_probe(cc: tuple) -> tuple:
     """Does this torch build ship kernels (or PTX) for the GPU's architecture? Answered by torch itself on the runtime."""
     tag = f"{cc[0]}{cc[1]}"
-    code, out = capture([sys.executable, "-c", "import torch; print(' '.join(torch.cuda.get_arch_list()))"])
+    code, out = capture([py(), "-c", "import torch; print(' '.join(torch.cuda.get_arch_list()))"])
     if code != 0:
         return False, "torch could not be queried"
     archs = out.split()
@@ -774,7 +810,7 @@ def torch_arch_probe(cc: tuple) -> tuple:
 
 
 def sdpa_functional() -> tuple:
-    code, out = capture([sys.executable, "-c",
+    code, out = capture([py(), "-c",
                          "import torch\n"
                          "q = torch.randn(1, 2, 16, 64, device='cuda', dtype=torch.bfloat16)\n"
                          "torch.nn.functional.scaled_dot_product_attention(q, q, q, is_causal=True)\n"
@@ -784,7 +820,7 @@ def sdpa_functional() -> tuple:
 
 
 def flash_functional() -> tuple:
-    code, out = capture([sys.executable, "-c",
+    code, out = capture([py(), "-c",
                          "import torch, flash_attn\n"
                          "from flash_attn import flash_attn_func\n"
                          "q = torch.randn(1, 16, 2, 64, device='cuda', dtype=torch.bfloat16)\n"
@@ -857,9 +893,15 @@ def hf_token() -> tuple:
 
 
 def download_model(model: str, dest: str) -> None:
+    tok, _src = hf_token()
+    if py() != sys.executable:  # huggingface_hub lives in the isolated environment; the token travels in the environment only
+        code = ("import os, sys; from huggingface_hub import snapshot_download as d; "
+                "d(sys.argv[1], local_dir=sys.argv[2], token=os.environ.get('HF_TOKEN') or None)")
+        if run_stream([py(), "-c", code, model, dest], env={"HF_TOKEN": tok} if tok else None, max_seconds=PIP_MAX_SECONDS * 2) != 0:
+            raise StepFailed(f"Downloading {model} failed; see the output above.")
+        return
     from huggingface_hub import snapshot_download  # installed by ensure_deps; imported late on purpose
 
-    tok, _src = hf_token()
     snapshot_download(model, local_dir=dest, **({"token": tok} if tok else {}))
 
 
@@ -1013,7 +1055,7 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
     if ok:
         say(f"Already installed and working in this runtime: {detail}")
         return "installed already"
-    pip = [sys.executable, "-m", "pip", "install", "-q", "--no-deps", "--cache-dir", lay.pip_cache]
+    pip = [py(), "-m", "pip", "install", "-q", "--no-deps", "--cache-dir", lay.pip_cache]
     if p.flash_wheel:
         say(f"FLASH_WHEEL is set: trying {p.flash_wheel} first.")
         wheel = p.flash_wheel
@@ -1074,12 +1116,12 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
     say("Expected time: commonly tens of minutes, and over an hour on a few CPU cores (an estimate; not measured here).")
     if shutil.which("nvcc") is None and not os.path.exists("/usr/local/cuda/bin/nvcc"):
         raise StepFailed("nvcc (the CUDA compiler) was not found, so FlashAttention cannot be built on this runtime.")
-    if stream([sys.executable, "-m", "pip", "install", "-q", "ninja", "packaging", "wheel", "setuptools"], log_path=log) != 0:
+    if stream([py(), "-m", "pip", "install", "-q", "ninja", "packaging", "wheel", "setuptools"], log_path=log) != 0:
         raise StepFailed("Could not install the build tools (ninja, packaging, wheel, setuptools).")
     os.makedirs(wheel_dir(lay, env), exist_ok=True)
     out_dir = os.path.join(wheel_dir(lay, env), f"build-{int(time.time())}")
     os.makedirs(out_dir)
-    code = stream([sys.executable, "-m", "pip", "wheel", "flash-attn", "--no-build-isolation", "--no-deps", "-w", out_dir,
+    code = stream([py(), "-m", "pip", "wheel", "flash-attn", "--no-build-isolation", "--no-deps", "-w", out_dir,
                    "--cache-dir", lay.pip_cache], env={"MAX_JOBS": str(build_jobs())}, log_path=log, max_seconds=BUILD_MAX_SECONDS)
     wheels = [f for f in os.listdir(out_dir) if f.endswith(".whl")]
     if code != 0 or not wheels:
@@ -1115,6 +1157,89 @@ def wheel_fits(name: str, env: dict) -> tuple:
 
 PIP_MAX_SECONDS = 25 * 60  # any single pip step is stopped after this long
 TESTED_PYTHON = ("cp310", "cp311", "cp312")  # what the Qwen3-TTS package and FlashAttention wheels were checked against by their authors
+
+
+VENV_DEFAULT = {"python": "3.12", "torch": "2.8.0", "cuda": "cu126"}  # the combination FlashAttention's official wheels exist for
+VENV_READY = ".voicestudio_ready"
+
+
+def venv_dir(p: Params) -> str:
+    return os.path.join(p.local_root, "venv")
+
+
+def venv_python_path(p: Params) -> str:
+    return os.path.join(venv_dir(p), "Scripts" if os.name == "nt" else "bin", "python.exe" if os.name == "nt" else "python")
+
+
+def use_existing_venv(p: Params) -> bool:
+    """Switch every step to the isolated environment when this runtime already has a finished one (survives a kernel restart)."""
+    if p.use_venv is not False and os.path.isfile(os.path.join(venv_dir(p), VENV_READY)) and os.path.isfile(venv_python_path(p)):
+        PYTHON[0] = venv_python_path(p)
+        return True
+    PYTHON[0] = sys.executable
+    return False
+
+
+def wheel_tags(name: str) -> Optional[dict]:
+    m = re.match(r"flash_attn-[^-]+?(?:\+cu(\d+)torch(\d+\.\d+))?-cp(\d)(\d+)-cp\d+-", os.path.basename((name or "").split("?")[0]))
+    if not m:
+        return None
+    cu, torch_mm, major, minor = m.groups()
+    return {"python": f"{major}.{minor}", "torch": f"{torch_mm}.*" if torch_mm else VENV_DEFAULT["torch"], "cuda": f"cu{cu}" if cu else VENV_DEFAULT["cuda"]}
+
+
+def want_venv(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, exists: Callable = None, functional: Callable = None) -> Optional[dict]:
+    """The isolated environment to build ({python, torch, cuda}) or None. In auto mode only when FlashAttention 2 would otherwise be
+    unavailable on this GPU. A provided wheel that does not fit this runtime decides the versions."""
+    exists = exists or url_exists
+    functional = functional or flash_functional
+    if p.use_venv is False or (gpu is None and p.use_venv != "auto"):
+        return None
+    tags = wheel_tags(p.flash_wheel) if p.flash_wheel else None
+    if p.use_venv is True:
+        return tags or dict(VENV_DEFAULT)
+    if gpu is None or not gpu.flash_ok or p.attn_fallback is True:
+        return None  # Blackwell and pre-Ampere GPUs cannot use FlashAttention 2 whatever the environment
+    if functional()[0] or find_cached_wheel(lay, env):
+        return None
+    if p.flash_wheel and wheel_fits(p.flash_wheel, env)[0]:
+        return None
+    name = prebuilt_wheel_name(env)
+    if name and exists(FLASH_URL.format(name=name.replace("+", "%2B"))):
+        return None
+    return tags or dict(VENV_DEFAULT)
+
+
+def ensure_venv(p: Params, lay: Layout, target: dict, log: str, *, stream: Callable = run_stream) -> None:
+    """Python + PyTorch in a fresh environment under /content (nothing in the system Python is touched). Needs uv (installed if absent)."""
+    say(f"== Isolated environment: Python {target['python']}, torch {target['torch']}, {target['cuda']}")
+    if use_existing_venv(p):
+        say("An isolated environment from this session is already there; reusing it.")
+        return
+    shutil.rmtree(venv_dir(p), ignore_errors=True)  # only a half-built one of ours under /content, never anything on Drive
+    uv = [shutil.which("uv")] if shutil.which("uv") else None
+    if uv is None:
+        say("Installing uv (a fast Python installer).")
+        if stream([sys.executable, "-m", "pip", "install", "-q", "uv"], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
+            raise StepFailed("Could not install uv; see the log.")
+        uv = [sys.executable, "-m", "uv"]
+    with timed("isolated environment: Python"):
+        if stream(uv + ["venv", "--seed", "--python", target["python"], venv_dir(p)], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
+            raise StepFailed(f"Could not create a Python {target['python']} environment; see the log.")
+    spec = target["torch"]
+    index = f"https://download.pytorch.org/whl/{target['cuda']}"
+    with timed("isolated environment: PyTorch"):
+        if stream(uv + ["pip", "install", "--python", venv_python_path(p), f"torch=={spec}", f"torchaudio=={spec}", "--index-url", index],
+                  log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
+            raise StepFailed(f"Could not install torch {spec} for {target['cuda']} from {index}; see the log.")
+    code, out = capture([venv_python_path(p), "-c", "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"])
+    say(f"Isolated environment torch check: {out.strip()}")
+    if code != 0 or not out.strip().endswith("True"):
+        raise StepFailed("The isolated environment's PyTorch cannot see the GPU: " + out.strip()[-300:])
+    os.makedirs(venv_dir(p), exist_ok=True)
+    with open(os.path.join(venv_dir(p), VENV_READY), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(target) + "\n")
+    PYTHON[0] = venv_python_path(p)
 
 
 def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Optional[Gpu] = None,
@@ -1170,7 +1295,7 @@ def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Op
 
 def ensure_deps(p: Params, lay: Layout, log: str, *, probe: Callable = probe_module, stream: Callable = run_stream) -> None:
     say("== Python packages")
-    base = [sys.executable, "-m", "pip", "install", "-q", "--cache-dir", lay.pip_cache]
+    base = [py(), "-m", "pip", "install", "-q", "--cache-dir", lay.pip_cache]
     if probe("qwen_tts")[0] and os.path.isfile(os.path.join(lay.local_repo, SOURCE_MARKER)):
         say("qwen_tts is already importable in this runtime (skipping the editable install).")
     elif stream(base + ["-e", lay.local_repo], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
@@ -1191,10 +1316,21 @@ def setup(p: Params) -> bool:
     say("Setup time is billed like any other runtime time; the table at the end shows where it went.")
     lay = ensure_layout(p, create_run=False)
     log = new_log(lay, p, "setup")
+    use_existing_venv(p)
     with timed("runtime check"):
         if not runtime_check(p, lay):
             raise StepFailed("The runtime check failed (see the table above). Nothing slow was started and no compute units were spent on installs.")
     gpu = gpu_report(p)
+    target = want_venv(p, lay, detect_environment(), gpu)
+    if target and not os.path.isfile(os.path.join(venv_dir(p), VENV_READY)):
+        say("This runtime has no FlashAttention package, so training runs in an isolated environment that has one (one-time, a few minutes).")
+        try:
+            ensure_venv(p, lay, target, log)
+        except StepFailed as exc:
+            if p.use_venv is True:
+                raise
+            PYTHON[0] = sys.executable
+            say(f"The isolated environment could not be built ({exc}). Continuing in this runtime with PyTorch's built-in attention (patched copy, unverified).")
     with timed("environment fingerprint"):
         env = detect_environment()
         seen = record_fingerprint(lay, env)
@@ -1972,7 +2108,7 @@ def write_driver(lay: Layout) -> str:
 def prepare_command(p: Params, lay: Layout, folder: str, input_jsonl: str, partial: str, resume_from: int, driver: str) -> dict:
     ft = os.path.join(lay.local_repo, "finetuning")
     return {"cwd": folder, "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", "")},
-            "cmd": [sys.executable, "-u", driver, "--device", "cuda:0", "--tokenizer_model_path", local_model_dir(lay, p.tokenizer_model),
+            "cmd": [py(), "-u", driver, "--device", "cuda:0", "--tokenizer_model_path", local_model_dir(lay, p.tokenizer_model),
                     "--input_jsonl", input_jsonl, "--output_jsonl", partial, "--resume_from", str(resume_from)]}
 
 
@@ -2047,10 +2183,10 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
     return {
         "cwd": dataset_dir,
         "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", "")},
-        "train": [sys.executable, "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
+        "train": [py(), "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
                   "--output_model_path", out_dir or lay.local_checkpoints, "--train_jsonl", codes or lay.codes_local, "--batch_size", str(batch),
                   "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", p.speaker_name],
-        "prepare": [sys.executable, "-u", os.path.join(lay.patched, "prepare_progress.py"), "--tokenizer_model_path", local_model_dir(lay, p.tokenizer_model),
+        "prepare": [py(), "-u", os.path.join(lay.patched, "prepare_progress.py"), "--tokenizer_model_path", local_model_dir(lay, p.tokenizer_model),
                     "--input_jsonl", "train.jsonl", "--output_jsonl", lay.codes + ".partial"],
     }
 
@@ -2119,6 +2255,7 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
           sample_memory: Callable = gpu_memory_used_mb) -> list:
     """Prepare codes, run sft_12hz.py from inside the dataset folder with checkpoints written to /content and synced to Drive after every
     epoch, then sample from each checkpoint. With SMOKE_RUN on, runs the short timing run instead."""
+    use_existing_venv(p)
     if p.smoke_run:
         timing_run(p, gpu=gpu, stream=stream, detect=detect, sample_memory=sample_memory)
         return []
@@ -2239,7 +2376,7 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
     os.makedirs(lay.samples, exist_ok=True)
     out, ckpt = os.path.join(lay.samples, "final.wav"), os.path.join(lay.checkpoints, names[-1])
     say(f"== Sample from {names[-1]}: text {p.sample_text!r}, seed {p.sample_seed}, attention {attn}. UNVERIFIED API use (README at the pinned commit).")
-    code = stream([sys.executable, "-c", SAMPLE_CODE, ckpt, p.speaker_name, p.sample_text, out, attn, str(p.sample_seed)],
+    code = stream([py(), "-c", SAMPLE_CODE, ckpt, p.speaker_name, p.sample_text, out, attn, str(p.sample_seed)],
                   log_path=os.path.join(lay.run_logs, "samples.log"))
     if code != 0 or not os.path.isfile(out):
         say("final.wav could not be generated (see samples.log); the checkpoints are unaffected.")
@@ -2252,6 +2389,7 @@ def generate_samples(p: Params, lay: Layout, *, stream: Callable = run_stream, g
 
 
 def final_sample(p: Params, *, stream: Callable = run_stream) -> list:
+    use_existing_venv(p)
     """Notebook cell: generate samples/final.wav for this run (optional, unverified)."""
     return generate_samples(p, find_run(p), stream=stream)
 

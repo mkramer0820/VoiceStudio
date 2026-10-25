@@ -100,6 +100,7 @@ ENV = {"python": "cp312", "python_version": "3.12.1", "platform": "linux-x86_64"
 def _clean_times(monkeypatch):
     vs._TIMES.clear()
     vs._FLASH["ok"] = None
+    vs.PYTHON[0] = sys.executable
     monkeypatch.setattr(vs, "flash_functional", lambda: (True, "test"))  # tests assume FlashAttention 2 works unless they say otherwise
     yield
     vs._TIMES.clear()
@@ -1112,7 +1113,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
     monkeypatch.delitem(sys.modules, "voicestudio_qwen3_colab", raising=False)
     ns = {"DRIVE_ROOT": drive_root, "DATA_SOURCE": archive, "SPEAKER_NAME": "Sunny", "EPOCHS": 2, "LR": 2e-5, "BATCH_SIZE": 2, "BASE_MODEL": vs.BASE_MODEL,
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
-          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
+          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
           "COMPARE_UNITS_PER_HOUR": None}
     saved_path = list(sys.path)
@@ -1351,3 +1352,79 @@ def test_a_provided_wheel_is_checked_against_python_torch_and_cuda_by_name():
     assert not ok and "Python 3.12" in why and "CUDA 12.6" in why
     assert not vs.wheel_fits(name, dict(good, torch_mm="2.9", torch="2.9.0"))[0]
     assert vs.wheel_fits("weird.whl", good)[0]
+
+
+# ------------------------------------------------------------------------------------------------ the isolated environment
+def test_the_isolated_environment_is_only_planned_when_flash_attention_would_be_missing(tmp_path):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    no_pkg = dict(PY313_CU13, python_version="3.13.5", torch="2.9.0", cuda="13.0")
+    no, yes = (lambda u: False), (lambda u: True)
+    assert vs.want_venv(e.p, e.lay, no_pkg, A100, exists=no, functional=lambda: (False, "x")) == vs.VENV_DEFAULT
+    assert vs.want_venv(e.p, e.lay, no_pkg, A100, exists=no, functional=lambda: (True, "x")) is None  # already works
+    assert vs.want_venv(e.p, e.lay, _rt_env(), A100, exists=yes, functional=lambda: (False, "x")) is None  # a package exists here
+    assert vs.want_venv(e.p, e.lay, no_pkg, G4_96, exists=no, functional=lambda: (False, "x")) is None  # Blackwell: no environment helps
+    assert vs.want_venv(Env(tmp_path / "n", use_venv=False).p, e.lay, no_pkg, A100, exists=no, functional=lambda: (False, "x")) is None
+
+
+def test_a_wheel_that_does_not_fit_decides_the_environment_versions(tmp_path):
+    name = "flash_attn-2.8.3+cu126torch2.12-cp312-cp312-linux_x86_64.whl"
+    e = Env(tmp_path, flash_wheel="/content/drive/MyDrive/x/" + name)
+    vs.ensure_layout(e.p, create_run=False)
+    no_pkg = dict(PY313_CU13, python_version="3.13.5", torch="2.9.0", cuda="13.0")
+    assert vs.want_venv(e.p, e.lay, no_pkg, A100, exists=lambda u: False, functional=lambda: (False, "x")) ==         {"python": "3.12", "torch": "2.12.*", "cuda": "cu126"}
+    # on a runtime the wheel fits, no environment is needed
+    fits = {"python": "cp312", "python_version": "3.12.12", "torch": "2.12.0", "torch_mm": "2.12", "cuda": "12.6", "cuda_tag": "cu12"}
+    assert vs.want_venv(e.p, e.lay, fits, A100, exists=lambda u: False, functional=lambda: (False, "x")) is None
+
+
+def test_building_the_environment_uses_uv_with_the_pinned_versions_and_switches_python(tmp_path, monkeypatch):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    monkeypatch.setattr(vs.shutil, "which", lambda n: "/usr/bin/uv" if n == "uv" else None)
+    monkeypatch.setattr(vs, "capture", lambda cmd, **k: (0, "2.8.0+cu126 12.6 True"))
+    stream = FakeStream()
+    vs.ensure_venv(e.p, e.lay, vs.VENV_DEFAULT, "log", stream=stream)
+    flat = [" ".join(map(str, c)) for c in stream.calls]
+    assert any("venv --seed --python 3.12" in c for c in flat)
+    assert any("torch==2.8.0" in c and "torchaudio==2.8.0" in c and "whl/cu126" in c for c in flat)
+    assert vs.py() == vs.venv_python_path(e.p) and os.path.isfile(os.path.join(vs.venv_dir(e.p), vs.VENV_READY))
+    os.makedirs(os.path.dirname(vs.venv_python_path(e.p)), exist_ok=True)
+    open(vs.venv_python_path(e.p), "w").close()  # what uv would have created
+    vs.PYTHON[0] = sys.executable
+    assert vs.use_existing_venv(e.p) and vs.py() == vs.venv_python_path(e.p)  # a kernel restart finds it again
+    assert not vs.use_existing_venv(Env(tmp_path / "other", use_venv=False).p) and vs.py() == sys.executable
+
+
+def test_a_torch_that_cannot_see_the_gpu_is_not_accepted(tmp_path, monkeypatch):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    monkeypatch.setattr(vs.shutil, "which", lambda n: "/usr/bin/uv")
+    monkeypatch.setattr(vs, "capture", lambda cmd, **k: (0, "2.8.0 12.6 False"))
+    with pytest.raises(vs.StepFailed, match="cannot see the GPU"):
+        vs.ensure_venv(e.p, e.lay, vs.VENV_DEFAULT, "log", stream=FakeStream())
+    assert vs.py() == sys.executable and not os.path.isfile(os.path.join(vs.venv_dir(e.p), vs.VENV_READY))
+
+
+def test_setup_falls_back_to_the_current_runtime_when_the_environment_cannot_be_built(tmp_path, monkeypatch):
+    e = Env(tmp_path)
+    for n in ("runtime_check", "ensure_repo", "ensure_deps", "ensure_models", "dependency_rows", "check_table", "timing_summary", "record_fingerprint"):
+        monkeypatch.setattr(vs, n, lambda *a, **k: True)
+    monkeypatch.setattr(vs, "gpu_report", lambda *a, **k: A100)
+    monkeypatch.setattr(vs, "detect_environment", lambda: dict(PY313_CU13, gpu="A100", gpu_cc="8.0"))
+    monkeypatch.setattr(vs, "want_venv", lambda *a, **k: vs.VENV_DEFAULT)
+    monkeypatch.setattr(vs, "ensure_flash_attn", lambda *a, **k: "not available (using SDPA)")
+
+    def boom(*a, **k):
+        raise vs.StepFailed("no network")
+
+    monkeypatch.setattr(vs, "ensure_venv", boom)
+    assert vs.setup(e.p) is True and vs.py() == sys.executable  # auto mode carries on
+    with pytest.raises(vs.StepFailed):
+        vs.setup(Env(tmp_path / "forced", use_venv=True).p)  # forced mode stops
+
+
+def test_use_venv_is_a_normal_setting():
+    assert vs.params_from({}, env={}).use_venv == "auto"
+    assert vs.params_from({"use_venv": "no"}, env={}).use_venv is False
+    assert vs.params_from({}, env={"USE_VENV": "true"}).use_venv is True
