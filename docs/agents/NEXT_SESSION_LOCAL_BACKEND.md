@@ -41,6 +41,10 @@ START BY looking at the real folder tree under E:\Qwen3TTS_Checkpoints\SS_Narrat
 5. **Wrap it as a backend**, following the isolated-engine pattern: a `TTSBackend` subclass registered in `backend/services/tts_backend.py` (the id/class registry, the install-hint dict, the docs-page dict and the subprocess registry, see how `voxcpm2` appears in all four) with a worker under `backend/engines/<name>_subprocess/`, run by the separate environment's python so its transformers 5 never meets the app's. The checkpoint folder and the environment path must be settings, not hard-coded. `is_available()` must say why when something is missing. Add `docs/engines/<name>.md` (required by `tests/test_engine_docs.py`) and tests that run without a GPU. *Done when:* the backend generates audio from the app's backend code path in a script, with tests green.
 6. **Stop before the UI.** Write what Part 2 needs into the state doc.
 
+## Optional once it works: a fairer epoch comparison
+
+The owner heard epochs 04, 07, 08, 09 of the 3-hour run as best and 05, 06 as weaker; the loss log does not explain the dip (see the state doc, "Listening results and the loss per epoch"). With the model on the 3070, generate 10 to 20 sentences that are not in the training data, 3 seeds per checkpoint, and compare. That separates a real difference from sampling luck.
+
 ## Open questions for the owner
 
 - Which epochs to keep locally for comparison (each is 4.3 GB), and whether the 3-hour run is better than `Run_1_EP07`.
