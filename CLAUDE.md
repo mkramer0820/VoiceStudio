@@ -125,6 +125,10 @@ Single-context: `docs/adr/` plus a root `CONTEXT.md` that is created lazily and 
 
 Before any Qwen3-TTS work (the `qwen3-narrator` engine, the Qwen playground or story mode, voices, checkpoints, fine-tuning), read `docs/engines/qwen3-finetune-findings.md`. It records what is verified about the fine-tuned narrator (EP09) and the stock models, what the owner heard, and what is still unknown. The UI/story-mode work plan is `docs/agents/QWEN3_STUDIO_UI_BRIEF.md`. Never describe a take only with library terms (ICL, x-vector): say which model, voice and mode it really runs.
 
+### Local models: one place to set where they live
+
+Where the app looks for local models and custom checkpoints (and where it puts downloads) is set in **Settings → Storage**, the same way the Model Library and the Models directory already work: the Hugging Face cache plus a list of extra model folders, each with a Browse button (folder authorization token) and a found/missing status. Engines and feature pages (Qwen playground, story modes, Fish, any new engine) read that list. They must not add their own model-folder path boxes or private search roots. Settings that are not model locations (output folder, an engine's Python) may stay per feature. Plan: `docs/agents/MODEL_LOCATIONS_BRIEF.md`.
+
 ### Fish Audio integration
 
 When changing the Fish API or Story Studio paths on `ext/fish-api`, read `docs/engines/fish-audio-handoff.md` first. It records the required remote-audio preservation and explicit single/multi-speaker request-mode behavior, the current state of the Fish work, and what not to change. Start at `docs/agents/README.md`: it indexes the current session state, a ready prompt for the next session, delegation briefs, and layout/git/check rules, for any agent.
