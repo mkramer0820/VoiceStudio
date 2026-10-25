@@ -101,7 +101,8 @@ def _clean_times(monkeypatch):
     vs._TIMES.clear()
     vs._FLASH["ok"] = None
     vs.PYTHON[0] = sys.executable
-    monkeypatch.setattr(vs, "flash_functional", lambda: (True, "test"))  # tests assume FlashAttention 2 works unless they say otherwise
+    monkeypatch.setattr(vs, "flash_functional", lambda: (True, "test"))
+    monkeypatch.setattr(vs, "conv_functional", lambda: (True, "test"))  # tests assume FlashAttention 2 works unless they say otherwise
     yield
     vs._TIMES.clear()
     vs._FLASH["ok"] = None
@@ -1459,3 +1460,19 @@ def test_a_failed_import_reports_the_root_cause_not_the_wrapper(tmp_path, monkey
     monkeypatch.setenv("PYTHONPATH", str(pkg))
     ok, detail = vs.probe_module("wrapped_mod")
     assert not ok and "torchvision::nms does not exist" in detail
+
+
+_REAL_CONV = vs.conv_functional  # the autouse fixture replaces vs.conv_functional
+
+
+def test_a_cudnn_mismatch_is_caught_in_the_setup_table(tmp_path, monkeypatch):
+    e = Env(tmp_path)
+    err = "RuntimeError: CUDNN_BACKEND_TENSOR_DESCRIPTOR cudnnFinalize failed cudnn_status: CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH"
+    monkeypatch.setattr(vs, "capture", lambda cmd, **k: (1, err))
+    ok, detail = _REAL_CONV()
+    assert not ok and "SUBLIBRARY_VERSION_MISMATCH" in detail and "new one without upgrading torch" in detail
+    rows = vs.dependency_rows(e.p, e.lay, ENV, A100, probe=lambda n: (True, "1"), flash_probe=lambda: (True, "x"), arch_probe=lambda cc: (True, "x"),
+                              conv_probe=lambda: (False, "mismatch"))
+    assert {r[0]: r[1] for r in rows}["torch convolution (cuDNN)"] == "FAIL"
+    monkeypatch.setattr(vs, "capture", lambda cmd, **k: (0, "ok"))
+    assert _REAL_CONV()[0]

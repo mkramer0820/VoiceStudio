@@ -34,7 +34,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "4"
+RUNNER_VERSION = "5"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -837,7 +837,7 @@ def check_table(rows: list) -> bool:
 
 
 def dependency_rows(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, probe: Callable = probe_module,
-                    flash_probe: Callable = None, sdpa_probe: Callable = None, arch_probe: Callable = None) -> list:
+                    flash_probe: Callable = None, sdpa_probe: Callable = None, arch_probe: Callable = None, conv_probe: Callable = None) -> list:
     rows = [("python / torch", "INFO", f"python {env.get('python_version')}, torch {env.get('torch') or 'not importable'}, CUDA {env.get('cuda')}")]
     rows.append(("gpu", "PASS" if gpu else "FAIL", f"{gpu.name}, {gpu.vram_gb:g} GB" if gpu else "no GPU runtime selected"))
     for mod in CHECK_MODULES:
@@ -847,6 +847,9 @@ def dependency_rows(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, pr
     if gpu is not None and gpu.cc:
         ok, detail = (arch_probe or torch_arch_probe)(gpu.cc)
         rows.append(("torch kernels for this GPU", "PASS" if ok else "FAIL", detail))
+    if gpu is not None:
+        ok, detail = (conv_probe or conv_functional)()
+        rows.append(("torch convolution (cuDNN)", "PASS" if ok else "FAIL", detail))
     if path == "flash2":
         ok, detail = (flash_probe or flash_functional)() if gpu else (False, "needs a GPU runtime")
         rows.append(("attention: flash_attn", "PASS" if ok else "FAIL", detail))
@@ -879,6 +882,23 @@ def torch_arch_probe(cc: tuple) -> tuple:
     archs = out.split()
     ok = any(a in (f"sm_{tag}", f"compute_{tag}") or (a.startswith("compute_") and int(a[8:]) <= int(tag)) for a in archs if a[a.find("_") + 1:].isdigit())
     return ok, (f"torch lists {' '.join(archs)}" if ok else f"torch's build lists {' '.join(archs)}, nothing for sm_{tag}: it cannot run on this GPU")
+
+
+def conv_functional() -> tuple:
+    """A real convolution on the GPU. Training's audio-code step needs cuDNN; a torch upgraded in place next to Colab's older cuDNN fails
+    here with CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH, which otherwise only shows up minutes into preparation."""
+    code, out = capture([py(), "-c",
+                         "import torch\n"
+                         "x = torch.randn(1, 1, 256, device='cuda')\n"
+                         "torch.nn.Conv1d(1, 4, 3).cuda()(x)\n"
+                         "torch.cuda.synchronize()\n"
+                         "print('ok')\n"])
+    last = (out.strip().splitlines() or [""])[-1]
+    if code == 0:
+        return True, "convolution (cuDNN) ran on the GPU"
+    hint = (" Torch and cuDNN do not belong together, usually because torch was upgraded inside this runtime: delete the runtime and start a "
+            "new one without upgrading torch (the notebook builds a matching isolated environment itself).") if "CUDNN" in out.upper() else ""
+    return False, (last[:160] or "convolution failed") + hint
 
 
 def sdpa_functional() -> tuple:
