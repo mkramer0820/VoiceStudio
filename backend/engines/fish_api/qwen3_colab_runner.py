@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "7"
+RUNNER_VERSION = "8"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -68,6 +68,9 @@ FLASH_PREBUILT = {  # torch major.minor -> python tags with a prebuilt Linux x86
 }
 ATTN_FALLBACK_IMPL = "sdpa"
 FLASH_LINE = 'attn_implementation="flash_attention_2"'  # sft_12hz.py line 51 at the pinned commit
+ACCEL_LINE = 'Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard")'  # line 44; no logging_dir
+ACCEL_FIXED = ('Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard", '
+               'project_dir=os.environ.get("VS_TENSORBOARD_DIR", "tensorboard"))')
 
 # Packages installed on top of Colab's torch (pyproject.toml of the pinned commit: qwen-tts 0.1.1 pins transformers
 # 4.57.3 and accelerate 1.12.0 and lists gradio, librosa, torchaudio, soundfile, sox, onnxruntime, einops), plus what
@@ -2265,19 +2268,27 @@ def ensure_codes(p: Params, lay: Layout, folder: str, dataset_hash: str, rows: i
 
 
 # --------------------------------------------------------------------------------------------- training
-def build_patched_script(lay: Layout, impl: str = ATTN_FALLBACK_IMPL) -> str:
-    """Copy sft_12hz.py to /content with the attention implementation changed. The cached repo is never touched."""
+def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) -> str:
+    """Copy sft_12hz.py to /content with the changes this runner needs. The cached repo is never touched.
+
+    Always: a TensorBoard log directory is added to the Accelerator (the installed accelerate refuses ``log_with="tensorboard"`` without
+    one; the script never writes events anyway). With ``impl``: the attention implementation is changed from flash_attention_2."""
     src = os.path.join(lay.local_repo, "finetuning", "sft_12hz.py")
     with open(src, encoding="utf-8") as fh:
         text = fh.read()
-    if text.count(FLASH_LINE) != 1:
-        raise StepFailed("sft_12hz.py does not contain the expected attention line exactly once, so it cannot be patched safely "
+    if text.count(ACCEL_LINE) != 1 or (impl and text.count(FLASH_LINE) != 1):
+        raise StepFailed("sft_12hz.py does not contain the expected lines exactly once, so it cannot be patched safely "
                          "(the repo is not the pinned commit?).")
+    text = text.replace(ACCEL_LINE, ACCEL_FIXED)
+    note = "# Copy of Qwen's sft_12hz.py written by VoiceStudio: a TensorBoard project_dir was added to the Accelerator."
+    if impl:
+        text = text.replace(FLASH_LINE, f'attn_implementation="{impl}"')
+        note = ("# UNVERIFIED copy of Qwen's sft_12hz.py written by VoiceStudio: attention changed from flash_attention_2 to "
+                f"{impl}, and a TensorBoard project_dir was added to the Accelerator.")
     os.makedirs(lay.patched, exist_ok=True)
     out = os.path.join(lay.patched, "sft_12hz_patched.py")
     with open(out, "w", encoding="utf-8") as fh:
-        fh.write("# UNVERIFIED copy of Qwen's sft_12hz.py written by VoiceStudio: attention changed from flash_attention_2 to "
-                 f"{impl}.\n" + text.replace(FLASH_LINE, f'attn_implementation="{impl}"'))
+        fh.write(note + "\n" + text)
     return out
 
 
@@ -2287,7 +2298,8 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
     ft = os.path.join(lay.local_repo, "finetuning")
     return {
         "cwd": dataset_dir,
-        "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", "")},
+        "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", ""),
+                "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard")},
         "train": [py(), "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
                   "--output_model_path", out_dir or lay.local_checkpoints, "--train_jsonl", codes or lay.codes_local, "--batch_size", str(batch),
                   "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", p.speaker_name],
@@ -2339,7 +2351,10 @@ def _preflight(p: Params, lay: Layout, gpu: Optional[Gpu]) -> tuple:
 
 def _announce_patch(path: str, lay: Layout) -> Optional[str]:
     if path != "sdpa":
-        return None
+        patched = build_patched_script(lay, None)
+        say(f"Training script: a copy of Qwen's sft_12hz.py with one change, a TensorBoard log directory ({patched}); attention is untouched "
+            "(FlashAttention 2). Qwen's cached repo is unchanged.")
+        return patched
     patched = build_patched_script(lay)
     say("*" * 78)
     say("ATTENTION: training with a PATCHED COPY of sft_12hz.py (PyTorch SDPA attention instead of FlashAttention 2).")

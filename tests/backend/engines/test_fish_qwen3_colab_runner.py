@@ -77,7 +77,7 @@ class Env:
     def install_repo_and_models(self):
         ft = os.path.join(self.lay.local_repo, "finetuning")
         os.makedirs(ft)
-        open(os.path.join(ft, "sft_12hz.py"), "w").write('x = 1\nattn_implementation="flash_attention_2"\n')
+        open(os.path.join(ft, "sft_12hz.py"), "w").write('x = 1\nattn_implementation="flash_attention_2"\naccelerator = Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard")\n')
         for m in (self.p.base_model, self.p.tokenizer_model):
             d = vs.local_model_dir(self.lay, m)
             os.makedirs(d)
@@ -920,7 +920,7 @@ def test_training_end_to_end_with_progress_status_metrics_snapshot_and_safe_chec
     assert metrics[0].startswith("time,epoch,step,loss") and len(metrics) > 2
     snap = json.load(open(os.path.join(lay.environment, "snapshot.json")))
     assert snap["qwen_commit"] == vs.QWEN_COMMIT and snap["outcome"] == "done" and snap["dataset_hash"] and snap["gpu"]["name"] == A100.name
-    assert snap["settings"]["epochs"]["source"] == "owner override" and "sft_12hz.py" in snap["commands"]["train"] and "packages" in snap
+    assert snap["settings"]["epochs"]["source"] == "owner override" and "sft_12hz" in snap["commands"]["train"] and "packages" in snap
     assert json.load(open(os.path.join(lay.run_config, "settings.json")))["batch_size"]["value"] == 2
     # codes cached for the next run with the dataset hash
     assert os.path.isfile(lay.codes) and json.load(open(lay.codes_meta))["dataset_hash"] == snap["dataset_hash"]
@@ -996,6 +996,21 @@ def test_the_sdpa_path_trains_with_a_patched_copy_and_leaves_the_cached_repo_alo
     open(os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py"), "w").write("nothing here")
     with pytest.raises(vs.StepFailed, match="cannot be patched safely"):
         vs.build_patched_script(e.lay)
+
+
+def test_the_flash_path_also_trains_from_a_copy_that_has_a_tensorboard_log_directory(tmp_path, monkeypatch, capsys):
+    e = _flow_env(tmp_path)
+    original = open(os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py")).read()
+    seen = []
+    handler = fake_trainer()
+    run_train(e, lambda *a: (seen.append((list(a[0]), a[2] if len(a) > 2 else None)), handler(*a))[1], gpu=A100, monkeypatch=monkeypatch)
+    train_cmd = next(c for c, _ in seen if "--num_epochs" in c)
+    text = open(train_cmd[2]).read()
+    assert train_cmd[2].endswith("sft_12hz_patched.py")
+    assert 'project_dir=os.environ.get("VS_TENSORBOARD_DIR"' in text and 'attn_implementation="flash_attention_2"' in text and "sdpa" not in text
+    assert open(os.path.join(e.lay.local_repo, "finetuning", "sft_12hz.py")).read() == original
+    assert "attention is untouched" in capsys.readouterr().out
+    assert "VS_TENSORBOARD_DIR" in vs.plan_commands(e.p, e.lay, "/d", 2)["env"]
 
 
 def test_the_timing_run_works_on_both_attention_paths_and_touches_no_real_run(tmp_path, monkeypatch, capsys):
