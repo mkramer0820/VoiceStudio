@@ -1,5 +1,7 @@
 # Session state: Fish pipeline, training data and the Qwen3-TTS Colab run
 
+**Read [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) first for anything about Colab or Qwen3 training: it records the real runs, the root causes and the current recipe, and corrects older lines below.**
+
 Short and current. If a line here is wrong, correct it when you find out. Details live in [../engines/fish-audio-handoff.md](../engines/fish-audio-handoff.md).
 
 ## The project in five lines
@@ -27,7 +29,7 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 | Colab runner and notebook (Drive cache, GPU-aware, safe checkpoint copy, timing run) | Done, unverified (fakes only) | `qwen3_colab_runner.py`, `notebooks/` | first real Colab run |
 | OmniVoice LoRA path and local Train dialog | Done, unverified | `omnivoice/training/lora.py` | not part of the Qwen plan |
 | Agent docs (this folder) | Done | `docs/agents/` | keep this file current |
-| **First real Colab run** (timing run, then narrator pilot) | **Not started** | [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md) | everything |
+| **Colab training runs** | **In progress**: run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6, 8 epochs) gave a narrator-like voice at epoch 2 (owner listened) | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare all epochs by ear, then one targeted change at a time |
 | Push branch / pull request | Not started (owner decision) | n/a | owner's call |
 | Load a trained Qwen model into the app | Not built | n/a | after a trained model exists |
 
@@ -46,7 +48,7 @@ Checked means automated tests pass (backend pytest, frontend vitest, typecheck, 
 | In-repo LoRA for the OmniVoice trainer and a local Train dialog | Built, tested on tiny CPU models; not used for the Qwen plan |
 
 ## Not verified (nothing below has happened yet)
-- **No run on Colab or any GPU.** Every Colab path (install next to Colab's torch, FlashAttention wheels, the patched SDPA copy for Blackwell, checkpoint copy, the notebook cells) is untested.
+- Colab was run on a real A100 (see QWEN3_TRAINING_STATE.md for what was verified). Still unverified: the Blackwell SDPA copy, the isolated uv environment (`USE_VENV`), interrupting a training run on Colab, and which epoch gives the best voice.
 - **The UI has never been viewed.** Layout, wording and the Explorer/export dialog were checked by component tests with mocked text.
 - Compute-unit rates in the notebook are the owner's figures, not confirmed. Batch sizes and memory numbers are estimates.
 - Qwen's inference call used for the final sample is taken from its README and unconfirmed.
@@ -64,13 +66,13 @@ True resume with optimizer state (the official script saves weights only), per-e
 - Colab budget: 100 compute units. The A100 is the planned first runtime; the G4 (Blackwell) is optional and uses a fallback attention path.
 
 ## Still open (ask the owner)
-1. Clip length range for the pilot (the owner was weighing 3-20 s vs 8-15 s; 4 s lower bound suggested). Not decided.
+1. Clip length range: decided, 4 to 20 s (683 clips, 105 minutes).
 2. Which GPU runtime they actually pick, and whether the timing run projection fits their 100 units.
 3. Whether to push `ext/fish-qwen3-export` (and open a pull request). Do not push without being told.
 4. Whether `KEEP_ALL=True` (every epoch kept, several GB each) is fine for their Drive space.
 
 ## What to do next: the first real Colab run
-Use [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md). In short: confirm the export exists and the ZIP is on Drive, open the notebook, do the **timing run first**, review its projection with the owner, then the real run, then listen to the epoch checkpoints. Fix whatever breaks (most likely install, FlashAttention or memory) in `qwen3_colab_runner.py` with a test, and report. **Never start a Colab session, upload data or spend credits without the owner's go.**
+Use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) (the timing run and first run are done). In short: ask the owner how the epochs of run 2 compare, then make one targeted change at a time. Fix whatever breaks (most likely install, FlashAttention or memory) in `qwen3_colab_runner.py` with a test, and report. **Never start a Colab session, upload data or spend credits without the owner's go.**
 
 ## Traps already hit
 - Windows + Git Bash: a plain `git add` can rewrite the locale JSON files' CRLF line endings (a 79,000-line diff). Stage them with `git hash-object -w --no-filters <f>` then `git update-index --cacheinfo 100644,<hash>,<f>`. Read and write files with `newline=""`.

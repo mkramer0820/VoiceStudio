@@ -5,6 +5,7 @@ Works for any coding agent or human. Read in this order and stop when you have w
 | Need | Read | Size |
 |---|---|---|
 | Where the work stands, what is done, what is not ready, what to do next | [SESSION_STATE.md](SESSION_STATE.md) | ~2 min |
+| **Qwen3 fine-tuning: what happened on Colab, what we learned, current recipe (read before touching the runner or advising on settings)** | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | ~5 min |
 | A ready prompt to start the next session | [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md) | ~1 min |
 | Rules, limits, check commands, a code map (for delegated workers; everyone benefits) | [SUBAGENT_BRIEF.md](SUBAGENT_BRIEF.md) | ~3 min |
 | Writing a prompt for a worker you delegate to | [SUBAGENT_PROMPT_TEMPLATE.md](SUBAGENT_PROMPT_TEMPLATE.md) | ~1 min |

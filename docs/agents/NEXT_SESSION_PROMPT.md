@@ -7,11 +7,13 @@ You are continuing work on the VoiceStudio repository (a local-first voice app).
 
 READ ONLY THESE, in order, and nothing else until a step needs it:
 1. AGENTS.md (the repo contract; CLAUDE.md is a mirror) - skim the rules.
-2. docs/agents/README.md, then docs/agents/SESSION_STATE.md (current state, done/not done/unverified, open questions).
+2. docs/agents/README.md, then docs/agents/QWEN3_TRAINING_STATE.md (what really happened on Colab, root causes, current recipe, next steps), then docs/agents/SESSION_STATE.md (board and open questions).
 3. docs/agents/SUBAGENT_BRIEF.md (limits, check commands, code map, git rules).
 Only when you must change or debug something: the section of docs/engines/fish-audio-handoff.md named in SESSION_STATE.md (10b = Qwen3 export format facts, 10c = Colab runner), and the specific function in backend/engines/fish_api/qwen3_colab_runner.py (a 2,300-line file: search for the function name, do not read it whole).
 
 STATE IN BRIEF: branch ext/fish-qwen3-export (local only, not pushed). The export dialog on the "Training data" screen writes a Qwen3-TTS folder plus a ZIP, a Colab notebook (Qwen3_TTS_Colab_Training.ipynb) and one runner script (voicestudio_qwen3_colab.py). The notebook caches models/wheels/audio codes on Google Drive (My Drive/Qwen3TTS/), checks dependencies and data, shows live progress, copies each finished epoch to Drive only after verifying it, and has a SMOKE_RUN timing mode that projects time and compute units. Training runs on a 100-compute-unit Colab budget; A100 is the planned first runtime.
+
+CURRENT STATUS (overrides the older steps below): the timing run and two training runs are done. Do not repeat the first-run steps. Start from "Next steps" in QWEN3_TRAINING_STATE.md: ask the owner how run 2's epoch samples compare. Before recommending any training setting, read the model's code and its GitHub issues, and tell the owner whether each change affects a Colab session they have running.
 
 HARD RULES (more in SUBAGENT_BRIEF.md):
 - Do NOT start a Colab session, upload data, run training, or spend compute units without the owner's explicit go for that exact step.
