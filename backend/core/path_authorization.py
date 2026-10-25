@@ -21,6 +21,7 @@ logger = logging.getLogger("omnivoice.path_authorization")
 _TOKEN_RE = re.compile(r"[0-9a-f]{64}\Z")
 _KINDS = {
     "models_dir",
+    "model_location",
     "ffmpeg",
     "ffprobe",
     "dub_export",

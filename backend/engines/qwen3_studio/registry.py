@@ -1,8 +1,9 @@
 """Qwen3-TTS studio: settings and the model registry.
 
 Models are found, never hard-coded: the checkpoint named by the engine's
-environment variable, every checkpoint folder under a root the user sets, and
-the stock Qwen3-TTS models already in the Hugging Face cache. Each gets a stable
+environment variable, every checkpoint under the folders listed in Settings ->
+Storage -> Model locations (``core.model_locations``), and the stock Qwen3-TTS
+models already in the Hugging Face cache. Each gets a stable
 id derived from its location, so a saved session keeps pointing at the same
 model after a restart. Nothing here loads a model or touches the network.
 """
@@ -13,6 +14,8 @@ import os
 import re
 from pathlib import Path
 from typing import Optional
+
+from core import model_locations
 
 SETTINGS_FILE = "settings.json"
 ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
@@ -26,7 +29,7 @@ _MAX_DEPTH = 6
 STOCK_SPEAKERS = {"serena": 3066, "vivian": 3065, "uncle_fu": 3010, "ryan": 3061, "aiden": 2861,
                   "ono_anna": 2873, "sohee": 2864, "eric": 2875, "dylan": 2878}
 
-_DEFAULTS = {"python": "", "checkpoint_root": "", "output_dir": "", "warmup_runs": 2,
+_DEFAULTS = {"python": "", "output_dir": "", "warmup_runs": 2,
              "warmup_text": "This is a short warm up sentence to settle the voice."}
 
 
@@ -63,7 +66,7 @@ def load_settings() -> dict:
 def save_settings(patch: dict) -> dict:
     merged = {**load_settings(), **{k: v for k, v in patch.items() if k in _DEFAULTS and v is not None}}
     merged["warmup_runs"] = max(0, min(10, int(merged["warmup_runs"])))
-    for key in ("python", "checkpoint_root", "output_dir"):
+    for key in ("python", "output_dir"):
         merged[key] = str(merged[key]).strip()
     path = os.path.join(studio_dir(), SETTINGS_FILE)
     tmp = path + ".tmp"
@@ -113,8 +116,11 @@ def _hf_caches() -> list[Path]:
     found: list[Path] = []
     explicit = os.environ.get("HF_HUB_CACHE")
     home = os.environ.get("HF_HOME")
+    legacy = os.environ.get("HUGGINGFACE_HUB_CACHE")
     if explicit:
         found.append(Path(explicit))
+    elif legacy:
+        found.append(Path(legacy))
     elif home:
         found.append(Path(home) / "hub")
     found.append(Path.home() / ".cache" / "huggingface" / "hub")
@@ -131,16 +137,16 @@ def _entry(folder: str, model_id: str, label: str, source: str) -> Optional[dict
         return None
     borrowable = [] if info["type"] == "voice_design" else [n for n in STOCK_SPEAKERS if n not in info["speakers"]]
     return {"id": model_id, "label": label, "path": os.path.abspath(folder), "source": source,
-            "borrowable_speakers": borrowable, **info}
+            "location": source, "borrowable_speakers": borrowable, **info}
 
 
-def _scan(root: str) -> list[dict]:
+def _scan(root: str, location: str = "checkpoint_root") -> list[dict]:
     found: list[dict] = []
     base = os.path.abspath(root)
     if not os.path.isdir(base):
         return found
     # The root may itself be a checkpoint (the user pointed at one folder, not a parent of several).
-    own = _entry(base, _slug(os.path.basename(base)), os.path.basename(base), "checkpoint_root")
+    own = _entry(base, _slug(os.path.basename(base)), os.path.basename(base), location)
     if own:
         return [own]
     for current, dirs, _files in os.walk(base):
@@ -149,7 +155,7 @@ def _scan(root: str) -> list[dict]:
         rel = os.path.relpath(current, base)
         if rel == ".":
             continue
-        entry = _entry(current, _slug(rel.replace(os.sep, "-")), " / ".join(rel.split(os.sep)[-3:]), "checkpoint_root")
+        entry = _entry(current, _slug(rel.replace(os.sep, "-")), " / ".join(rel.split(os.sep)[-3:]), location)
         if entry:
             found.append(entry)
             dirs[:] = []
@@ -178,9 +184,9 @@ def discover_models(settings: Optional[dict] = None) -> list[dict]:
         entry = _entry(env, "env-" + _slug(os.path.basename(env.rstrip("\\/"))), "Engine checkpoint (environment)", "environment")
         if entry:
             models[entry["id"]] = entry
-    root = (settings.get("checkpoint_root") or "").strip()
-    if root:
-        for entry in _scan(root):
+    for row in model_locations.load():
+        for entry in _scan(row["path"], row["id"]):
+            entry["location_name"] = row["name"]
             models.setdefault(entry["id"], entry)
     for entry in _stock_models():
         models.setdefault(entry["id"], entry)

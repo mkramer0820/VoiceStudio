@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 from dataclasses import asdict
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -1099,6 +1100,94 @@ def set_models_dir(body: _ModelsDirBody):
     return {"configured": path, "effective": _effective_models_dir(), "restart_required": True}
 
 
+# ── Model locations (Settings → Storage) ───────────────────────────────────
+# Extra folders the app searches for local models and custom checkpoints. The
+# folder comes from the native picker (same one-shot ``authorization`` token as
+# the models directory); removing a row never deletes files.
+
+
+class _LocationAddBody(BaseModel):
+    authorization: str = Field(description="One-shot native desktop authorization (kind model_location)")
+    name: str = Field("", max_length=80)
+
+
+class _LocationEditBody(BaseModel):
+    authorization: Optional[str] = Field(None, description="Only when the folder itself changes")
+    name: Optional[str] = Field(None, max_length=80)
+
+
+def _location_status(row: dict) -> dict:
+    """The row plus a quick look inside it: no model load, no network."""
+    from engines.qwen3_studio import registry
+
+    exists = os.path.isdir(row["path"])
+    out = {**row, "exists": exists, "models": [], "error": None}
+    if not exists:
+        out["error"] = "folder missing"
+        return out
+    try:
+        out["models"] = [
+            {k: m[k] for k in ("id", "label", "path", "type", "size", "speakers", "bytes")}
+            for m in registry._scan(row["path"], row["id"])  # noqa: SLF001 - one discovery code path
+        ]
+    except OSError as exc:
+        out["error"] = f"cannot read folder ({type(exc).__name__})"
+    out["models_found"] = len(out["models"])
+    return out
+
+
+def _location_path(token: str) -> str:
+    from core.path_authorization import PathAuthorizationError, consume
+
+    try:
+        raw = consume(token, "model_location").strip()
+    except PathAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not raw or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    path = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isdir(path):
+        raise HTTPException(status_code=400, detail="Folder does not exist")
+    return path
+
+
+@router.get("/storage/model-locations")
+def get_model_locations():
+    from core import model_locations
+
+    return {"locations": [_location_status(r) for r in model_locations.load()]}
+
+
+@router.post("/storage/model-locations")
+def add_model_location(body: _LocationAddBody):
+    from core import model_locations
+
+    path = _location_path(body.authorization)
+    row = model_locations.add(body.name.strip() or os.path.basename(path.rstrip("\\/")) or path, path)
+    return _location_status(row)
+
+
+@router.put("/storage/model-locations/{location_id}")
+def edit_model_location(location_id: str, body: _LocationEditBody):
+    from core import model_locations
+
+    path = _location_path(body.authorization) if body.authorization else None
+    row = model_locations.replace(location_id, name=body.name, path=path)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Unknown model location")
+    return _location_status(row)
+
+
+@router.delete("/storage/model-locations/{location_id}")
+def delete_model_location(location_id: str):
+    """Remove the row from the list. The folder and its files are left alone."""
+    from core import model_locations
+
+    if not model_locations.remove(location_id):
+        raise HTTPException(status_code=404, detail="Unknown model location")
+    return {"removed": location_id}
+
+
 # ── Storage report (Settings → Storage) ────────────────────────────────────
 # Per-volume disk totals + du-style sizes for everything the app owns (HF
 # model cache, app data subtotals, engine venvs, temp files) with server-side
@@ -1260,7 +1349,7 @@ def set_hf_mirror(body: _HFMirrorBody):
     # Auto mode = no explicit endpoint anywhere; a persisted endpoint would
     # read as an explicit choice, so switching to Auto clears it (plus the
     # `hf_endpoint` pref fallback the download paths resolve).
-    url = "" if mode == "auto" else (body.url or "").strip().rstrip("/")
+    url = "" if mode == "auto" else (body.url or "").strip().rstrip("\\/")
     if url:
         reason = _hf_mirror_url_problem(url)
         if reason:
@@ -1268,7 +1357,7 @@ def set_hf_mirror(body: _HFMirrorBody):
     # Compare against the currently-persisted value (normalised the same way) so
     # a no-op save doesn't nag the user to restart. Only a real change to the
     # persisted endpoint can require a restart.
-    previous = (user_env.get_user_env(_HF_ENDPOINT_ENV) or "").strip().rstrip("/")
+    previous = (user_env.get_user_env(_HF_ENDPOINT_ENV) or "").strip().rstrip("\\/")
     changed = url != previous
     try:
         if url:

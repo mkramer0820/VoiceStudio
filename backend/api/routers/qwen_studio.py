@@ -73,6 +73,7 @@ def state():
 
 class _SettingsBody(BaseModel):
     python: Optional[str] = Field(None, max_length=500)
+    #: Accepted for old clients and ignored: model folders live in Settings -> Storage -> Model locations.
     checkpoint_root: Optional[str] = Field(None, max_length=500)
     output_dir: Optional[str] = Field(None, max_length=500)
     warmup_runs: Optional[int] = Field(None, ge=0, le=10)
@@ -81,6 +82,8 @@ class _SettingsBody(BaseModel):
 
 @router.put("/settings")
 def save_settings(body: _SettingsBody):
+    """Save python, output folder and warm-up settings. ``checkpoint_root`` is accepted but ignored (see
+    ``/api/settings/storage/model-locations``)."""
     saved = _reg().save_settings(body.model_dump(exclude_unset=True))
     if "python" in body.model_fields_set and not _pg().is_running():
         _pg().unload_engine()  # the next run starts the sidecar with the new python

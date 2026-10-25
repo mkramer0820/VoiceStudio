@@ -36,7 +36,10 @@ def studio(tmp_path, monkeypatch):
     root = tmp_path / "ckpts"
     _checkpoint(root / "Run_2_EP09" / "checkpoints" / "checkpoint-epoch-9")
     _checkpoint(tmp_path / "hf" / "models--Qwen--Qwen3-TTS-12Hz-1.7B-Base" / "snapshots" / "abc", kind="base", speakers=())
-    registry.save_settings({"checkpoint_root": str(root), "output_dir": str(tmp_path / "out"), "python": "py"})
+    from core import model_locations
+
+    model_locations.add("Fine-tunes", str(root))
+    registry.save_settings({"output_dir": str(tmp_path / "out"), "python": "py"})
     yield tmp_path
     from engines import qwen3_narrator
 
