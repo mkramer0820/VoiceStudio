@@ -305,3 +305,16 @@ def test_python_setting_falls_back_to_project_venv_only(monkeypatch):
     assert registry.effective_python({"python": " /mine/python "}) == "/mine/python"
     monkeypatch.setattr(registry, "default_python", lambda: "")
     assert registry.effective_python({"python": ""}) is None  # never PATH, base or the app's venv
+
+
+def test_scan_finds_a_root_that_is_itself_a_checkpoint(tmp_path):
+    from engines.qwen3_studio import registry
+
+    ckpt = tmp_path / "ss_narrator"
+    ckpt.mkdir()
+    (ckpt / "model.safetensors").write_bytes(b"x")
+    (ckpt / "config.json").write_text(
+        '{"tts_model_type": "custom_voice", "tts_model_size": "1b7", "talker_config": {"spk_id": {"ss_narrator": 3000}}}',
+        encoding="utf-8")
+    assert [m["id"] for m in registry._scan(str(ckpt))] == ["ss_narrator"]
+    assert [m["id"] for m in registry._scan(str(tmp_path))] == ["ss_narrator"]

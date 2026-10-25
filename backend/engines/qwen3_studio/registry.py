@@ -139,6 +139,10 @@ def _scan(root: str) -> list[dict]:
     base = os.path.abspath(root)
     if not os.path.isdir(base):
         return found
+    # The root may itself be a checkpoint (the user pointed at one folder, not a parent of several).
+    own = _entry(base, _slug(os.path.basename(base)), os.path.basename(base), "checkpoint_root")
+    if own:
+        return [own]
     for current, dirs, _files in os.walk(base):
         depth = os.path.relpath(current, base).count(os.sep)
         dirs[:] = [d for d in dirs if d not in _SKIP] if depth < _MAX_DEPTH else []
