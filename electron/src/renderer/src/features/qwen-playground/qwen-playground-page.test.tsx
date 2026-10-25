@@ -24,12 +24,12 @@ vi.mock('react-i18next', () => ({
 import { QwenPlaygroundPage } from './qwen-playground-page';
 
 const STATE = {
-  settings: { python: 'py', checkpoint_root: 'ck', output_dir: 'C:/out', warmup_runs: 1, warmup_text: 'Warm.' },
+  settings: { python: 'py', output_dir: 'C:/out', warmup_runs: 1, warmup_text: 'Warm.' },
   output_dir_default: 'C:/default',
   engine: { available: true, reason: '' },
   models: [
-    { id: 'ep09', label: 'Run 2 EP09', path: 'p1', source: 'checkpoint', type: 'custom_voice', size: '1.7B', speakers: ['ss_narrator'], borrowable_speakers: ['ryan'] },
-    { id: 'base17', label: 'Stock Base', path: 'p2', source: 'hf', type: 'base', size: '1.7B', speakers: [], borrowable_speakers: ['ryan'] },
+    { id: 'ep09', label: 'Run 2 EP09', path: 'p1', source: 'loc1', location: 'loc1', location_name: 'Production', type: 'custom_voice', size: '1.7B', speakers: ['ss_narrator'], borrowable_speakers: ['ryan'] },
+    { id: 'base17', label: 'Stock Base', path: 'p2', source: 'hf', location: 'huggingface_cache', type: 'base', size: '1.7B', speakers: [], borrowable_speakers: ['ryan'] },
   ],
   stock_speakers: ['ryan'],
   profiles: [{ id: 'p-shadow', name: 'Shadow', ref_text: 'Hello.', language: 'English', kind: 'clone' }],
@@ -151,4 +151,41 @@ it('warns about a mismatched model without blocking, and adds, duplicates and re
   expect(screen.getAllByRole('article')).toHaveLength(2);
   // Left with a Base take and a narrator take: two models, two loads.
   expect(screen.getByTestId('loads').textContent).toContain('"count":2');
+});
+
+it('has no checkpoint-folder box, links to Settings and names where each model lives', async () => {
+  await ready();
+  expect(screen.queryByText('qwenPlayground.checkpoint_root')).toBeNull();
+  expect(screen.getByText('modelLocations.manage_folders')).toBeTruthy();
+  const labels = screen.getAllByRole('option').map((o) => o.textContent);
+  expect(labels).toContain('Run 2 EP09, Production (custom_voice, 1.7B)');
+  expect(labels.some((l) => l?.includes('Stock Base, modelLocations.loc_hf'))).toBe(true);
+});
+
+it('warns, without blocking, when a take points at a model that is no longer found', async () => {
+  await ready();
+  fireEvent.change(screen.getByLabelText('qwenPlayground.prompt'), { target: { value: 'Hello.' } });
+  mock.api.mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/qwen/state') return Promise.resolve(STATE);
+    if (path === '/api/qwen/playground/run') {
+      runBody = JSON.parse(String(init?.body));
+      return Promise.resolve({
+        ...job('done', [DONE_WARN]),
+        takes: [
+          take({
+            id: runBody!.takes[0].id,
+            model_id: 'gone',
+            model: { label: 'Old tune', type: 'custom_voice', path: 'D:/old/ep3' },
+            results: [DONE_WARN],
+          }),
+        ],
+      });
+    }
+    return Promise.resolve({});
+  });
+  fireEvent.click(screen.getByText('qwenPlayground.run_all'));
+  await waitFor(() =>
+    expect(screen.getByText(/modelLocations\.model_not_found.*Old tune.*D:\/old\/ep3/)).toBeTruthy(),
+  );
+  await waitFor(() => expect(screen.getByLabelText('take-001.wav')).toBeTruthy());
 });

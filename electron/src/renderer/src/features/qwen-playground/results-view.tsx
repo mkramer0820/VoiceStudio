@@ -3,11 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangleIcon, StarIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { RenderPlayer, type AbPick } from './audio-player';
-import { resultWarnings, type RenderResult, type TakeView } from './qwen-model';
+import { modelIsMissing, resultWarnings, type QwenModel, type RenderResult, type TakeView } from './qwen-model';
 
 interface Props {
   session: string;
   take: TakeView;
+  /** Models the app can find now; a take whose model is not among them gets a warning. */
+  models?: QwenModel[];
   ab: { a: AbPick | null; b: AbPick | null };
   onPick: (slot: 'a' | 'b', pick: AbPick) => void;
   onAnnotate: (takeId: string, patch: { notes?: string; starred?: boolean }) => Promise<boolean> | void;
@@ -63,7 +65,7 @@ function ResultRow({ session, take, result, ab, onPick }: Pick<Props, 'session' 
 }
 
 /** One take's renders, notes and star: used for the live run and for a past session alike. */
-export function ResultsView({ session, take, ab, onPick, onAnnotate }: Props) {
+export function ResultsView({ session, take, models, ab, onPick, onAnnotate }: Props) {
   const { t } = useTranslation();
   const [notes, setNotes] = useState(take.notes ?? '');
   const [saved, setSaved] = useState(take.notes ?? '');
@@ -74,6 +76,12 @@ export function ResultsView({ session, take, ab, onPick, onAnnotate }: Props) {
   const doneCount = take.results.filter((r) => r.status === 'done' || r.status === 'error').length;
   return (
     <div className="space-y-2 border-t border-border/40 pt-2">
+      {modelIsMissing(take.model_id, models) && (
+        <p role="alert" className="flex items-start gap-1 text-xs text-amber-500">
+          <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+          {t('modelLocations.model_not_found', { label: take.model?.label ?? take.model_id, path: take.model?.path ?? '' })}
+        </p>
+      )}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>{t('qwenPlayground.take_progress', { done: doneCount, total: take.repeat })}</span>
         <Button

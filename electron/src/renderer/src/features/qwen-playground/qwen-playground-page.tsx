@@ -46,7 +46,7 @@ export function QwenPlaygroundPage() {
       </WorkspaceHeader>
 
       <CloneVoiceDialog open={cloneOpen} onOpenChange={setCloneOpen} onSave={pg.addProfile} />
-      <SessionsDialog open={sessionsOpen} onOpenChange={setSessionsOpen} ab={ab} onPick={pick} />
+      <SessionsDialog open={sessionsOpen} onOpenChange={setSessionsOpen} ab={ab} onPick={pick} models={pg.models} />
 
       <SetupBar pg={pg} selectedCount={selected.size} onRunSelected={() => void pg.run(selected)} />
 
@@ -100,6 +100,7 @@ export function QwenPlaygroundPage() {
                   key={`${job.id}-${take.id}`}
                   session={job.session}
                   take={view}
+                  models={pg.models}
                   ab={ab}
                   onPick={pick}
                   onAnnotate={(takeId, patch) => pg.annotate(job.session, takeId, patch)}

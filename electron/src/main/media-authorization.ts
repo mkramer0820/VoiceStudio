@@ -39,6 +39,15 @@ export async function authorizeMediaTool(dataDir: string, selected: string, kind
   return writeAuthorization(dataDir, kind, path);
 }
 
+/** A folder to search for local models. Read-only: nothing is created or written there. */
+export async function authorizeModelLocation(dataDir: string, selected: string) {
+  if (!isAbsolute(dataDir)) throw new Error('Expected an absolute data directory');
+  if (!isAbsolute(selected)) throw new Error('Expected an absolute model folder');
+  const path = await realpath(selected);
+  if (!(await stat(path)).isDirectory()) throw new Error('Expected a directory');
+  return writeAuthorization(dataDir, 'model_location', path);
+}
+
 export async function authorizeModelsDirectory(dataDir: string, selected: string) {
   if (!isAbsolute(dataDir)) throw new Error('Expected an absolute data directory');
   if (selected === '') return writeAuthorization(dataDir, 'models_dir', '');

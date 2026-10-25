@@ -13,6 +13,10 @@ export interface QwenModel {
   label: string;
   path: string;
   source: string;
+  /** The model-location row id, or `huggingface_cache` / `environment`. */
+  location?: string;
+  /** The row's display name, when the model comes from a Settings model location. */
+  location_name?: string;
   type: ModelType;
   size: string;
   speakers: string[];
@@ -30,7 +34,6 @@ export interface QwenProfile {
 
 export interface QwenSettings {
   python: string;
-  checkpoint_root: string;
   output_dir: string;
   warmup_runs: number;
   warmup_text: string;
@@ -254,7 +257,7 @@ export interface Issue {
  */
 export function validateTake(take: TakeDraft, model: QwenModel | undefined, profiles: QwenProfile[]): Issue[] {
   const out: Issue[] = [];
-  if (!model) out.push({ code: 'no_model', blocking: true });
+  if (!model) out.push({ code: 'no_model', blocking: true, values: { id: take.modelId } });
   if (!take.text.trim()) out.push({ code: 'no_text', blocking: true });
   if (!model) return out;
   const speakerBorrowed = take.kind === 'custom_voice' && take.speaker.trim() !== '' && isBorrowed(model, take.speaker);
@@ -401,7 +404,7 @@ export interface TakeView {
   label: string;
   text: string;
   model_id: string;
-  model?: { label: string; type: string };
+  model?: { label: string; type: string; path?: string };
   repeat: number;
   results: RenderResult[];
   notes: string;
@@ -429,6 +432,19 @@ export interface SessionRow {
   takes: number;
   renders: number;
   folder: string;
+}
+
+/** The model's label with where it lives, so two folders with the same checkpoint name stay apart. */
+export function modelOptionLabel(m: QwenModel, where: { huggingface: string; environment: string }): string {
+  const place =
+    m.location_name ??
+    (m.location === 'huggingface_cache' ? where.huggingface : m.location === 'environment' ? where.environment : '');
+  return `${m.label}${place ? `, ${place}` : ''} (${m.type}, ${m.size})`;
+}
+
+/** True when a saved take points at a model the app can no longer find. Unknown until models are loaded. */
+export function modelIsMissing(modelId: string, models: QwenModel[] | undefined): boolean {
+  return !!models && models.length > 0 && !!modelId && !models.some((m) => m.id === modelId);
 }
 
 export const resultKey = (session: string, file: string) => `${session}/${file}`;

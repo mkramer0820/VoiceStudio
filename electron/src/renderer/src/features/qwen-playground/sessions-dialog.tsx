@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { apiJson, describeError } from '@/lib/api/client';
 import type { AbPick } from './audio-player';
-import type { SessionRow, TakeView } from './qwen-model';
+import type { QwenModel, SessionRow, TakeView } from './qwen-model';
 import { ResultsView } from './results-view';
 import { listSessions, readSession } from './use-qwen-playground';
 
@@ -30,7 +30,9 @@ export function SessionsDialog({
   onOpenChange,
   ab,
   onPick,
+  models,
 }: {
+  models?: QwenModel[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   ab: { a: AbPick | null; b: AbPick | null };
@@ -109,7 +111,7 @@ export function SessionsDialog({
                   {take.model ? ` · ${take.model.label} (${take.model.type})` : ''}
                 </p>
                 <p className="line-clamp-2 text-xs text-muted-foreground">{take.text}</p>
-                <ResultsView session={opened.session} take={take} ab={ab} onPick={onPick} onAnnotate={annotate} />
+                <ResultsView session={opened.session} take={take} models={models} ab={ab} onPick={onPick} onAnnotate={annotate} />
               </section>
             ))}
           </div>

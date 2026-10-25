@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from '@tanstack/react-router';
 import { CheckCircle2Icon, AlertTriangleIcon, PlayIcon, SquareIcon, ZapOffIcon, LoaderCircleIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,16 +30,14 @@ export function SetupBar({
   const { t } = useTranslation();
   const { state } = pg;
   const [python, setPython] = useState('');
-  const [root, setRoot] = useState('');
   const [saved, setSaved] = useState(false);
   const settings = state?.settings;
   useEffect(() => {
     if (!settings) return;
     setPython(settings.python ?? '');
-    setRoot(settings.checkpoint_root ?? '');
   }, [settings]);
 
-  const dirty = !!settings && (python !== (settings.python ?? '') || root !== (settings.checkpoint_root ?? ''));
+  const dirty = !!settings && (python !== (settings.python ?? ''));
   const loadsOn = loadsFor(pg.takes, true);
   const loadsOff = loadsFor(pg.takes, false);
   const resolvedDir = pg.outputDir.trim() || state?.output_dir_default || '';
@@ -73,9 +72,11 @@ export function SetupBar({
         <Labeled label={t('qwenPlayground.python')} hint={t('qwenPlayground.python_hint')}>
           <Input className="h-8 font-mono text-xs" placeholder={state?.python_default ?? ''} value={python} onChange={(e) => { setPython(e.target.value); setSaved(false); }} />
         </Labeled>
-        <Labeled label={t('qwenPlayground.checkpoint_root')} hint={t('qwenPlayground.checkpoint_root_hint')}>
-          <Input className="h-8 font-mono text-xs" value={root} onChange={(e) => { setRoot(e.target.value); setSaved(false); }} />
-        </Labeled>
+        <div className="flex items-end text-xs">
+          <Link to="/settings/storage" className="text-primary underline-offset-2 hover:underline">
+            {t('modelLocations.manage_folders')}
+          </Link>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
@@ -83,7 +84,7 @@ export function SetupBar({
           size="sm"
           variant="outline"
           disabled={!dirty}
-          onClick={() => void pg.saveSettings({ python, checkpoint_root: root }).then((ok) => setSaved(ok))}
+          onClick={() => void pg.saveSettings({ python }).then((ok) => setSaved(ok))}
         >
           {t('qwenPlayground.save_settings')}
         </Button>

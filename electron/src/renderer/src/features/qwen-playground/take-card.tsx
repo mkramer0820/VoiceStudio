@@ -25,6 +25,7 @@ import {
   type Issue,
   type ModeCode,
   type QwenModel,
+  modelOptionLabel,
   type QwenProfile,
   type TakeDraft,
   type TakeParams,
@@ -166,7 +167,7 @@ export function TakeCard({
     const v = issue.values ?? {};
     switch (issue.code) {
       case 'no_model':
-        return t('qwenPlayground.issue_no_model');
+        return v.id ? t('modelLocations.model_not_found', { label: v.id, path: '' }) : t('qwenPlayground.issue_no_model');
       case 'no_text':
         return t('qwenPlayground.issue_no_text');
       case 'pair_mismatch':
@@ -274,7 +275,7 @@ export function TakeCard({
                   {!model && <option value={take.modelId}>{take.modelId || t('qwenPlayground.pick_model')}</option>}
                   {models.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {`${m.label} (${m.type}, ${m.size})`}
+                      {modelOptionLabel(m, { huggingface: t('modelLocations.loc_hf'), environment: t('modelLocations.loc_env') })}
                     </option>
                   ))}
                 </select>

@@ -12,6 +12,7 @@ import { HistoryRetention } from './privacy-settings';
 import { useSettingsAction } from './use-settings-action';
 import { fmtBytes } from '@shared/components/settings/models/format';
 import { ModelsDirectorySettings } from './models-directory-settings';
+import { ModelLocationsSettings } from './model-locations-settings';
 import { ResetSettings } from './reset-settings';
 import { DataDirectorySettings } from './data-directory-settings';
 import { UninstallSettings } from './uninstall-settings';
@@ -85,6 +86,7 @@ export function StorageSettings() {
     <>
       <DataDirectorySettings />
       <ModelsDirectorySettings />
+      <ModelLocationsSettings />
       <SettingsSection icon={HardDriveIcon} title={t('settings.storage_usage')}>
         <div className="flex items-center justify-between gap-3 p-4">
           <p className="text-sm text-muted-foreground">{t('settings.storage_desc')}</p>

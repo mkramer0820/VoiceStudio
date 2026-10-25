@@ -185,3 +185,17 @@ describe('request builder', () => {
     expect(buildRunRequest([c], SETUP).takes[0].voice).toEqual({ kind: 'clone_on_custom', speaker: 'ss_narrator', profile_id: 'p-shadow' });
   });
 });
+
+it('labels a model with where it lives, and detects a model that is gone', async () => {
+  const { modelOptionLabel, modelIsMissing } = await import('./qwen-model');
+  const where = { huggingface: 'HF', environment: 'Engine' };
+  const m = (over: object) =>
+    ({ id: 'a', label: 'ss_narrator', path: 'p', source: 's', type: 'custom_voice', size: '1.7B', speakers: [], ...over }) as never;
+  expect(modelOptionLabel(m({ location_name: 'Production' }), where)).toBe('ss_narrator, Production (custom_voice, 1.7B)');
+  expect(modelOptionLabel(m({ location: 'huggingface_cache' }), where)).toBe('ss_narrator, HF (custom_voice, 1.7B)');
+  expect(modelOptionLabel(m({}), where)).toBe('ss_narrator (custom_voice, 1.7B)');
+  expect(modelIsMissing('a', [m({})])).toBe(false);
+  expect(modelIsMissing('b', [m({})])).toBe(true);
+  expect(modelIsMissing('b', undefined)).toBe(false);
+  expect(modelIsMissing('b', [])).toBe(false);
+});

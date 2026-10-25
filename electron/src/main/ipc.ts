@@ -5,6 +5,7 @@ import { resolveBackendDownloadUrl } from './backend-download';
 import {
   assertMediaTool,
   authorizeMediaTool,
+  authorizeModelLocation,
   authorizeModelsDirectory,
 } from './media-authorization';
 import { isTrustedRenderer } from './trusted-renderer';
@@ -50,6 +51,7 @@ export const CHANNELS = {
   permissionsOpenSettings: 'permissions:openSettings',
   filesAuthorizeMediaTool: 'files:authorizeMediaTool',
   filesAuthorizeModelsDirectory: 'files:authorizeModelsDirectory',
+  filesAuthorizeModelLocation: 'files:authorizeModelLocation',
   filesExtractScript: 'files:extractScript',
   backendGetStatus: 'backend:getStatus',
   backendAcknowledgeCrash: 'backend:acknowledgeCrash',
@@ -559,6 +561,14 @@ export function registerIpc(
       selected = picked.filePaths[0];
     }
     return authorizeModelsDirectory(await backendDataDirectory(supervisor), selected);
+  });
+
+  ipcMain.handle(CHANNELS.filesAuthorizeModelLocation, async (event) => {
+    const owner = getMainWindow();
+    assertTrustedMainFrame(event, owner);
+    const picked = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] });
+    if (picked.canceled || !picked.filePaths[0]) return null;
+    return authorizeModelLocation(await backendDataDirectory(supervisor), picked.filePaths[0]);
   });
 
   ipcMain.handle(CHANNELS.filesSaveAudio, async (event, raw: unknown): Promise<SaveAudioResult> => {
