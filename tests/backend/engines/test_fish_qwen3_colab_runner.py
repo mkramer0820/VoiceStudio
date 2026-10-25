@@ -76,7 +76,7 @@ class Env:
         self.content = str(tmp_path / "content")
         os.makedirs(self.content, exist_ok=True)
         base = dict(drive_root=self.drive, local_root=self.content, speaker_name="Sunny", epochs=2, lr=2e-5, batch_size=2,
-                    sample_after_training=False, heartbeat_seconds=5)
+                    sample_after_training=False, heartbeat_seconds=5, fast_setup=False)  # the Drive-cache path stays covered; fast mode has its own tests
         self.p = vs.params_from({**base, **overrides}, env={})
         self.lay = vs.Layout(self.p)
 
@@ -1137,7 +1137,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
     monkeypatch.delitem(sys.modules, "voicestudio_qwen3_colab", raising=False)
     ns = {"DRIVE_ROOT": drive_root, "DATA_SOURCE": archive, "SPEAKER_NAME": "Sunny", "EPOCHS": 2, "LR": 2e-5, "BATCH_SIZE": 2, "BASE_MODEL": vs.BASE_MODEL,
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
-          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
+          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "FAST_SETUP": True, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
           "COMPARE_UNITS_PER_HOUR": None}
     saved_path = list(sys.path)
@@ -1676,3 +1676,39 @@ def test_gradient_accumulation_is_a_setting_that_reaches_the_training_script(tmp
     nb = qwen3_colab.render_notebook(grad_accum=2)
     assert "GRAD_ACCUM = 2" in nb and "grad_accum=GRAD_ACCUM" in nb
     assert qwen3_colab.estimate(qwen3_colab.settings_from({"batch_size": 2}), 640, accum=2)["updates_per_epoch"] == 160  # 320 batches of 2, 2 per update
+
+
+# ------------------------------------------------------------------------------------------------ fast setup (no slow Drive reads)
+def test_fast_setup_clones_the_repo_into_content_and_never_touches_the_drive_cache(tmp_path, monkeypatch):
+    e = Env(tmp_path, fast_setup=True)
+    vs.ensure_layout(e.p, create_run=False)
+    heads = {}
+    monkeypatch.setattr(vs, "_git_head", lambda repo: heads.get(repo))
+    calls = []
+
+    def fake_git(cmd, **k):
+        calls.append(list(cmd))
+        if cmd[:3] == ["git", "clone", "--quiet"]:
+            os.makedirs(cmd[-1], exist_ok=True)
+        if "checkout" in cmd:
+            heads[cmd[2]] = vs.QWEN_COMMIT
+        return 0
+
+    vs.ensure_repo(e.lay, stream=fake_git)
+    assert calls[0][-1] == e.lay.local_repo and not os.path.exists(e.lay.repo)  # the Drive copy was never created
+    assert os.path.isfile(os.path.join(e.lay.local_repo, vs.SOURCE_MARKER))
+    calls.clear()
+    vs.ensure_repo(e.lay, stream=fake_git)
+    assert calls == []  # a second call in the same session is a cache hit
+
+
+def test_fast_setup_keeps_pips_cache_and_the_models_off_drive(tmp_path):
+    fast, slow = Env(tmp_path / "f", fast_setup=True), Env(tmp_path / "s", fast_setup=False)
+    assert fast.lay.pip_cache.startswith(fast.content) and slow.lay.pip_cache.startswith(slow.drive)
+    vs.ensure_layout(fast.p, create_run=False)
+    got = []
+    vs.ensure_models(fast.p, fast.lay, download=lambda model, dest: (got.append(dest), os.makedirs(dest, exist_ok=True)))
+    assert got and all(d.startswith(fast.content) for d in got)  # downloaded straight to /content
+    assert not os.listdir(fast.lay.models) if os.path.isdir(fast.lay.models) else True  # nothing cached on Drive
+    assert vs.params_from({}, env={}).fast_setup is True and vs.params_from({"fast_setup": "no"}, env={}).fast_setup is False
+    assert "FAST_SETUP = True" in qwen3_colab.render_notebook() and "fast_setup=FAST_SETUP" in qwen3_colab.render_notebook()

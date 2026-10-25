@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "16"
+RUNNER_VERSION = "17"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -139,6 +139,7 @@ class Params:
     build_flash_attn: bool = False  # True: compile FlashAttention from source when no ready-made package exists (an hour or more, may fail)
     restart: bool = False
     local_root: str = "/content"
+    fast_setup: bool = True  # clone the Qwen repo and download the models straight into /content and keep pip's cache there too: reading them back from Drive took 60 to 150 s each session
     cache_models_on_drive: bool = True  # False: download models straight to /content (nothing cached on Drive)
     sample_after_training: bool = True
     sample_text: str = DEFAULT_SAMPLE_TEXT
@@ -183,7 +184,7 @@ class Params:
             raise StepFailed("GRAD_ACCUM must be 1-32.")
         self.flash_wheel = str(self.flash_wheel or "").strip()
         self.use_venv = "auto" if str(self.use_venv).strip().lower() in ("auto", "") else _truthy(self.use_venv)
-        for key in ("restart", "build_flash_attn", "smoke_run", "keep_all", "keep_first", "keep_final", "cache_models_on_drive", "sample_after_training"):
+        for key in ("restart", "build_flash_attn", "fast_setup", "smoke_run", "keep_all", "keep_first", "keep_final", "cache_models_on_drive", "sample_after_training"):
             setattr(self, key, _truthy(getattr(self, key)))
         if not self.keep_all and not (self.keep_last_n or self.keep_first or self.keep_final):
             raise StepFailed("KEEP_ALL is off but KEEP_LAST_N, KEEP_FIRST and KEEP_FINAL keep nothing: that would delete every checkpoint.")
@@ -226,7 +227,7 @@ def _truthy(v) -> bool:
     return v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-_ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "base_model", "tokenizer_model", "run_id",
+_ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "fast_setup", "base_model", "tokenizer_model", "run_id",
                "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "sample_after_training",
                "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour")
@@ -276,7 +277,8 @@ class Layout:
         self.models = os.path.join(self.cache, "models")
         self.repo = os.path.join(self.cache, "Qwen3-TTS")
         self.wheelhouse = os.path.join(self.cache, "wheelhouse")
-        self.pip_cache = os.path.join(self.cache, "pip")
+        self.fast_setup = bool(p.fast_setup)
+        self.pip_cache = os.path.join(p.local_root, "pip_cache") if p.fast_setup else os.path.join(self.cache, "pip")  # local disk when fast
         self.fingerprints = os.path.join(self.cache, "fingerprints.json")
         self.datasets = os.path.join(r, "datasets")
         self.logs = os.path.join(r, "logs")
@@ -948,6 +950,25 @@ def _git_head(repo: str) -> Optional[str]:
 def ensure_repo(lay: Layout, *, capture_fn: Callable = capture, stream: Callable = run_stream) -> None:
     """Pinned clone kept on Drive; a local copy under /content is what pip installs and the scripts run from."""
     say("== Qwen3-TTS repository (pinned commit " + QWEN_COMMIT[:10] + ")")
+    if lay.fast_setup:  # no Drive cache: clone straight into /content (a few MB from GitHub)
+        if _git_head(lay.local_repo) == QWEN_COMMIT:
+            say("Local copy is at the pinned commit (cache hit).")
+            return
+        if os.path.exists(lay.local_repo):
+            if not os.path.isfile(os.path.join(lay.local_repo, SOURCE_MARKER)):
+                raise StepFailed(f"{lay.local_repo} exists and was not made by this script; remove it or use another local folder.")
+            shutil.rmtree(lay.local_repo)
+        os.makedirs(os.path.dirname(lay.local_repo), exist_ok=True)
+        if stream(["git", "clone", "--quiet", QWEN_REPO, lay.local_repo]) != 0:
+            raise StepFailed("git clone of the Qwen3-TTS repository failed (network?).")
+        if stream(["git", "-C", lay.local_repo, "checkout", "--quiet", QWEN_COMMIT]) != 0:
+            stream(["git", "-C", lay.local_repo, "fetch", "--quiet", "origin", QWEN_COMMIT])
+            if stream(["git", "-C", lay.local_repo, "checkout", "--quiet", QWEN_COMMIT]) != 0:
+                raise StepFailed(f"Could not check out {QWEN_COMMIT}.")
+        with open(os.path.join(lay.local_repo, SOURCE_MARKER), "w", encoding="utf-8") as fh:
+            fh.write(QWEN_COMMIT + "\n")
+        say(f"Cloned straight into {lay.local_repo} (FAST_SETUP: the Drive copy of the repo is not used).")
+        return
     if _git_head(lay.repo) == QWEN_COMMIT:
         say("Drive copy is at the pinned commit (cache hit).")
     else:
@@ -1031,7 +1052,7 @@ def ensure_models(p: Params, lay: Layout, *, download: Callable = download_model
         if os.path.isfile(os.path.join(local, DONE_MARKER)):
             say(f"{model}: local copy at {local} (already there).")
             continue
-        if not p.cache_models_on_drive:
+        if not p.cache_models_on_drive or p.fast_setup:  # FAST_SETUP: Hugging Face to /content is faster than copying back from Drive
             with timed(f"model download {short} (straight to /content)"):
                 os.makedirs(local, exist_ok=True)
                 download(model, local)
