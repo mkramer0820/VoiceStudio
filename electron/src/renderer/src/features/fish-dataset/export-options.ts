@@ -215,9 +215,9 @@ export function qwenBody(form: QwenForm, referenceKey: string | null): Record<st
 export type QwenNumberKey = 'epochs' | 'learning_rate' | 'batch_size';
 export type QwenTextKey = 'base_model' | 'tokenizer_model' | 'drive_folder';
 export const QWEN_NUMBERS: Record<QwenNumberKey, NumberSpec & { advanced?: boolean }> = {
-  epochs: { def: 3, min: 1, max: 100, step: '1' },
-  learning_rate: { def: 2e-6, min: 1e-7, max: 1e-3, step: 'any' },
-  batch_size: { def: 2, min: 1, max: 256, step: '1' },
+  epochs: { def: 10, min: 1, max: 100, step: '1' },
+  learning_rate: { def: 1e-6, min: 1e-7, max: 1e-3, step: 'any' },
+  batch_size: { def: 4, min: 1, max: 256, step: '1' },
 };
 export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advanced?: boolean }> = {
   drive_folder: { def: 'Qwen3TTS', test: DRIVE_FOLDER },
@@ -225,7 +225,7 @@ export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advance
   tokenizer_model: { def: 'Qwen/Qwen3-TTS-Tokenizer-12Hz', test: MODEL_ID, advanced: true },
 };
 /** sft_12hz.py hard-codes Accelerator(gradient_accumulation_steps=4). */
-export const QWEN_ACCUMULATION = 4;
+export const QWEN_CLIPS_PER_UPDATE = 8; // batch x accumulation of the recipe that worked; the notebook sets accumulation from the batch size
 
 export interface QwenTrainForm {
   /** Fields the user typed into, as typed. An untouched field follows the script's default. */
@@ -270,7 +270,7 @@ export function qwenTrainBody(form: QwenTrainForm): Record<string, unknown> {
 export function qwenEstimate(clips: number, batchSize: number, epochs: number) {
   if (!(clips > 0) || !(batchSize >= 1) || !(epochs >= 1)) return null;
   const batches = Math.ceil(clips / batchSize);
-  const updates = Math.ceil(batches / QWEN_ACCUMULATION);
+  const updates = Math.ceil(batches / Math.max(1, Math.round(QWEN_CLIPS_PER_UPDATE / batchSize)));
   return { batches, updates, total: updates * epochs };
 }
 

@@ -14,6 +14,7 @@ import dataclasses
 import json
 import math
 import os
+import re
 import shlex
 import zlib
 from typing import Optional
@@ -22,7 +23,18 @@ from . import qwen3_colab_runner as runner
 from .qwen3_colab_runner import (BASE_MODEL, DEFAULT_DRIVE_FOLDER, FOLDER_RE, MODEL_RE, QWEN_COMMIT, QWEN_COMMIT_DATE,  # noqa: F401
                                  QWEN_REPO, READ_ON, SAMPLE_RATE, SESSION, SPEAKER_RE, TOKENIZER)
 
-ACCUMULATION = 4  # sft_12hz.py: Accelerator(gradient_accumulation_steps=4), not an option
+ACCUMULATION = 4  # sft_12hz.py: Accelerator(gradient_accumulation_steps=4); the patched copy made by the runner reads GRAD_ACCUM
+CLIPS_PER_UPDATE = 8  # the recipe that worked: batch x accumulation = 8 clips per optimizer update
+LEGACY_DRIVE_FOLDERS = {"VoiceStudio-training": DEFAULT_DRIVE_FOLDER}  # an old default; a dialog that kept it in memory must not reach a notebook
+# Community wheel for Colab's current default runtime (Python 3.13, torch 2.11, CUDA 13). The runner checks the file name against the
+# runtime before installing and quietly falls back to its own choices when it does not fit, so a stale value cannot break a run.
+COLAB_FLASH_WHEEL = ("https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/"
+                     "flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl")
+TRAILING_SILENCE_NOTE = "1 s of silence at the end of every training clip (reported to stop rushed speech and noise, Qwen3-TTS issue #39)"
+
+
+def accum_for(batch_size: int) -> int:
+    return max(1, round(CLIPS_PER_UPDATE / max(1, int(batch_size))))
 RUNNER_NAME = "voicestudio_qwen3_colab.py"
 NOTEBOOK_NAME = "Qwen3_TTS_Colab_Training.ipynb"
 DEFAULT_SAMPLE_TEXT = runner.DEFAULT_SAMPLE_TEXT
@@ -47,9 +59,9 @@ class TrainSettings:
     """What the official scripts take as arguments. Gradient accumulation (4), bf16 precision, FlashAttention 2 and
     saving once per epoch are fixed inside ``sft_12hz.py`` and are not options, so they are not offered here."""
 
-    epochs: int = 3  # sft_12hz.py --num_epochs (default 3)
-    learning_rate: float = 2e-6  # --lr. The script's own default (2e-5) makes the 1.7B model produce noise and never stop (Qwen3-TTS issue #39); 2e-6 is the README's step-3 value and the one people report working
-    batch_size: int = 2  # --batch_size (default 2; the README example uses 32)
+    epochs: int = 10  # the script's default is 3; the last epochs of the 105-minute run were still the best, so 10, and listen to every one
+    learning_rate: float = 1e-6  # --lr. The script's own default (2e-5) makes the 1.7B model produce noise and never stop (Qwen3-TTS issue #39); 1e-6 gave the good run
+    batch_size: int = 4  # --batch_size (the script's default is 2); 4 x accumulation 2 = 8 clips per update, the same recipe as 2 x 4, but faster
     base_model: str = BASE_MODEL  # --init_model_path
     tokenizer_model: str = TOKENIZER  # prepare_data.py --tokenizer_model_path
     drive_folder: str = DEFAULT_DRIVE_FOLDER  # everything lives under My Drive/<drive_folder>
@@ -77,7 +89,7 @@ def settings_from(spec: Optional[dict]) -> TrainSettings:
     folder = (out.drive_folder or "").strip("/")
     if not FOLDER_RE.fullmatch(folder) or len(folder) > 120 or any(p in (".", "..") for p in folder.split("/")):
         raise ValueError("The Drive folder is a folder name under My Drive (letters, digits, '.', '_', '-', and '/' to nest).")
-    out.drive_folder = folder
+    out.drive_folder = LEGACY_DRIVE_FOLDERS.get(folder, folder)
     return out
 
 
@@ -507,6 +519,17 @@ def runner_source() -> str:
         return fh.read().replace("\r\n", "\n")
 
 
+def assert_backend_is_current() -> None:
+    """The script is read from disk on every export, but the constants, defaults and notebook templates were loaded when the backend
+    started. A backend that was not restarted after an update would mix old and new (an old Drive folder name next to a new runner).
+    Refuse to export instead of writing outdated files."""
+    m = re.search(r'^RUNNER_VERSION = "(\d+)"', runner_source(), re.M)
+    on_disk = m.group(1) if m else "?"
+    if on_disk != runner.RUNNER_VERSION:
+        raise ValueError(f"The app's backend is running older code (Colab runner version {runner.RUNNER_VERSION}) than the files on disk "
+                         f"(version {on_disk}). Restart the app, then export again, so the export does not contain outdated files.")
+
+
 def _fill(template: str, values: dict) -> str:
     for key, value in values.items():
         template = template.replace(f"@@{key}@@", value)
@@ -520,7 +543,8 @@ def _summary(report: dict) -> str:
         f"  Source samples: {c['source_samples']}   Accepted: {c['accepted']}   Rejected: {c['rejected']}",
         f"  Accepted duration: {d['total']}   average {d['average_s']} s   median {d['median_s']} s   "
         f"shortest {d['shortest_s']} s   longest {d['longest_s']} s",
-        "  Audio: 24000 Hz, mono, WAV PCM16",
+        "  Audio: 24000 Hz, mono, WAV PCM16" + (f", plus {report['trailing_silence_s']:g} s of silence appended to every training clip"
+                                                if report.get("trailing_silence_s") else ""),
         f"  Reference: {ref['path']} from {ref['source']} ({ref['duration']} s): {ref['reason']}",
         f"  Train samples: {c['train']}   Validation samples: 0 (Qwen's scripts have none)",
     ]
@@ -530,6 +554,7 @@ def _summary(report: dict) -> str:
 
 def render_files(*, speaker: str, folder_name: str, zip_name: str, settings: TrainSettings, report: dict) -> dict:
     """The helper files for one export, as ``{file name: text}``."""
+    assert_backend_is_current()
     values = {
         "SPEAKER": speaker, "DIR": folder_name, "ZIP": zip_name, "DRIVE": settings.drive_folder, "COMMIT": QWEN_COMMIT,
         "COMMIT_DATE": QWEN_COMMIT_DATE, "BASE": settings.base_model, "BASE_NAME": settings.base_model.split("/")[-1],
@@ -544,5 +569,6 @@ def render_files(*, speaker: str, folder_name: str, zip_name: str, settings: Tra
         "colab_setup.sh": _fill(SETUP, values),
         "colab_commands.txt": _fill(COMMANDS, values),
         RUNNER_NAME: runner_source(),
-        NOTEBOOK_NAME: render_notebook(speaker=speaker, folder_name=folder_name, zip_name=zip_name, settings=settings),
+        NOTEBOOK_NAME: render_notebook(speaker=speaker, folder_name=folder_name, zip_name=zip_name, settings=settings,
+                                       flash_wheel=COLAB_FLASH_WHEEL, grad_accum=accum_for(settings.batch_size)),
     }

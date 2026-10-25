@@ -1675,4 +1675,4 @@ def test_gradient_accumulation_is_a_setting_that_reaches_the_training_script(tmp
     assert 'gradient_accumulation_steps=int(os.environ.get("VS_GRAD_ACCUM", "4"))' in out and "gradient_accumulation_steps=4" not in out
     nb = qwen3_colab.render_notebook(grad_accum=2)
     assert "GRAD_ACCUM = 2" in nb and "grad_accum=GRAD_ACCUM" in nb
-    assert qwen3_colab.estimate(qwen3_colab.settings_from({}), 640, accum=2)["updates_per_epoch"] == 160  # 320 batches of 2, 2 per update
+    assert qwen3_colab.estimate(qwen3_colab.settings_from({"batch_size": 2}), 640, accum=2)["updates_per_epoch"] == 160  # 320 batches of 2, 2 per update

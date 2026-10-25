@@ -53,6 +53,7 @@ class Options:
     overwrite: bool = False
     min_duration: float = 0.8
     max_duration: float = 30.0
+    trailing_silence_s: float = 1.0  # silence appended to every TRAINING clip (not the reference); see qwen3_colab.TRAILING_SILENCE_NOTE
 
 
 def options_from(spec: Optional[dict]) -> Options:
@@ -69,6 +70,9 @@ def options_from(spec: Optional[dict]) -> Options:
     if not 0.1 <= float(opts.min_duration) < float(opts.max_duration) <= 120:
         raise ValueError("Use 0.1 <= min duration < max duration <= 120 seconds.")
     opts.min_duration, opts.max_duration = float(opts.min_duration), float(opts.max_duration)
+    if not 0.0 <= float(opts.trailing_silence_s) <= 5.0:
+        raise ValueError("Trailing silence must be between 0 and 5 seconds (0 turns it off).")
+    opts.trailing_silence_s = float(opts.trailing_silence_s)
     if opts.reference_key and opts.reference_file:
         raise ValueError("Choose a reference clip or a reference file, not both.")
     return opts
@@ -100,15 +104,16 @@ def _inspect(path: str) -> dict:
                   "content_sha": hashlib.sha256(mono.tobytes()).hexdigest()}
 
 
-def _convert(path: str, target: str, loudness_db: Optional[float]) -> dict:
+def _convert(path: str, target: str, loudness_db: Optional[float], trail_s: float = 0.0) -> dict:
     """Write ``target`` as 24 kHz mono PCM16. A file that already is that is copied byte for byte.
 
-    With ``loudness_db`` the result also carries the level before and after (``before_db``, ``after_db``)."""
+    With ``loudness_db`` the result also carries the level before and after (``before_db``, ``after_db``).
+    With ``trail_s`` that many seconds of digital silence are appended (the file is then always rewritten)."""
     import numpy as np
     import soundfile as sf
 
     info = sf.info(path)
-    if (loudness_db is None and info.samplerate == RATE and info.channels == 1 and info.subtype == "PCM_16"
+    if (loudness_db is None and trail_s <= 0 and info.samplerate == RATE and info.channels == 1 and info.subtype == "PCM_16"
             and info.format == "WAV"):
         shutil.copyfile(path, target)
         return {"copied": True, "gain_db": 0.0, "peak_limited": False}
@@ -117,7 +122,10 @@ def _convert(path: str, target: str, loudness_db: Optional[float]) -> dict:
     level = {"gain_db": 0.0, "peak_limited": False}
     if loudness_db is not None:
         mono, level = dataset.apply_loudness(mono, loudness_db)
-    sf.write(target, np.clip(mono, -1.0, 1.0), RATE, subtype="PCM_16")
+    mono = np.clip(mono, -1.0, 1.0)
+    if trail_s > 0:
+        mono = np.concatenate([mono, np.zeros(int(round(RATE * trail_s)), dtype=mono.dtype)])
+    sf.write(target, mono, RATE, subtype="PCM_16")
     return {"copied": False, **level, "gain_db": round(level["gain_db"], 2)}
 
 
@@ -420,7 +428,8 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     train_rows: list[dict] = []
     for c in accepted:
         rel = f"audio/{c['number']:06d}.wav"
-        result = _convert(os.path.join(corpus.root, c["line"]["file"]), os.path.join(out_dir, *rel.split("/")), loudness_db)
+        result = _convert(os.path.join(corpus.root, c["line"]["file"]), os.path.join(out_dir, *rel.split("/")), loudness_db,
+                          opts.trailing_silence_s)
         copied += int(result["copied"])
         converted += int(not result["copied"])
         if levels is not None:
@@ -510,6 +519,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     ref_info = {k: v for k, v in reference.items()}
     report = {
         "format": FORMAT,
+        "trailing_silence_s": opts.trailing_silence_s,
         "speaker": {"name": voice_name, "voice_id": voice_id, "qwen_speaker_name": speaker},
         "counts": {"source_samples": len(lines), "accepted": n, "rejected": len(rejected), "train": n, "validation": 0,
                    "left_out_by_selection": sum(1 for l in all_speaker_lines if l["key"] not in in_selection and not l["duplicate"]),

@@ -319,9 +319,9 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     expect(within(dialog).queryByLabelText('fishDataset.qtr_epochs')).not.toBeInTheDocument();
     omniOn(dialog); // untick
     qwenOn(dialog);
-    expect(within(dialog).getByLabelText('fishDataset.qtr_epochs')).toHaveValue(3);
-    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(2e-6);
-    expect(within(dialog).getByLabelText('fishDataset.qtr_batch_size')).toHaveValue(2);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_epochs')).toHaveValue(10);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(1e-6);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_batch_size')).toHaveValue(4);
     expect(within(dialog).queryByLabelText('fishDataset.tr_steps')).not.toBeInTheDocument();
     expect(within(dialog).getByText('fishDataset.qtr_colab_only')).toBeInTheDocument();
     expect(within(dialog).queryByLabelText('fishDataset.export_val')).not.toBeInTheDocument(); // no validation split
@@ -352,9 +352,9 @@ describe('Qwen3-TTS in the shared Training setup', () => {
   it('shows an estimate from the script loop, not an audio rate', () => {
     const { dialog } = setup({ clips: 100 });
     qwenOn(dialog);
-    expect(within(dialog).getByTestId('qwen-estimate')).toHaveTextContent('"batches":50,"updates":13,"total":39');
-    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_batch_size'), { target: { value: '4' } });
-    expect(within(dialog).getByTestId('qwen-estimate')).toHaveTextContent('"batches":25,"updates":7,"total":21');
+    expect(within(dialog).getByTestId('qwen-estimate')).toHaveTextContent('"batches":25,"updates":13,"total":130'); // batch 4 x accumulation 2 = 8 clips per update, 10 epochs
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_batch_size'), { target: { value: '2' } });
+    expect(within(dialog).getByTestId('qwen-estimate')).toHaveTextContent('"batches":50,"updates":13,"total":130'); // 2 x 4: the same updates
     expect(within(dialog).getByText('fishDataset.qtr_estimate_note')).toBeInTheDocument();
     expect(within(dialog).queryByTestId('passes-estimate')).not.toBeInTheDocument();
   });
@@ -397,7 +397,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
 describe('Qwen option helpers', () => {
   it('sends only values that differ from the official script defaults', () => {
     expect(qwenTrainBody({ edits: {} })).toEqual({});
-    expect(qwenTrainBody({ edits: { epochs: '3', batch_size: '8', base_model: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base' } })).toEqual({
+    expect(qwenTrainBody({ edits: { epochs: '10', batch_size: '8', base_model: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base' } })).toEqual({
       batch_size: 8,
       base_model: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base',
     });

@@ -266,7 +266,7 @@ def test_training_settings_accept_only_what_the_official_script_takes(bad):
     with pytest.raises(ValueError):
         qwen3_colab.settings_from(bad)
     ok = qwen3_colab.settings_from({"epochs": 5, "drive_folder": "A/b-c"})
-    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 2, 2e-6)  # epochs and batch are the script's defaults; the learning rate is the value people report working (issue #39)
+    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 4, 1e-6)  # the recipe that gave the good run: batch 4 (x accumulation 2 = 8 clips per update), lr 1e-6
 
 
 def test_the_estimate_follows_the_scripts_loop_not_an_audio_rate():
@@ -451,7 +451,7 @@ def _level_set(tmp_path):
 def test_every_exported_clip_lands_within_a_decibel_of_the_target_and_the_report_says_so(tmp_path):
     corpus = _level_set(tmp_path)
     result = dataset.export(corpus, {"voice_ids": [NARR]}, str(tmp_path / "out"), formats=["qwen3_tts"], name="lv",
-                            loudness_db=-22.0, qwen3={"speaker_name": "Sunny"})
+                            loudness_db=-22.0, qwen3={"speaker_name": "Sunny", "trailing_silence_s": 0})  # the level is measured on the whole file
     out = result["path"]
     measured = [dataset_quality.measure(os.path.join(out, "audio", f"{n:06d}.wav")) for n in range(1, result["clips"] + 1)]
     assert len(measured) == 8
@@ -603,3 +603,57 @@ def test_pad_qwen3_dataset_adds_silence_to_clips_only_and_never_touches_the_orig
         mod.pad_dataset(str(src), str(src))
     with pytest.raises(FileNotFoundError):
         mod.pad_dataset(str(tmp_path / "nothing"), str(tmp_path / "x"))
+
+
+# ------------------------------------------------------------------------------------------------ trailing silence, legacy folder, notebook
+def test_the_export_appends_one_second_of_silence_to_training_clips_but_not_to_the_reference(tmp_path):
+    import soundfile as sf
+
+    corpus = _level_set(tmp_path)
+    on = dataset.export(corpus, {"voice_ids": [NARR]}, str(tmp_path / "on"), formats=["qwen3_tts"], name="on", loudness_db=-22.0,
+                        qwen3={"speaker_name": "Sunny"})
+    off = dataset.export(corpus, {"voice_ids": [NARR]}, str(tmp_path / "off"), formats=["qwen3_tts"], name="off", loudness_db=-22.0,
+                         qwen3={"speaker_name": "Sunny", "trailing_silence_s": 0})
+    for n in range(1, on["clips"] + 1):
+        a, ra = sf.read(os.path.join(on["path"], "audio", f"{n:06d}.wav"), dtype="int16")
+        b, rb = sf.read(os.path.join(off["path"], "audio", f"{n:06d}.wav"), dtype="int16")
+        assert ra == rb == 24000 and len(a) == len(b) + 24000  # exactly 1.000 s longer
+        assert not a[-24000:].any() and (a[:len(b)] == b).all()  # the added second is digital silence, the speech is untouched
+    ref_on, _ = sf.read(os.path.join(on["path"], "reference", "ref.wav"), dtype="int16")
+    ref_off, _ = sf.read(os.path.join(off["path"], "reference", "ref.wav"), dtype="int16")
+    assert len(ref_on) == len(ref_off)  # the reference clip is never padded
+    rep = json.load(open(os.path.join(on["path"], "dataset_report.json"), encoding="utf-8"))
+    assert rep["trailing_silence_s"] == 1.0
+    for bad in (-1, 9, "x"):
+        with pytest.raises((ValueError, TypeError)):
+            qwen3_export.options_from({"trailing_silence_s": bad})
+
+
+def test_a_dialog_that_still_holds_the_old_default_drive_folder_cannot_reach_a_notebook():
+    assert qwen3_colab.settings_from({"drive_folder": "VoiceStudio-training"}).drive_folder == "Qwen3TTS"
+    assert qwen3_colab.settings_from({"drive_folder": "MyOwnFolder"}).drive_folder == "MyOwnFolder"  # a real choice is kept
+    assert qwen3_colab.settings_from({}).drive_folder == "Qwen3TTS"
+
+
+def test_the_notebook_an_export_writes_needs_no_hand_edits(tmp_path):
+    settings = qwen3_colab.settings_from({"epochs": 10, "learning_rate": 1e-6, "batch_size": 4})
+    files = qwen3_colab.render_files(speaker="SS_Narrator", folder_name="narrator_3h", zip_name="narrator_3h.zip", settings=settings,
+                                     report={"counts": {"source_samples": 3, "accepted": 3, "rejected": 0, "train": 3},
+                                             "duration": {"total": "0:01", "average_s": 1, "median_s": 1, "shortest_s": 1, "longest_s": 1},
+                                             "speaker": {"name": "SS_Narrator", "qwen_speaker_name": "SS_Narrator"},
+                                             "reference": {"path": "reference/ref.wav", "source": "x", "duration": 5, "reason": "x"},
+                                             "warnings": [], "trailing_silence_s": 1.0})
+    nb = files[qwen3_colab.NOTEBOOK_NAME]
+    assert "VoiceStudio-training" not in "".join(files.values())
+    assert "GRAD_ACCUM = 2" in nb and "BATCH_SIZE = 4" in nb and "EPOCHS = 10" in nb  # 4 x 2 = 8 clips per update
+    assert "flash-attention-prebuild-wheels" in nb and "narrator_3h.zip" in nb
+    assert qwen3_colab.accum_for(2) == 4 and qwen3_colab.accum_for(4) == 2 and qwen3_colab.accum_for(8) == 1 and qwen3_colab.accum_for(16) == 1
+    assert "silence appended to every training clip" in files["README.txt"]
+
+
+def test_a_backend_running_older_code_than_the_files_on_disk_refuses_to_export(monkeypatch):
+    qwen3_colab.assert_backend_is_current()  # in sync: fine
+    monkeypatch.setattr(qwen3_colab.runner, "RUNNER_VERSION", "1")
+    settings = qwen3_colab.settings_from({})
+    with pytest.raises(ValueError, match="Restart the app"):
+        qwen3_colab.render_files(speaker="S", folder_name="f", zip_name="f.zip", settings=settings, report={})
