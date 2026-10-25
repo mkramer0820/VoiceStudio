@@ -25,7 +25,7 @@ START BY looking at the real folder tree under E:\Qwen3TTS_Checkpoints\SS_Narrat
 
 | | |
 |---|---|
-| GPU | NVIDIA GeForce RTX 3070, 8192 MiB, driver 610.88. **About 2.7 GB was already in use** by Windows and other programs, so only about 5.4 GB is free for the model. Close browsers and other GPU programs for measurements |
+| GPU | NVIDIA GeForce RTX 3070, 8192 MiB, driver 610.88. **Other programs held 1.5 to 3 GB when this was checked (that varies; browsers and video players are the usual cause).** Flush and close them before measuring; the measured model needs about 4.7 GiB (see QWEN3_TRAINING_STATE.md item 00) |
 | **The app's own environment** | a `uv`-managed venv named **`.venv`** (Python pinned to 3.11 by `.python-version`, locked by `uv.lock`, torch from the `pytorch-cuda` index in `pyproject.toml`). From the repo it is `E:\VoiceStudio\.venv`; the installed desktop app uses `%APPDATA%\VoiceStudio\runtime\project\.venv`. **Checked 2026-10-25 in the repo's `.venv`:** Python 3.11.17, **torch 2.8.0+cu128 (CUDA 12.8), the 3070 is visible, bf16 works**, torchaudio 2.8.0+cu128, **transformers 5.15.1**, accelerate 1.14.0, huggingface_hub 1.28.0, onnxruntime 1.29.0. No `qwen_tts`, no `faster_qwen3_tts`, no `flash_attn`. **Do not install into it**: it is the app's locked environment. |
 | The owner's `tts` conda env | Python 3.10.20, torch 2.6.0+cu124 (CUDA works, bf16 works), transformers **4.30.0 (too old)**, no `qwen_tts`, no `faster_qwen3_tts`, no `flash_attn`. **Do not install into it** |
 | `C:\python3` | torch 2.13.0 **CPU-only**, and its torchaudio DLL does not load. Do not use it |

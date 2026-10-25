@@ -32,6 +32,7 @@ SIDECARS = [
     "engines.moss_tts_v15.main",
     "engines.omnivoice_subprocess.main",
     "engines.pockettts.main",
+    "engines.qwen3_narrator.main",
     "engines.supertonic3.sidecar",
 ]
 

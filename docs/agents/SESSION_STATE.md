@@ -53,7 +53,7 @@ True resume with optimizer state (the official script saves weights only), Tenso
 3. Whether `KEEP_ALL=True` (every epoch kept, about 4.2 GB each) is fine for their Drive space.
 
 ## What to do next
-The next job is the local backend on the owner's RTX 3070: [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md) (it holds a ready-to-paste prompt). For further training work use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
+Part 1 of the local backend on the owner's RTX 3070 is done (engine `qwen3-narrator`; results in item 00 of [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md), plan in [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md)). Next: the owner listens to the samples, then Part 2 (the UI). For further training work use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
 
 ## Traps already hit
 - Windows + Git Bash: a plain `git add` can rewrite the locale JSON files' CRLF line endings (a 79,000-line diff). Stage them with `git hash-object -w --no-filters <f>` then `git update-index --cacheinfo 100644,<hash>,<f>`. Read and write files with `newline=""`.

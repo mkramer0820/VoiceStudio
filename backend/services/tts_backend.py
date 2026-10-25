@@ -3362,6 +3362,9 @@ _LAZY_REGISTRY: dict[str, tuple[str, str]] = {
     "audiocpp": ("engines.audiocpp", "AudioCPPBackend"),
     # Fork extension: Fish Audio cloud API (opt-in, key-gated, no local model).
     "fish-audio": ("engines.fish_api", "FishAudioBackend"),
+    # Fork extension: the owner's fine-tuned Qwen3-TTS narrator on
+    # faster-qwen3-tts (CUDA graphs), own venv (transformers 5.15.1 + qwen-tts-hf).
+    "qwen3-narrator": ("engines.qwen3_narrator", "Qwen3NarratorBackend"),
 }
 
 
@@ -3466,6 +3469,7 @@ _INSTALL_HINTS: dict[str, str] = {
     "moss-tts-v15":  "git clone OpenMOSS/MOSS-TTS + set OMNIVOICE_MOSS_TTS_V15_DIR  (own venv, transformers==5.0; 8B, ~16 GB weights; CUDA/ROCm/XPU/NPU/CPU, no MPS; Apache-2.0)",
     "dots-tts":      "git clone rednote-hilab/dots.tts + set OMNIVOICE_DOTS_TTS_DIR  (own venv, transformers==4.57; 2B, ~9 GB weights; CUDA/CPU, Linux/macOS only — no Windows; Apache-2.0)",
     "confucius4-tts":"git clone netease-youdao/Confucius4-TTS + set OMNIVOICE_CONFUCIUS4_TTS_DIR  (own Python 3.10 venv; 14-lang cross-lingual zero-shot clone; ~5 GB weights auto-download; CUDA/ROCm/XPU/NPU/CPU, no MPS; Apache-2.0)",
+    "qwen3-narrator": "Own venv (uv, Python 3.11): torch 2.8.0+cu128, transformers==5.15.1, faster-qwen3-tts==0.5.4; set OMNIVOICE_QWEN3_NARRATOR_PYTHON and OMNIVOICE_QWEN3_NARRATOR_CKPT (fine-tuned checkpoint folder); NVIDIA GPU, about 4.7 GiB VRAM",
     "fish-audio":   "Cloud API, no install: set FISH_API_KEY (or store a key in Settings). Text you synthesize is sent to Fish Audio. Models s2.1-pro / s2-pro / drama-3; default lossless WAV 44.1 kHz.",
     "audiocpp":     "download the matching audio.cpp v0.7.4 prebuilt + set OMNIVOICE_AUDIOCPP_BIN, then explicitly install Breeze-TTS-2 in Model Catalogue → Models  (native CPU/Vulkan/CUDA/Metal GGUF server, no Python; en+zh clone+design; ~4.73 GiB; weights research/non-commercial only)",
 }
@@ -3482,6 +3486,7 @@ _SETUP_SNIPPETS: dict[str, str] = {
     "indextts2":      "export OMNIVOICE_INDEXTTS_DIR=/path/to/index-tts",
     "moss-tts-v15":   "export OMNIVOICE_MOSS_TTS_V15_DIR=/path/to/MOSS-TTS",
     "dots-tts":       "export OMNIVOICE_DOTS_TTS_DIR=/path/to/dots.tts",
+    "qwen3-narrator": "export OMNIVOICE_QWEN3_NARRATOR_PYTHON=/path/to/venv/bin/python OMNIVOICE_QWEN3_NARRATOR_CKPT=/path/to/checkpoint",
     "confucius4-tts": "export OMNIVOICE_CONFUCIUS4_TTS_DIR=/path/to/Confucius4-TTS",
     # #919: sherpa-onnx gates on a downloaded model dir (model.onnx + tokens.txt).
     "sherpa-onnx":    "export OMNIVOICE_SHERPA_MODEL=/path/to/sherpa-onnx-model",
@@ -3516,6 +3521,7 @@ _ENGINE_DOCS: dict[str, str] = {
     "pockettts":            "docs/engines/pockettts.md",
     "audiocpp":             "docs/engines/audio-cpp.md",
     "fish-audio":           "docs/engines/fish-audio.md",
+    "qwen3-narrator":       "docs/engines/qwen3-narrator.md",
 }
 
 
