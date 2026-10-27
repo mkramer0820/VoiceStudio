@@ -9,6 +9,7 @@ Works for any coding agent or human. Read in this order and stop when you have w
 | **Setting up a Colab runtime: Python, torch, CUDA, the FlashAttention wheel, and every trap we hit (read before any new training phase)** | [../engines/qwen3-tts-colab-runtime.md](../engines/qwen3-tts-colab-runtime.md) | ~5 min |
 | **Next job: run the fine-tuned voice locally on the RTX 3070 with faster-qwen3-tts as a backend (ready-to-paste prompt, facts, plan). Default weights: the owner's Run 2, epoch 09 (the 3-hour run, `checkpoint-epoch-9`)** | [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md) | ~3 min |
 | **Qwen3-TTS: what we found about the fine-tuned model and the stock voices (read before ANY Qwen work)** | [../engines/qwen3-finetune-findings.md](../engines/qwen3-finetune-findings.md) | ~6 min |
+| **Qwen3 in Story Studio: where we stopped and what to do next (start here for Qwen work)** | [QWEN3_NEXT_SESSION.md](QWEN3_NEXT_SESSION.md) | ~3 min |
 | **Model locations: one Settings place for where local models and custom checkpoints live (project rule)** | [MODEL_LOCATIONS_BRIEF.md](MODEL_LOCATIONS_BRIEF.md) | ~4 min |
 | **Qwen3 studio: the playground page and story mode still to build (API contract, owner decisions, two ready worker prompts)** | [QWEN3_STUDIO_UI_BRIEF.md](QWEN3_STUDIO_UI_BRIEF.md) | ~5 min |
 | A ready prompt to start the next session | [NEXT_SESSION_PROMPT.md](NEXT_SESSION_PROMPT.md) | ~1 min |
