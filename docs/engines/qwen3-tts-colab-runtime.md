@@ -102,6 +102,15 @@ Harmless messages, ignore: `diffusers requires huggingface-hub<2.0,>=1.32` (Qwen
 
 epochs 10 (the last epochs of the first good run were the best), batch 4 with `GRAD_ACCUM` 2 (8 clips per update, the same recipe as 2 x 4), lr 1e-6, `USE_VENV` auto, `FAST_SETUP` True, clips 4 to 20 s at 24 kHz mono with 1 s of silence at the end (the export adds it). Training speed at batch 2: 3.7 steps per second, about 1 min 46 s per epoch of 683 clips, 21 GB peak GPU memory. Batch 4 with `GRAD_ACCUM` 2 (1378 clips) ran on the same card at about 25 GB.
 
+## 6b. Runner 19: validation loss, safe save, Drive only for epochs (2026-10-27)
+
+- **Validation loss.** `VAL_FRACTION` (default 0.05, `0` turns it off) holds out that share of the clips with a fixed seed. After every epoch the patched script prints `Epoch N | Val loss: x` and the runner writes it to its own `val_loss` column of `metrics.csv` (the training rows leave it empty). Read it as: while it falls, more epochs help; once it stops falling while the training loss keeps falling, they do not. Fewer than 20 clips: skipped, and it says so.
+- **Safe save.** The checkpoint is written to `.tmp-checkpoint-epoch-N` and renamed to `checkpoint-epoch-N` only after it is verified, so a crash can no longer leave the untrained base weights under a finished-looking name (upstream issue #365). The check compares a sample of tensors with the base model; `SAVE VERIFIED` appears when it passes and `SAVE FAILED` (training stops) when none differ. It also prints `SAVE CHECK: x% of elements changed vs the base model`.
+- **Drive only for epochs.** Models download straight to `/content` (`CACHE_MODELS_ON_DRIVE` now defaults to `False`). `DRIVE_SKIP_FIRST` (default 3) keeps the first N epochs on `/content` and does not copy them to Drive; the final epoch is always copied.
+- **Learning rate.** Set `LR` in the notebook (the runner default is 2e-6; earlier runs used 1e-6).
+- **Not run on a GPU yet.** All patches apply to the real pinned `sft_12hz.py` and the result compiles; the new helpers `_val_loss` and `_verify_saved` have only been unit-tested (the save check on small files). The first real run should be a short one. Regenerate the notebook (or re-export) so it embeds runner 19.
+- **Possible reason low learning rates change little (Inferred, not tested):** the model is loaded in bf16 and trained in bf16 without fp32 master weights, so an update of about 1e-6 on a weight of about 0.02 is smaller than bf16's resolution and rounds away for most weights. `SAVE CHECK` shows how much actually changes; if it is tiny at 1e-6 and larger at 2e-6, that is the reason.
+
 ## 7. Not verified
 
 The isolated Python 3.12 environment (`USE_VENV`) on Colab; Blackwell (G4) and Turing (T4) fallbacks; other GPUs' batch sizes; interrupting a run on Colab; how the 3-hour run's voice compares with the 105-minute run's. When one of these is run for real, change this file in the same commit.

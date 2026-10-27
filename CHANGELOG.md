@@ -15,6 +15,7 @@ metadata and the backend fallback mirror it.
 ### Added
 
 - Settings -> Storage -> Model locations: one place to list the folders holding your local models and fine-tuned checkpoints, used by the Qwen playground (replaces its checkpoint-folder box) — thanks @mkramer0820!
+- Qwen3-TTS Colab training: a held-out validation loss per epoch, a checkpoint save that is verified against the base weights, models downloaded straight to the runtime, and only later epochs copied to Drive — thanks @mkramer0820!
 - Qwen playground page: try Qwen3-TTS narrator, clone and experimental voices in one multi-take run with every setting, A/B compare, notes, stars, past sessions and a manifest per run — thanks @mkramer0820!
 - Qwen3-TTS narrator engine for a local NVIDIA GPU: runs your fine-tuned checkpoint (or the stock models) in its own environment with CUDA graphs, with a multi-take playground backend, a model registry, warm-up, per-take manifests, and clearly flagged borrowed stock voices — thanks @mkramer0820!
 - Opt-in Fish Audio cloud engine (s2.1-pro, s2-pro, drama-3) with lossless WAV output at a configurable sample rate and archived untouched masters — thanks @mkramer0820!

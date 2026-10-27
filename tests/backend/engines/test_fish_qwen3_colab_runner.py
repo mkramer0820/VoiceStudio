@@ -65,7 +65,8 @@ def zip_folder(folder, archive, top=None):
 def fake_sft_script() -> str:
     """The lines of Qwen's sft_12hz.py (pinned commit) that the runner patches, in their real form."""
     return "\n".join(["target_speaker_embedding = None", 'attn_implementation="flash_attention_2"', vs.ACCEL_LINE,
-                      vs.ALIGN_A_OLD, vs.ALIGN_B_OLD, vs.ALIGN_C_OLD, ""])
+                      vs.ALIGN_A_OLD, vs.ALIGN_B_OLD, vs.ALIGN_C_OLD, vs.VAL_DATA_OLD, vs.VAL_PREP_OLD, vs.VAL_EPOCH_OLD,
+                      vs.VAL_SAVE_OLD, ""])
 
 
 class Env:
@@ -76,7 +77,7 @@ class Env:
         self.content = str(tmp_path / "content")
         os.makedirs(self.content, exist_ok=True)
         base = dict(drive_root=self.drive, local_root=self.content, speaker_name="Sunny", epochs=2, lr=2e-5, batch_size=2,
-                    sample_after_training=False, heartbeat_seconds=5, fast_setup=False)  # the Drive-cache path stays covered; fast mode has its own tests
+                    sample_after_training=False, heartbeat_seconds=5, fast_setup=False, drive_skip_first=0)  # the Drive-cache path stays covered; fast mode has its own tests
         self.p = vs.params_from({**base, **overrides}, env={})
         self.lay = vs.Layout(self.p)
 
@@ -418,7 +419,7 @@ def test_a_cached_wheel_that_fails_on_the_gpu_is_rejected_not_deleted(tmp_path):
 
 # ------------------------------------------------------------------------------------------------ models
 def test_models_cache_hit_versus_miss_and_the_local_copy(tmp_path):
-    e = Env(tmp_path)
+    e = Env(tmp_path, cache_models_on_drive=True)
     vs.ensure_layout(e.p, create_run=False)
     downloads = []
 
@@ -1137,7 +1138,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
     monkeypatch.delitem(sys.modules, "voicestudio_qwen3_colab", raising=False)
     ns = {"DRIVE_ROOT": drive_root, "DATA_SOURCE": archive, "SPEAKER_NAME": "Sunny", "EPOCHS": 2, "LR": 2e-5, "BATCH_SIZE": 2, "BASE_MODEL": vs.BASE_MODEL,
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
-          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "FAST_SETUP": True, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
+          "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "VAL_FRACTION": 0.05, "DRIVE_SKIP_FIRST": 3, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "FAST_SETUP": True, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
           "COMPARE_UNITS_PER_HOUR": None}
     saved_path = list(sys.path)
@@ -1732,3 +1733,76 @@ def test_samples_load_the_local_checkpoint_when_it_is_complete_and_fall_back_to_
     with open(os.path.join(e.lay.local_checkpoints, "checkpoint-epoch-0", "model.safetensors"), "ab") as fh:
         fh.write(b"x")  # a local copy that is not the same size is not trusted
     assert vs.checkpoint_load_path(e.lay, "checkpoint-epoch-0") == os.path.join(e.lay.checkpoints, "checkpoint-epoch-0")
+
+
+def test_the_patched_script_holds_out_clips_scores_them_and_saves_atomically(tmp_path):
+    e = _flow_env(tmp_path)
+    text = open(vs.build_patched_script(e.lay, impl=None)).read()
+    assert 'VS_VAL_FRACTION' in text and "_val_loss(model, _vb)" in text and "Val loss:" in text  # validation split and per-epoch score
+    assert '.tmp-checkpoint-epoch-' in text and "os.replace(output_dir, final_dir)" in text  # written to a temp folder, renamed last
+    assert text.index("_verify_saved(save_path") < text.index("os.replace(output_dir, final_dir)")  # verified before it can look finished
+    assert vs.plan_commands(e.p, e.lay, "/d", 2)["env"]["VS_VAL_FRACTION"] == "0.05"
+
+
+def test_the_helpers_in_the_patched_script_compile_and_the_save_check_catches_an_untrained_checkpoint(tmp_path):
+    torch = pytest.importorskip("torch")
+    st = pytest.importorskip("safetensors.torch")
+    ns = {"torch": torch}
+    exec(vs.VAL_HELPER.replace("target_speaker_embedding = None", "").replace("_aligned_sub_talker_loss", "_aligned_stub"), ns)
+    w = {"talker.model.layers.0.self_attn.q_proj.weight": torch.randn(8, 8), "talker.model.layers.1.mlp.up_proj.weight": torch.randn(8, 8)}
+    base, same, trained = (str(tmp_path / n) for n in ("base.safetensors", "same.safetensors", "trained.safetensors"))
+    st.save_file(w, base)
+    st.save_file(w, same)
+    st.save_file({k: v + 0.5 for k, v in w.items()}, trained)
+    ns["_verify_saved"](trained, base)  # changed weights pass
+    with pytest.raises(RuntimeError, match="equals the base"):
+        ns["_verify_saved"](same, base)  # the untrained base is refused
+
+
+def test_validation_loss_goes_to_its_own_column_in_metrics_csv(tmp_path):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p)
+    pr = {"epoch": 0, "step": 10, "loss": 2.5, "avg_loss": 2.4, "steps_per_s": 1.5, "elapsed": 12.0}
+    vs.append_metrics(e.lay, pr, 1000)
+    m = vs.VAL_RE.search("Epoch 3 | Val loss: 2.1234 | batches: 9")
+    assert m and (int(m.group(1)), float(m.group(2))) == (3, 2.1234)
+    vs.append_val_metric(e.lay, 3, 2.1234)
+    rows = [r.split(",") for r in open(e.lay.metrics).read().splitlines()]
+    assert rows[0][-1] == "val_loss" and len(rows[0]) == 9
+    assert rows[1][3] == "2.5" and rows[1][8] == "" and len(rows[1]) == 9  # a training row has no val_loss
+    assert rows[2][1] == "3" and rows[2][8] == "2.1234" and rows[2][3] == "" and len(rows[2]) == 9  # a validation row has no training loss
+
+
+def test_the_first_epochs_stay_on_content_and_the_final_epoch_always_reaches_drive(tmp_path):
+    e = Env(tmp_path, epochs=5, drive_skip_first=3)
+    vs.ensure_layout(e.p)
+    syncer = vs.CheckpointSyncer(e.p, e.lay, vs.Status(e.lay), stable_seconds=0)
+    os.makedirs(e.lay.local_checkpoints)
+    for n in range(5):
+        d = os.path.join(e.lay.local_checkpoints, f"checkpoint-epoch-{n}")
+        os.makedirs(d)
+        open(os.path.join(d, "config.json"), "w").write(json.dumps({"tts_model_type": "custom_voice"}))
+        open(os.path.join(d, "model.safetensors"), "wb").write(safetensors_bytes(100))
+    syncer.scan()
+    done = syncer.scan(final=True)
+    assert [n for n in os.listdir(e.lay.checkpoints) if n.startswith("checkpoint-epoch-")] == ["checkpoint-epoch-3", "checkpoint-epoch-4"]
+    assert syncer.skipped == ["checkpoint-epoch-0", "checkpoint-epoch-1", "checkpoint-epoch-2"] and done
+    assert all(os.path.isdir(os.path.join(e.lay.local_checkpoints, f"checkpoint-epoch-{n}")) for n in range(3))  # still on /content
+
+
+def test_a_short_run_never_skips_its_final_epoch_and_the_new_settings_are_checked(tmp_path):
+    e = Env(tmp_path, epochs=3, drive_skip_first=5)
+    vs.ensure_layout(e.p)
+    syncer = vs.CheckpointSyncer(e.p, e.lay, vs.Status(e.lay), stable_seconds=0)
+    os.makedirs(e.lay.local_checkpoints)
+    d = os.path.join(e.lay.local_checkpoints, "checkpoint-epoch-2")
+    os.makedirs(d)
+    open(os.path.join(d, "config.json"), "w").write(json.dumps({"tts_model_type": "custom_voice"}))
+    open(os.path.join(d, "model.safetensors"), "wb").write(safetensors_bytes(100))
+    syncer.scan()
+    assert syncer.scan(final=True) == ["checkpoint-epoch-2"]
+    d = vs.params_from({}, env={})
+    assert d.val_fraction == 0.05 and d.drive_skip_first == 3 and d.cache_models_on_drive is False and d.lr == 2e-6
+    for bad in ({"val_fraction": 0.5}, {"val_fraction": -1}, {"drive_skip_first": -1}):
+        with pytest.raises(vs.StepFailed):
+            vs.params_from(bad, env={})

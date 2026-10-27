@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "18"
+RUNNER_VERSION = "19"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -77,7 +77,103 @@ ALIGN_C_OLD = '                sub_talker_logits, sub_talker_loss = model.talker
 ALIGN_C_NEW = '                sub_talker_logits, sub_talker_loss = _aligned_sub_talker_loss(model.talker, talker_codec_ids, talker_hidden_states)'
 ALIGN_HELPER_ANCHOR = "target_speaker_embedding = None"
 ALIGN_HELPER = 'def _aligned_sub_talker_loss(talker, codec_ids, hidden):\n    """VoiceStudio: the library\'s forward_sub_talker_finetune passes already-aligned labels through ForCausalLMLoss, which shifts them again\n    (head i trained on codebook i+2, codebook 15 never). Same inputs, plain cross entropy on the logits as they are."""\n    embeds = [hidden.unsqueeze(1)]\n    for i in range(talker.config.num_code_groups - 1):\n        if i == 0:\n            embeds.append(talker.get_input_embeddings()(codec_ids[:, :1]))\n        else:\n            embeds.append(talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, i:i + 1]))\n    logits = talker.code_predictor.forward_finetune(inputs_embeds=torch.cat(embeds, dim=1), labels=None).logits\n    loss = torch.nn.functional.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), codec_ids[:, 1:].reshape(-1))\n    return logits, loss\n\n\ntarget_speaker_embedding = None'
-ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_OLD, ALIGN_C_NEW), (ALIGN_HELPER_ANCHOR, ALIGN_HELPER))
+# --- held-out validation loss, a safe checkpoint save, and a check that the saved weights really changed (runner 19) ---
+VAL_DATA_OLD = '''    dataset = TTSDataset(train_data, qwen3tts.processor, config)
+    train_dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn)'''
+VAL_DATA_NEW = '''    # VoiceStudio: hold out a fixed-seed fraction of the clips; the loss on them is printed after every epoch.
+    _val_rows = []
+    _vfrac = float(os.environ.get("VS_VAL_FRACTION", "0") or 0)
+    if _vfrac > 0 and len(train_data) >= 20:
+        import random as _random
+        _order = list(range(len(train_data)))
+        _random.Random(int(os.environ.get("VS_VAL_SEED", "1234"))).shuffle(_order)
+        _n_val = max(1, int(round(len(train_data) * _vfrac)))
+        _val_rows = [train_data[i] for i in _order[:_n_val]]
+        train_data = [train_data[i] for i in _order[_n_val:]]
+        print(f"VALIDATION: {_n_val} clips held out, {len(train_data)} used for training (fixed seed).", flush=True)
+    else:
+        print("VALIDATION: skipped (VAL_FRACTION is 0 or there are fewer than 20 clips).", flush=True)
+    dataset = TTSDataset(train_data, qwen3tts.processor, config)
+    train_dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn)
+    val_dataloader = None
+    if _val_rows:
+        val_dataset = TTSDataset(_val_rows, qwen3tts.processor, config)
+        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=val_dataset.collate_fn)'''
+VAL_PREP_OLD = '''    num_epochs = args.num_epochs
+    model.train()'''
+VAL_PREP_NEW = '''    if val_dataloader is not None:
+        val_dataloader = accelerator.prepare(val_dataloader)
+    num_epochs = args.num_epochs
+    model.train()'''
+VAL_EPOCH_OLD = '''        if accelerator.is_main_process:
+            output_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
+            shutil.copytree(MODEL_PATH, output_dir, dirs_exist_ok=True)'''
+VAL_EPOCH_NEW = '''        if val_dataloader is not None:
+            model.eval()
+            _total, _count = 0.0, 0
+            with torch.no_grad():
+                for _vb in val_dataloader:
+                    _total += float(_val_loss(model, _vb))
+                    _count += 1
+            model.train()
+            accelerator.print(f"Epoch {epoch} | Val loss: {_total / max(_count, 1):.4f} | batches: {_count}")
+
+        if accelerator.is_main_process:
+            # VoiceStudio: write into a temporary folder and rename it at the end, so a half-written checkpoint can never look finished
+            # (upstream copies the BASE weights in first and overwrites them later: a crash in between leaves an untrained "checkpoint").
+            final_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
+            output_dir = os.path.join(args.output_model_path, f".tmp-checkpoint-epoch-{epoch}")
+            shutil.rmtree(output_dir, ignore_errors=True)
+            shutil.copytree(MODEL_PATH, output_dir)'''
+VAL_SAVE_OLD = '''            save_file(state_dict, save_path)'''
+VAL_SAVE_NEW = '''            save_file(state_dict, save_path)
+            del state_dict, weight
+            _verify_saved(save_path, os.path.join(MODEL_PATH, "model.safetensors"))
+            shutil.rmtree(final_dir, ignore_errors=True)
+            os.replace(output_dir, final_dir)
+            print(f"SAVE VERIFIED: {final_dir}", flush=True)'''
+VAL_HELPER = '''def _val_loss(model, batch):
+    # VoiceStudio: the training loss (same alignment, same 0.3 sub-talker weight) on a held-out batch.
+    input_ids, codec_ids, ref_mels = batch['input_ids'], batch['codec_ids'], batch['ref_mels']
+    text_embedding_mask, codec_embedding_mask = batch['text_embedding_mask'], batch['codec_embedding_mask']
+    attention_mask, codec_0_labels, codec_mask = batch['attention_mask'], batch['codec_0_labels'], batch['codec_mask']
+    speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()
+    input_text_embedding = model.talker.text_projection(model.talker.model.text_embedding(input_ids[:, :, 0])) * text_embedding_mask
+    input_codec_embedding = model.talker.model.codec_embedding(input_ids[:, :, 1]) * codec_embedding_mask
+    input_codec_embedding[:, 6, :] = speaker_embedding
+    input_embeddings = input_text_embedding + input_codec_embedding
+    for i in range(1, 16):
+        codec_i_embedding = model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
+        input_embeddings = input_embeddings + codec_i_embedding * codec_mask.unsqueeze(-1)
+    outputs = model.talker(inputs_embeds=input_embeddings, attention_mask=attention_mask, labels=codec_0_labels, output_hidden_states=True)
+    hidden_states = outputs.hidden_states[0][-1]
+    target_codec_mask = codec_mask[:, 1:]
+    _, sub_loss = _aligned_sub_talker_loss(model.talker, codec_ids[:, 1:][target_codec_mask], hidden_states[:, :-1][target_codec_mask])
+    return outputs.loss + 0.3 * sub_loss
+
+
+def _verify_saved(saved_path, base_path):
+    # VoiceStudio: after saving, compare a sample of tensors with the base model. If none differ, the checkpoint is the untrained base.
+    from safetensors import safe_open
+    with safe_open(saved_path, "pt") as saved, safe_open(base_path, "pt") as base:
+        keys = sorted(set(saved.keys()) & set(base.keys()))
+        layer_keys = [k for k in keys if ".layers." in k] or keys
+        sample = layer_keys[::max(1, len(layer_keys) // 12)][:12]
+        shares = []
+        for k in sample:
+            a, b = saved.get_tensor(k), base.get_tensor(k)
+            shares.append(float((a != b).float().mean()) if a.shape == b.shape else 1.0)
+    if not shares or max(shares) == 0.0:
+        print(f"SAVE FAILED: none of {len(shares)} sampled tensors differ from the base model, so {saved_path} is the untrained base.", flush=True)
+        raise RuntimeError("saved checkpoint equals the base model")
+    print(f"SAVE CHECK: {100 * sum(shares) / len(shares):.2f}% of elements changed vs the base model (sampled {len(shares)} tensors, "
+          f"min {100 * min(shares):.2f}%, max {100 * max(shares):.2f}%).", flush=True)
+
+
+target_speaker_embedding = None'''
+ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_OLD, ALIGN_C_NEW), (ALIGN_HELPER_ANCHOR, ALIGN_HELPER),
+               (ALIGN_HELPER_ANCHOR, VAL_HELPER), (VAL_DATA_OLD, VAL_DATA_NEW), (VAL_PREP_OLD, VAL_PREP_NEW), (VAL_EPOCH_OLD, VAL_EPOCH_NEW),
+               (VAL_SAVE_OLD, VAL_SAVE_NEW))
 ACCEL_FIXED = ('Accelerator(gradient_accumulation_steps=int(os.environ.get("VS_GRAD_ACCUM", "4")), mixed_precision="bf16", log_with="tensorboard", '
                'project_dir=os.environ.get("VS_TENSORBOARD_DIR", "tensorboard"))')
 
@@ -140,7 +236,9 @@ class Params:
     restart: bool = False
     local_root: str = "/content"
     fast_setup: bool = True  # clone the Qwen repo and download the models straight into /content and keep pip's cache there too: reading them back from Drive took 60 to 150 s each session
-    cache_models_on_drive: bool = True  # False: download models straight to /content (nothing cached on Drive)
+    cache_models_on_drive: bool = False  # True: also cache the models on Drive. Default False: models download straight to /content, Drive only keeps epochs
+    val_fraction: float = 0.05  # share of the clips held out (fixed seed) to score every epoch; 0 turns validation off
+    drive_skip_first: int = 3  # the first N epochs stay on /content and are not copied to Drive (the final epoch is always copied)
     sample_after_training: bool = True
     sample_text: str = DEFAULT_SAMPLE_TEXT
     sample_seed: int = 1234
@@ -170,6 +268,9 @@ class Params:
             raise StepFailed("RUN_ID may use letters, digits, '.', '_' and '-' only (up to 60 characters).")
         self.epochs, self.keep_last_n = int(self.epochs), int(self.keep_last_n or 0)
         self.lr = float(self.lr)
+        self.val_fraction, self.drive_skip_first = float(self.val_fraction), int(self.drive_skip_first)
+        if not 0.0 <= self.val_fraction <= 0.2 or self.drive_skip_first < 0:
+            raise StepFailed("VAL_FRACTION must be 0 to 0.2 and DRIVE_SKIP_FIRST 0 or more.")
         if not 1 <= self.epochs <= 100 or not 1e-7 <= self.lr <= 1e-3 or self.keep_last_n < 0:
             raise StepFailed("EPOCHS must be 1-100, LR 1e-7 to 1e-3 and KEEP_LAST_N 0 or more.")
         if str(self.batch_size).lower() == "auto":
@@ -207,7 +308,7 @@ class Params:
         """Where each resolved setting came from: official script default, our default, the export dialog, or an owner override."""
         out = {}
         for key in ("epochs", "lr", "batch_size", "base_model", "tokenizer_model", "speaker_name", "attn_fallback", "keep_all", "keep_last_n",
-                    "keep_first", "keep_final", "sample_text", "sample_seed", "cache_models_on_drive", "restart", "run_id", "drive_root"):
+                    "keep_first", "keep_final", "sample_text", "sample_seed", "cache_models_on_drive", "val_fraction", "drive_skip_first", "restart", "run_id", "drive_root"):
             value, src = getattr(self, key), self.sources.get(key, "default")
             if key in OFFICIAL_DEFAULTS:
                 same = value == OFFICIAL_DEFAULTS[key]
@@ -228,7 +329,7 @@ def _truthy(v) -> bool:
 
 
 _ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "fast_setup", "base_model", "tokenizer_model", "run_id",
-               "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "sample_after_training",
+               "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "val_fraction", "drive_skip_first", "sample_after_training",
                "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour")
 
@@ -1748,6 +1849,7 @@ def fail_run(lay: Layout, status: Optional[Status], message: str) -> None:
 
 # --------------------------------------------------------------------------------------------- training observability
 LOSS_RE = re.compile(r"Epoch\s+(\d+)\s*\|\s*Step\s+(\d+)\s*\|\s*Loss:\s*([-+0-9.eE]+|nan|inf)")
+VAL_RE = re.compile(r"Epoch\s+(\d+)\s*\|\s*Val loss:\s*([-+0-9.eE]+|nan|inf)")
 
 
 class TrainMonitor:
@@ -1870,14 +1972,29 @@ class Heartbeat:
         self._thread.join(timeout=5)
 
 
+METRICS_HEADER = "time,epoch,step,loss,avg_loss10,steps_per_s,elapsed_s,gpu_mem_used_mb,val_loss"
+
+
 def append_metrics(lay: Layout, pr: dict, mem_mb: float) -> None:
     new = not os.path.isfile(lay.metrics)
     try:
         with open(lay.metrics, "a", encoding="utf-8") as fh:
             if new:
-                fh.write("time,epoch,step,loss,avg_loss10,steps_per_s,elapsed_s,gpu_mem_used_mb\n")
+                fh.write(METRICS_HEADER + "\n")
             fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{pr['epoch']},{pr['step']},{pr['loss']:.6g},{pr['avg_loss']:.6g},"
-                     f"{pr['steps_per_s'] or ''},{pr['elapsed']:.1f},{mem_mb:.0f}\n")
+                     f"{pr['steps_per_s'] or ''},{pr['elapsed']:.1f},{mem_mb:.0f},\n")
+    except OSError:
+        pass
+
+
+def append_val_metric(lay: Layout, epoch: int, val_loss: float) -> None:
+    """One row per epoch in the val_loss column (the other columns stay empty), in the same metrics.csv as the training loss."""
+    new = not os.path.isfile(lay.metrics)
+    try:
+        with open(lay.metrics, "a", encoding="utf-8") as fh:
+            if new:
+                fh.write(METRICS_HEADER + "\n")
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{epoch},,,,,,,{val_loss:.6g}\n")
     except OSError:
         pass
 
@@ -1975,6 +2092,7 @@ class CheckpointSyncer:
         self.p, self.lay, self.status, self.clock, self.stable = p, lay, status, clock, stable_seconds
         self.seen: dict = {}  # name -> (size of model.safetensors, time first seen at that size)
         self.synced: list = []
+        self.skipped: list = []  # early epochs deliberately left on /content (DRIVE_SKIP_FIRST)
         self.not_finished: list = []  # local checkpoint folders that never looked complete (left in /content, not copied)
         self.first_bytes: Optional[int] = None
         self._stop, self._thread, self.error = threading.Event(), threading.Thread(target=self._loop, daemon=True), None
@@ -2004,7 +2122,15 @@ class CheckpointSyncer:
         with self._lock:
             man = self.manifest()
             for name in existing_checkpoints(self.lay.local_checkpoints):
-                if name in man["checkpoints"] or not self._ready(name, final):
+                if name in man["checkpoints"]:
+                    continue
+                index = int(CHECKPOINT_RE.fullmatch(name).group(1))
+                if index < self.p.drive_skip_first and index != self.p.epochs - 1:  # early epochs: stay on /content, the final epoch never skips
+                    if name not in self.skipped:
+                        self.skipped.append(name)
+                        self._say(f"{name}: kept on /content only (DRIVE_SKIP_FIRST={self.p.drive_skip_first}: the first epochs are not copied to Drive).")
+                    continue
+                if not self._ready(name, final):
                     continue
                 dst = os.path.join(self.lay.checkpoints, name)
                 if os.path.exists(dst):
@@ -2366,7 +2492,8 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
     return {
         "cwd": dataset_dir,
         "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", ""),
-                "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard"), "VS_GRAD_ACCUM": str(p.grad_accum)},
+                "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard"), "VS_GRAD_ACCUM": str(p.grad_accum),
+                "VS_VAL_FRACTION": f"{p.val_fraction:g}"},
         "train": [py(), "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
                   "--output_model_path", out_dir or lay.local_checkpoints, "--train_jsonl", codes or lay.codes_local, "--batch_size", str(batch),
                   "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", model_speaker_name(p)],
@@ -2476,6 +2603,14 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
         status.update(status="training")
 
         def on_line(line: str) -> bool:
+            v = VAL_RE.search(line)
+            if v:
+                try:
+                    append_val_metric(lay, int(v.group(1)), float(v.group(2)))
+                except ValueError:
+                    pass
+                say(f"epoch {int(v.group(1)) + 1}/{p.epochs}  held-out (validation) loss {v.group(2)}  <- watch this: when it stops falling while the training loss keeps falling, more epochs are not helping")
+                return True
             pr = mon.feed(line)
             if pr is None:
                 return False
