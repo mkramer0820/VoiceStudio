@@ -32,6 +32,14 @@ Branch **`ext/qwen3-story`** (on top of `ext/fish-api`). All work is committed l
 2. **Story mode** (Prompt 2 in the Qwen brief): characters mapped to voices, `[Tag]` clone variants per character, per-character warm-up, Fish-style output layout and names, persisted assignments. Uses the model-locations list. Start it after the playground test.
 3. **Feed in the emotion-control checkpoint results** (another agent is testing it) to the findings doc; it may change the voice and instruct rules.
 
+## Training side (2026-10-27): Colab runner 19, committed as `74cfc628`, not yet run on a GPU
+
+- An AI-written audit brief said the training script was an unpatched copy. It is not: runner 18 already applied the text-projection, double-shift and sub-talker alignment fixes (upstream #371, #278, #39). Not proven in isolation (run 3 changed lr, padding and the patch together).
+- Runner 19 adds: a 5% held-out validation loss (`val_loss` column in `metrics.csv`, `Epoch N | Val loss` line), a checkpoint save written to `.tmp-checkpoint-epoch-N`, checked against the base weights (`SAVE VERIFIED` / `SAVE FAILED`, plus the share of weights changed) and renamed last, models downloaded straight to `/content` by default, and `DRIVE_SKIP_FIRST = 3` so only epochs 4 and later go to Drive (the final epoch always does).
+- No clip re-export is needed: the notebook uses the newest runner (zip, notebook or Drive cache). Use the regenerated `notebooks/Qwen3_TTS_Colab_Training.ipynb`, not the older `Qwen3_TTS_Colab_Training_3h.ipynb`.
+- **Next:** a short first run (`SMOKE_RUN`, 2 to 3 epochs) on the A100 to confirm `_val_loss` and `_verify_saved` work, then a full run at `LR = 2e-6` against the 1e-6 runs. Read `SAVE CHECK` first: a tiny changed share at 1e-6 would support the (inferred, untested) idea that bf16 rounds small updates away.
+- Details: `docs/engines/qwen3-tts-colab-runtime.md` section 6b.
+
 ## Needs the owner's yes
 
 - Control test for the "Ryan-like" outputs: render another empty speaker row (2900 or 3071) on EP09 and Base.
