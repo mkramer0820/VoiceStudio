@@ -1,5 +1,7 @@
 # Next session: run the fine-tuned narrator on the owner's RTX 3070 with faster-qwen3-tts (a local backend, no UI yet)
 
+> **Status: DONE (2026-10-25).** Part 1 (the backend) and Part 2 (the playground UI) are built; the paste-in prompt below is historical. Current state and next steps: [QWEN3_NEXT_SESSION.md](QWEN3_NEXT_SESSION.md).
+
 Written 2026-10-25. Part 1 (this session): prove that `faster-qwen3-tts` (CUDA graphs) runs the owner's fine-tuned checkpoint on their own PC and wrap it as a backend of the app. Part 2 (a later session): hook that backend up to the UI. **Do not touch the UI in Part 1.** The owner has used faster-qwen3-tts before, so it is known to be possible on this card; what is new is our fine-tuned checkpoint and the integration.
 
 ## Paste this into the new session

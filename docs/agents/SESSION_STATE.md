@@ -23,8 +23,8 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 | Training data screen, measure audio, Explorer with staged Apply and chapter checklist | Done, used by the owner for two exports | `fish-dataset/`, `dataset.py`; tests | nothing known |
 | Export formats (jsonl, `.lab`, LJSpeech, OmniVoice bundle, Qwen3-TTS folder) | Done | `dataset.py`, `qwen3_export.py`; tests | nothing |
 | Qwen3 export: loudness match, reference chooser, **1 s trailing silence by default**, validated defaults (10 epochs, batch 4, lr 1e-6), notebook with the FlashAttention wheel pre-filled, refuses to export on an outdated backend | Done | `qwen3_export.py`, `qwen3_colab.py`; tests | a checkbox for the silence in the dialog (the payload field `trailing_silence_s` works) |
-| Colab runner and notebook (runtime check, wheel handling, patched training script, fast setup, per-epoch samples) | **Done, verified on an A100** (runs of 2026-10-24/25) | `qwen3_colab_runner.py`, `notebooks/`, [runtime guide](../engines/qwen3-tts-colab-runtime.md) | other GPUs, `USE_VENV` |
-| **Colab training runs** | Run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6) gave a narrator-like voice, epochs 4 to 8 best; run 3 (3 hours, 10 epochs) done or in progress | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare run 3 by ear, then one change at a time |
+| Colab runner and notebook (runtime check, wheel handling, patched training script, fast setup, per-epoch samples) | **Done, verified on an A100** (runs of 2026-10-24/25). Runner 19 (2026-10-27: validation loss, verified atomic save, Drive only for epochs 4+) is **tests only, not run on a GPU yet** | `qwen3_colab_runner.py`, `notebooks/`, [runtime guide](../engines/qwen3-tts-colab-runtime.md) section 6b | a short `SMOKE_RUN` on the A100; other GPUs, `USE_VENV` |
+| **Colab training runs** | Run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6) gave a narrator-like voice, epochs 4 to 8 best; run 3 (3 hours, 10 epochs) done: epochs 4, 7, 8, 9 best, epoch 9 kept as the narrator; run 4 (lr 2e-6, validation loss, runner 19) not run yet | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare run 3 by ear, then one change at a time |
 | Fast per-epoch sample test (faster-qwen3-tts, CUDA graphs) | Done, verified on an A100 (about 0.9x real time per worker, 3 to 6 workers) | owner's `epoch_test_fast.py` (see the state doc) | not in the repo; a stable copy could move to `scripts/` |
 | FlashAttention wheel finder | Done | `scripts/find_flash_wheel.py`; test | nothing |
 | Trailing-silence padder for older exports | Done | `scripts/pad_qwen3_dataset.py`; test | nothing |
@@ -33,7 +33,7 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 | Push branch / pull request | Branch pushed 2026-10-25; no PR | n/a | PR only if the owner asks |
 | Model locations in Settings -> Storage (shared list, `/api/settings/storage/model-locations`, native folder picker, playground reads it, "model not found" warning on takes) | Done, unverified (never seen rendered) | `backend/core/model_locations.py`, `model-locations-settings.tsx`, `authorizeModelLocation` IPC; `tests/test_model_locations.py`, vitest, IPC test; [brief](MODEL_LOCATIONS_BRIEF.md) | owner check on screen; other engines can read the list the same way; rows cannot be renamed in the UI (API supports it); no Browse button on the output folder |
 | Qwen playground page (`/qwen-playground`) | Done, unverified (never seen rendered; no real run) | `electron/src/renderer/src/features/qwen-playground/`, [user page](../engines/qwen3-playground.md); vitest (model + page), typecheck, locale:check | manager's real GPU session; translations of the `qwenPlayground` namespace (English placeholders in 20 locales); no folder-browse button (needs a new IPC); story mode (prompt 2) |
-| Load a trained Qwen model into the app | Not built | n/a | after the best epoch is chosen |
+| Load a trained Qwen model into the app | Done: the `qwen3-narrator` backend and the playground load a checkpoint from a model folder (EP09 chosen as the narrator) | `backend/engines/qwen3_narrator/`, `/qwen-playground` | real GPU session through the UI |
 
 ## Verified on real hardware, and not
 - **Verified on a Colab A100 40 GB (Python 3.13, torch 2.11 cu130):** the runtime check, the FlashAttention wheel install and GPU test, model download, code preparation, the timing run, training with progress lines, per-epoch checkpoint copy to Drive with verification, sampling, the fast sample test.
@@ -41,21 +41,21 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 - **Unproven claims to avoid:** why one epoch sounds better than another; that the patched training script alone (vs. lr and padding) fixed the noise: run 2 changed all three together.
 
 ## Not built (on purpose)
-True resume with optimizer state (the official script saves weights only), TensorBoard (the official script writes no events), a per-file hash manifest, loading a trained Qwen model into the app, Fish S2 local, a Qwen validation split (the official scripts have none).
+True resume with optimizer state (the official script saves weights only), TensorBoard (the official script writes no events), a per-file hash manifest, Fish S2 local. (A Qwen validation split and a verified checkpoint save were built in runner 19, 2026-10-27; loading a trained model into the app is done, see the table.)
 
 ## Owner decisions already made
 - Colab, not local; target `Qwen/Qwen3-TTS-12Hz-1.7B-Base`; narrator first. Clips 4 to 20 s, 24 kHz mono 16-bit, all Fish tags removed, loudness matched (default -22 dB), speaker `SS_Narrator`, one shared reference clip.
-- Everything cached and saved on Google Drive, in the folder **`Qwen3TTS`** (the owner's Drive is mounted locally as `G:\`). Never lose data: no overwriting, no deleting by default. "Local" means Colab's `/content`, which is wiped when the runtime is deleted; Drive is the backup, and models are loaded from `/content`.
+- Everything cached and saved on Google Drive, in the folder **`Qwen3TTS`** (the owner's Drive is mounted locally as `G:\`). Never lose data: no overwriting, no deleting by default. "Local" means Colab's `/content`, which is wiped when the runtime is deleted; Drive is the backup, and models are loaded from `/content`. **Updated 2026-10-27:** models now download straight to `/content` (not cached on Drive) and only epochs 4 and later are copied to Drive (`DRIVE_SKIP_FIRST = 3`; the final epoch always is).
 - Wants progress logs that prove the job is alive, and every epoch sampled and listened to. Colab budget: 100 compute units; the A100 40 GB is the runtime in use.
 - Never start Colab sessions, upload, train or spend units without the owner's explicit go; give scripts and cells as text first, before any other work, when the owner is sitting in a live session.
 
 ## Still open (ask the owner)
-1. Which epochs of the 3-hour run sound best, and whether more data helped.
-2. Whether to try lr 5e-6, freezing the speaker encoder, or more epochs (see the state doc's next steps).
-3. Whether `KEEP_ALL=True` (every epoch kept, about 4.2 GB each) is fine for their Drive space.
+1. (Answered: epoch 9 of the 3-hour run is the narrator.) Whether more data helped is untested.
+2. The owner wants to try lr 2e-6 (set `LR` in the notebook); lr 5e-6, freezing the speaker encoder and warmup/cosine stay untried.
+3. (Mostly answered: only epochs 4 and later go to Drive now, about 4.2 GB each.)
 
 ## What to do next
-Part 1 of the local backend on the owner's RTX 3070 is done (engine `qwen3-narrator`; results in item 00 of [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md), plan in [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md)). Next: the owner listens to the samples, then Part 2 (the UI). For further training work use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
+The local backend (engine `qwen3-narrator`) and the Qwen playground are built; **start with [QWEN3_NEXT_SESSION.md](QWEN3_NEXT_SESSION.md)** for the current state and the ordered next steps (real playground test, story mode, a short Colab smoke run of runner 19). Older record: item 00 of [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md), plan in [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md). For further training work use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
 
 ## Traps already hit
 - Windows + Git Bash: a plain `git add` can rewrite the locale JSON files' CRLF line endings (a 79,000-line diff). Stage them with `git hash-object -w --no-filters <f>` then `git update-index --cacheinfo 100644,<hash>,<f>`. Read and write files with `newline=""`.

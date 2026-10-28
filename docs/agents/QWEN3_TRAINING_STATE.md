@@ -69,7 +69,7 @@ Training run 4 plan (2026-10-27, runner 19, built from an AI audit that assumed 
 1. Ask the owner how epochs 0 to 7 of run 2 compare (voice match, pace, pauses, artifacts) and whether the per-epoch sample lines ever said "did not stop by itself". Record the answer here.
 2. Decide the next change from the owner's complaint, one change at a time: more or fewer epochs, lr 5e-6 (the Baseten value), freezing the speaker encoder (`requires_grad_(False)` and a filtered AdamW; small and low-risk), warmup plus cosine, a held-out validation loss per epoch. An A/B switch for "unfixed alignment at lr 5e-6" would be a useful baseline if the fixed run disappoints.
 3. Trailing silence: the export adds it itself (`trailing_silence_s`, default 1.0); `scripts/pad_qwen3_dataset.py` pads older exports. Not built: a checkbox for it in the export dialog.
-4. Only after a good epoch exists: loading the trained model into the app (not built).
+4. (Done 2026-10-25/27: the trained model loads in the app through the `qwen3-narrator` backend and the Qwen playground; EP09 is the narrator. See [QWEN3_NEXT_SESSION.md](QWEN3_NEXT_SESSION.md).)
 
 ## Rules that bit us (obey)
 - **Before advising settings, read the model's code and its GitHub issues.** Do not call a script default "the official setting". This cost the owner hours.
