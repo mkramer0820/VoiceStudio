@@ -207,6 +207,8 @@ All logic is in ONE file, voicestudio_qwen3_colab.py; the notebook, colab_setup.
 Before you start
   1. Copy @@ZIP@@ to Google Drive:  My Drive/@@DRIVE@@/datasets/@@ZIP@@   (or point DATA_SOURCE at the folder or zip)
   2. Colab: Runtime > Change runtime type > a GPU. A100, H100 and L4 use the original script with FlashAttention 2.
+     Version lock: FlashAttention needs the exact Python/torch/CUDA combo (verified: Python 3.13, torch 2.11.0+cu130, flash_attn 2.8.3 community wheel).
+     Never upgrade torch in the runtime; see docs/engines/qwen3-tts-colab-runtime.md.
      The G4 (RTX PRO 6000 Blackwell) defaults to a patched SDPA copy of the script (UNVERIFIED). A T4 needs ATTN_FALLBACK=True.
   3. First run: set SMOKE_RUN to run a short timing run and see the projected time and compute units before the long run.
 
@@ -376,6 +378,8 @@ def _py(value) -> str:
 INTRO_MD = """# Qwen3-TTS fine-tuning (VoiceStudio)
 
 Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's official `finetuning/` scripts. Everything reusable is cached on your Google Drive, and every cell below calls one script (`voicestudio_qwen3_colab.py`, shipped with the export). **Nothing here has been run on Colab by its author: treat the first run as the test.**
+
+**Version lock (the usual way this breaks).** FlashAttention is built for ONE exact Python + torch + CUDA combination. The last verified Colab runtime is Python 3.13 (cp313), torch 2.11.0+cu130, CUDA 13.0, transformers 4.57.3, with the community wheel `flash_attn-2.8.3+cu130torch2.11-cp313` (the official wheels have no CUDA 13 build). The setup cell finds the matching wheel itself and refuses one that does not fit. **Never upgrade or reinstall torch in the runtime**, and do not build FlashAttention by hand (about an hour, often out of memory). If Colab ships a newer torch or Python, the wheel will not match: the setup cell reports that in its pass/fail table before any training starts (SDPA is the slower fallback) instead of failing mid-run. Details: docs/engines/qwen3-tts-colab-runtime.md.
 
 **Checklist**
 1. **Runtime > Change runtime type > pick the GPU.** A100, H100 and L4 use the original script (FlashAttention 2). The **G4** (RTX PRO 6000 Blackwell) uses a patched SDPA copy by default (unverified). A **T4** cannot run FlashAttention 2 and needs `ATTN_FALLBACK = True` (unverified, may run out of memory).
