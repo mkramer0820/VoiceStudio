@@ -313,6 +313,7 @@ long jobs are started in the background and followed through a log file on Drive
 
 README = r"""Qwen3-TTS training set: @@SPEAKER@@
 ====================================
+Bundle: @@BUNDLE@@ (the notebook, scripts and runner of this export all carry it; if another copy shows a different bundle, it is the stale one).
 Made by VoiceStudio for the official Qwen3-TTS fine-tuning scripts (QwenLM/Qwen3-TTS, finetuning/, commit
 @@COMMIT@@ of @@COMMIT_DATE@@). Target model: @@BASE@@ (single speaker).
 This folder trains nothing by itself and VoiceStudio has not run Qwen's scripts on it.
@@ -326,6 +327,8 @@ Contents
   voicestudio_qwen3_colab.py   the one script that does the Colab work (Drive cache, dependency checks, data checks, training)
   @@NOTEBOOK@@   Colab notebook with this export's settings; every cell calls the script
   colab_setup.sh         thin wrapper: bash colab_setup.sh [--smoke-run | other flags]
+  train_local.sh / .ps1  the same runner on this machine's own GPU (NOT Colab): bash train_local.sh [--smoke-run]; the .ps1 starts it inside WSL2
+  manifest.json          training mode, voice, counts, and the BUNDLE below (check that notebook, scripts and runner show the same one)
   colab_commands.txt     the same steps for a notebook and for the `colab` command-line tool, plus resume notes
 
 Facts taken from Qwen's code
@@ -498,7 +501,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "print('Runner', vs.RUNNER_VERSION, 'loaded from', cached)",
     ])
     cells = [
-        _cell("markdown", 1, INTRO_MD.replace("(VoiceStudio)", f"(VoiceStudio) - runner {runner.RUNNER_VERSION}", 1)),
+        _cell("markdown", 1, INTRO_MD.replace("(VoiceStudio)", f"(VoiceStudio) - {bundle_id()}", 1)),
         _cell("code", 2, "# GPU check: which GPU did Colab give you? (details and the attention path are printed again by the setup cell)\n"
                          "!nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv"),
         _cell("markdown", 3, "## Parameters\nEdit the values in the next cell. `DATA_SOURCE` is where the training data is: the export zip or folder on Drive "
@@ -559,6 +562,40 @@ def runner_source() -> str:
         return fh.read().replace("\r\n", "\n")
 
 
+def bundle_id() -> str:
+    """One label for everything an export ships (runner, notebook, scripts, README): the runner version plus a fingerprint of its text.
+    It is printed at the top of every file and recorded in manifest.json, so the newest copy is always recognisable."""
+    return f"runner {runner.RUNNER_VERSION} ({runner.runner_sha256()[:8]})"
+
+
+LOCAL_SH = r"""#!/usr/bin/env bash
+# VoiceStudio Qwen3-TTS training, NOT on Colab: the same runner the notebook uses, on this machine's own GPU (CUDA, Linux or WSL2).
+# Bundle: @@BUNDLE@@. If the notebook in this folder prints another bundle, the older one is stale: use the newest export.
+# Not run by VoiceStudio; needs an NVIDIA GPU with bf16, and the version-locked torch/flash-attn stack in README.txt.
+#   bash train_local.sh                 (everything: setup, data, train, results)
+#   STEP=data bash train_local.sh       (one step: gpu|setup|data|train|results|sample)
+#   bash train_local.sh --smoke-run     (short timing run)
+# Work happens under ./vs_qwen3_work (out/ = checkpoints and logs, local/ = models and the patched script). The setup step also
+# installs Python packages into the current environment: use a fresh venv or conda env.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK="${WORK:-$HERE/vs_qwen3_work}"
+mkdir -p "$WORK/out" "$WORK/local"
+exec python3 "$HERE/@@RUNNER@@" "${STEP:-all}" --settings "$HERE/training_settings.json" \
+  --drive-root "$WORK/out" --local-root "$WORK/local" --data-source "$HERE" "$@"
+"""
+
+LOCAL_PS1 = r"""# VoiceStudio Qwen3-TTS training, NOT on Colab: the same runner the notebook uses, on this machine's own GPU.
+# Bundle: @@BUNDLE@@. If the notebook in this folder prints another bundle, the older one is stale: use the newest export.
+# Not run by VoiceStudio. The training scripts need Linux: on Windows run this inside WSL2 (it starts train_local.sh there).
+#   powershell -File train_local.ps1 [--smoke-run]
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$wsl = (wsl.exe wslpath -a $here) 2>$null
+if (-not $wsl) { Write-Error "WSL2 was not found. Install it (wsl --install) and a CUDA-enabled Ubuntu, or use train_local.sh on Linux."; exit 1 }
+wsl.exe bash "$wsl/train_local.sh" @args
+"""
+
+
 def assert_backend_is_current() -> None:
     """The script is read from disk on every export, but the constants, defaults and notebook templates were loaded when the backend
     started. A backend that was not restarted after an update would mix old and new (an old Drive folder name next to a new runner).
@@ -600,13 +637,15 @@ def render_files(*, speaker: str, folder_name: str, zip_name: str, settings: Tra
         "COMMIT_DATE": QWEN_COMMIT_DATE, "BASE": settings.base_model, "BASE_NAME": settings.base_model.split("/")[-1],
         "TOKENIZER": settings.tokenizer_model, "TOKENIZER_NAME": settings.tokenizer_model.split("/")[-1], "SESSION": SESSION,
         "BATCH": str(settings.batch_size), "LR": f"{settings.learning_rate:g}", "EPOCHS": str(settings.epochs),
-        "REPO": QWEN_REPO, "NOTEBOOK": NOTEBOOK_NAME,
+        "REPO": QWEN_REPO, "NOTEBOOK": NOTEBOOK_NAME, "BUNDLE": bundle_id(), "RUNNER": RUNNER_NAME,
         "RUNNER_ARGS": runner_args(settings, speaker, f"{drive_root(settings)}/datasets/{zip_name}"),
         "SETTINGS": f"{settings.epochs} epochs, learning rate {settings.learning_rate:g}, batch size {settings.batch_size}, base model {settings.base_model}",
     }
     return {
         "README.txt": _fill(README, values | {"SUMMARY": _summary(report)}),
         "colab_setup.sh": _fill(SETUP, values),
+        "train_local.sh": _fill(LOCAL_SH, values),
+        "train_local.ps1": _fill(LOCAL_PS1, values),
         "colab_commands.txt": _fill(COMMANDS, values),
         RUNNER_NAME: runner_source(),
         NOTEBOOK_NAME: render_notebook(speaker=speaker, folder_name=folder_name, zip_name=zip_name, settings=settings,

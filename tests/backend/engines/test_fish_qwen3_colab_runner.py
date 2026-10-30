@@ -136,7 +136,7 @@ def test_the_export_carries_the_runner_the_notebook_and_a_thin_shell_file(tmp_pa
               "median_s": 0.5, "shortest_s": 0.5, "longest_s": 0.5}, "reference": {"path": "reference/ref.wav", "source": "x", "duration": 5, "reason": "r"},
               "speaker": {"name": "S", "qwen_speaker_name": "S"}, "warnings": []}
     files = qwen3_colab.render_files(speaker="Sunny", folder_name="set", zip_name="set.zip", settings=base, report=report)
-    assert {"colab_setup.sh", "colab_commands.txt", "README.txt", qwen3_colab.RUNNER_NAME, qwen3_colab.NOTEBOOK_NAME} == set(files)
+    assert {"colab_setup.sh", "train_local.sh", "train_local.ps1", "colab_commands.txt", "README.txt", qwen3_colab.RUNNER_NAME, qwen3_colab.NOTEBOOK_NAME} == set(files)
     out = tmp_path / "export"
     out.mkdir()
     for name, text in files.items():
@@ -1833,9 +1833,9 @@ def _release(tag, *names):
     return {"tag_name": tag, "assets": [{"name": n, "browser_download_url": f"https://example.test/{tag}/{n}"} for n in names]}
 
 
-def test_the_runner_version_is_21_everywhere_it_is_asserted():
-    assert vs.RUNNER_VERSION == "21" and qwen3_colab.runner.RUNNER_VERSION == "21"
-    assert "runner 21" in qwen3_colab.default_notebook_text() and "RUNNER_VERSION = \"21\"" in open(RUNNER_PATH, encoding="utf-8").read()
+def test_the_runner_version_is_22_everywhere_it_is_asserted():
+    assert vs.RUNNER_VERSION == "22" and qwen3_colab.runner.RUNNER_VERSION == "22"
+    assert qwen3_colab.bundle_id() in qwen3_colab.default_notebook_text() and "RUNNER_VERSION = \"22\"" in open(RUNNER_PATH, encoding="utf-8").read()
 
 
 def test_community_wheel_matching_is_exact_and_prefers_the_newest():
@@ -1906,3 +1906,26 @@ def test_with_no_wheel_anywhere_setup_uses_sdpa_and_the_isolated_environment_is_
     assert vs.want_venv(e.p, e.lay, PY313_TORCH211, A100, exists=lambda u: False, functional=lambda: (False, "x")) is None  # the pinned/looked-up wheel avoids it
     assert vs.attention_choice(G4_96, "auto")[0] == "sdpa"  # Blackwell: SDPA by default
     assert vs.attention_choice(T4, True)[0] == "sdpa" and vs.attention_choice(T4, "auto")[0] == "refuse"  # Turing: SDPA only when asked for
+
+
+def test_every_file_of_an_export_carries_the_same_bundle_and_the_local_script_is_a_thin_caller(tmp_path):
+    base = qwen3_colab.settings_from({})
+    report = {"counts": {"source_samples": 5, "accepted": 5, "rejected": 0, "train": 5}, "duration": {"total": "0:00:03", "average_s": 0.5,
+              "median_s": 0.5, "shortest_s": 0.5, "longest_s": 0.5}, "reference": {"path": "reference/ref.wav", "source": "x", "duration": 5, "reason": "r"},
+              "speaker": {"name": "S", "qwen_speaker_name": "S"}, "warnings": []}
+    files = qwen3_colab.render_files(speaker="Sunny", folder_name="set", zip_name="set.zip", settings=base, report=report)
+    bundle = qwen3_colab.bundle_id()
+    for name in ("README.txt", "train_local.sh", "train_local.ps1", qwen3_colab.NOTEBOOK_NAME):
+        assert bundle in files[name], name
+    sh = files["train_local.sh"]
+    assert "--local-root" in sh and "/content" not in sh and "pip " not in sh and chr(13) not in sh
+    assert vs.runner_sha256() == __import__("hashlib").sha256(qwen3_colab.runner_source().encode()).hexdigest()
+
+
+def test_a_stale_runner_is_reported_against_the_manifest_of_the_dataset(tmp_path, capsys):
+    (tmp_path / "manifest.json").write_text(json.dumps({"training_mode": "full", "bundle": {"runner_version": "1", "runner_sha256": "0" * 64}}))
+    vs.check_manifest(str(tmp_path), "full")
+    assert "not the one exported with this dataset" in capsys.readouterr().out
+    (tmp_path / "manifest.json").write_text(json.dumps({"training_mode": "full", "bundle": {"runner_version": vs.RUNNER_VERSION, "runner_sha256": vs.runner_sha256()}}))
+    vs.check_manifest(str(tmp_path), "full")
+    assert capsys.readouterr().out == ""

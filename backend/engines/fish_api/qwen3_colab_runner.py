@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "21"
+RUNNER_VERSION = "22"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -593,7 +593,7 @@ def _truthy(v) -> bool:
 _ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "fast_setup", "base_model", "tokenizer_model", "run_id",
                "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "val_fraction", "drive_skip_first", "sample_after_training",
                "train_mode", "lora_rank", "lora_alpha", "lora_dropout", "lora_scale", "speakers", "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
-               "compare_epoch_seconds", "compare_units_per_hour")
+               "compare_epoch_seconds", "compare_units_per_hour", "local_root")
 
 
 def params_from(overrides: Optional[dict] = None, settings_path: Optional[str] = None, env: Optional[dict] = None) -> Params:
@@ -2927,15 +2927,28 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
     }
 
 
+def runner_sha256() -> str:
+    """Fingerprint of this file (line endings normalised): the export records it so a stale copy of the runner is recognised."""
+    import hashlib
+
+    with open(os.path.abspath(__file__), "rb") as fh:
+        return hashlib.sha256(fh.read().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def check_manifest(folder: str, train_mode: str) -> None:
     """Refuse a dataset exported for the other training mode. manifest.json (written by the Voice Studio export) names it; an older export without one is accepted."""
     path = os.path.join(folder, "manifest.json")
     if not os.path.isfile(path):
         return
     try:
-        exported = json.load(open(path, encoding="utf-8")).get("training_mode")
+        manifest = json.load(open(path, encoding="utf-8"))
+        exported = manifest.get("training_mode")
     except (OSError, ValueError):
         raise StepFailed("manifest.json in the dataset is unreadable; export the dataset again.")
+    bundle = (manifest or {}).get("bundle") or {}
+    if bundle.get("runner_sha256") and bundle["runner_sha256"] != runner_sha256():
+        say(f"WARNING: this runner ({RUNNER_VERSION}, {runner_sha256()[:8]}) is not the one exported with this dataset "
+            f"(runner {bundle.get('runner_version')}, {bundle['runner_sha256'][:8]}). Use the newest of the two; the export dialog always writes the current one.")
     if exported in TRAIN_MODES and exported != train_mode:
         raise StepFailed(f"This dataset was exported for training_mode={exported} but the notebook is set to TRAIN_MODE={train_mode}. "
                          "Export it again with the matching Training mode, or change TRAIN_MODE; nothing was started.")
@@ -3513,7 +3526,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=STEPS, help="all = setup, data, train (incl. samples), results")
     ap.add_argument("--settings", help="training_settings.json from the export (provides the defaults)")
-    for flag in ("drive-root", "data-source", "speaker-name", "batch-size", "base-model", "tokenizer-model", "run-id", "sample-text", "speakers"):
+    for flag in ("drive-root", "local-root", "data-source", "speaker-name", "batch-size", "base-model", "tokenizer-model", "run-id", "sample-text", "speakers"):
         ap.add_argument("--" + flag)
     for flag, kind in (("epochs", int), ("keep-last-n", int), ("sample-seed", int), ("smoke-clips", int), ("heartbeat-seconds", int),
                        ("lora-rank", int), ("lora-alpha", float), ("lora-dropout", float), ("lora-scale", float), ("lr", float), ("units-per-hour", float), ("units-available", float), ("compare-epoch-seconds", float),

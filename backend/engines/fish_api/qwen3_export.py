@@ -311,6 +311,8 @@ def _manifest(settings, report: dict, speaker: str, n: int, seconds: float, reje
     runner = qwen3_colab.runner
     return {
         "format": "voicestudio-qwen3-dataset-1", "training_mode": settings.train_mode, "voice": speaker,
+        "bundle": {"id": qwen3_colab.bundle_id(), "runner_version": runner.RUNNER_VERSION, "runner_sha256": runner.runner_sha256(),
+                   "files": ["voicestudio_qwen3_colab.py", qwen3_colab.NOTEBOOK_NAME, "train_local.sh", "train_local.ps1", "colab_setup.sh"]},
         "clips": n, "minutes": round(seconds / 60, 2), "rejected": len(rejected),
         "rejected_by_reason": report["rejected_by_reason"], "qwen_commit": runner.QWEN_COMMIT,
         "parameters": {"learning_rate": settings.learning_rate, "epochs": settings.epochs, "batch_size": settings.batch_size,

@@ -129,3 +129,7 @@ LoRA and multi-speaker training (section 6c); a looked-up community wheel other 
 ## 8. When you change the setup
 
 Update this file together with the code: a new pinned wheel (`COMMUNITY_PINNED_WHEEL` in the runner), a new runtime, a new trap. Run `python scripts/find_flash_wheel.py` to check which wheels exist for a new runtime.
+
+## One bundle per export (runner 22)
+
+Every export ships the runner, the notebook, `colab_setup.sh`, `train_local.sh` / `train_local.ps1` (the same runner on your own CUDA GPU, Linux or WSL2, not Colab) and `README.txt`. All of them carry one **bundle id** (`runner 22 (<fingerprint>)`), which is also recorded in `manifest.json`. The notebook and scripts hold no logic of their own, they only call the runner, so they cannot drift apart; if two copies show different bundles, the older one is stale. The runner prints a warning when its own fingerprint differs from the dataset's manifest. The local script is unverified on a GPU.
