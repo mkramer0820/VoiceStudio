@@ -51,3 +51,5 @@ API: `POST /api/qwen/story/parse`, `GET/POST/PUT/DELETE /api/qwen/story/drafts`,
 ## Not verified
 
 Never run through the real app or on a GPU: the whole page (component tests only), a Base clone and the narrator in one book, model swap timing, emotion presets on any model, warm-up benefit.
+
+**Speaker embeddings and consistency.** While a Base model is loaded, the engine (faster-qwen3-tts) already builds a clone voice's prompt once and reuses it for every chunk, so a voice does not drift from re-encoding between chunks. The saved `.bin` embedding is for reuse across sessions and for import/export. An embedding prepared by the app is keyed to the reference clip (modification time and size): edit or replace the clip and the embedding is treated as missing and prepared again; an imported `.bin` is trusted as it is. A failed preparation is logged as a warning in the render log and never silently replaced. For repeatable renders set a seed in the story settings (each chunk then uses seed + its number).

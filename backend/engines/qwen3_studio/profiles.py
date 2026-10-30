@@ -72,6 +72,33 @@ def embedding_path(profile_id: str) -> str:
     return _json_path(profile_id)[:-5] + ".bin"
 
 
+def _meta_path(profile_id: str) -> str:
+    return embedding_path(profile_id) + ".json"
+
+
+def _ref_stamp(ref_audio: Optional[str]) -> Optional[dict]:
+    try:
+        st = os.stat(ref_audio or "")
+    except OSError:
+        return None
+    return {"mtime": st.st_mtime, "size": st.st_size}
+
+
+def _embedding_is_current(data: dict) -> bool:
+    """The cached embedding belongs to the profile's present reference clip. One made here is keyed by the clip's modification time and
+    size (and the Base model it was made with); an imported .bin carries no key and is trusted as the user's own."""
+    if not os.path.isfile(embedding_path(data["id"])):
+        return False
+    try:
+        with open(_meta_path(data["id"]), encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except OSError:
+        return True  # imported, no key
+    except ValueError:
+        return False
+    return meta.get("ref") == _ref_stamp(data.get("ref_audio"))
+
+
 def _write(path: str, data: dict) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -90,7 +117,7 @@ def validate(body: ProfileBody) -> None:
 
 def _view(data: dict) -> dict:
     out = dict(data)
-    out["has_embedding"] = os.path.isfile(embedding_path(data["id"]))
+    out["has_embedding"] = _embedding_is_current(data)
     with _PREP_LOCK:
         state = _PREP.get(data["id"], "")
     out["embedding_state"] = "ready" if out["has_embedding"] else ("preparing" if state == "preparing" else ("failed" if state else "none"))
@@ -128,10 +155,11 @@ def update(profile_id: str, body: ProfileBody) -> Optional[dict]:
 def _remove_embedding(profile_id: str) -> None:
     with _PREP_LOCK:
         _PREP.pop(profile_id, None)
-    try:
-        os.remove(embedding_path(profile_id))
-    except OSError:
-        pass
+    for path in (embedding_path(profile_id), _meta_path(profile_id)):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def delete(profile_id: str) -> bool:
@@ -171,6 +199,7 @@ def import_embedding(profile_id: str, raw: bytes) -> dict:
     with open(tmp, "wb") as fh:
         fh.write(raw)
     os.replace(tmp, embedding_path(profile_id))
+    _remove_file(_meta_path(profile_id))  # an imported embedding is the user's own: not keyed to the clip
     return get(profile_id)  # type: ignore[return-value]
 
 
@@ -324,6 +353,7 @@ def prepare_embedding(profile_id: str, settings: Optional[dict] = None) -> dict:
         if raw is None:
             raise ValueError("The embedding was not written.")
         check_embedding(raw)
+        _write(_meta_path(profile_id), {"ref": _ref_stamp(profile["ref_audio"]), "base": base["id"]})
         with _PREP_LOCK:
             _PREP.pop(profile_id, None)
     except Exception as exc:  # noqa: BLE001

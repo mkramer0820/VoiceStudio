@@ -475,3 +475,25 @@ def test_the_sidecar_prepare_op_loads_no_tts_model(tmp_path, monkeypatch):
     assert sent[0]["op"] == "audio" and sent[0]["prepared"] == 2048 and sent[0]["n_samples"] == 1
     with pytest.raises(ValueError, match="xvec_path"):
         mod._handle_synthesize({"text": "x", "voice": {"kind": "prepare_embedding", "ref_audio": "a", "base_model_path": "b"}}, None)
+
+
+def test_a_prepared_embedding_is_keyed_to_the_clip_and_an_imported_one_is_not(studio, clip):
+    import json as _json
+    import os as _os
+
+    p = _clone(clip)
+    raw = struct.pack("<2048f", *[0.5] * 2048)
+    # made here: a key file records the clip; the same clip keeps it valid
+    with open(profiles.embedding_path(p["id"]), "wb") as fh:
+        fh.write(raw)
+    with open(profiles.embedding_path(p["id"]) + ".json", "w", encoding="utf-8") as fh:
+        _json.dump({"ref": profiles._ref_stamp(clip), "base": "b"}, fh)
+    assert profiles.get(p["id"])["has_embedding"] is True
+    # the clip is edited in place (new size): the embedding no longer belongs to it, so it is not reported ready
+    with open(clip, "ab") as fh:
+        fh.write(b"\0" * 64)
+    _os.utime(clip, None)
+    stale = profiles.get(p["id"])
+    assert stale["has_embedding"] is False and profiles.needs_embedding(stale)
+    # an imported embedding carries no key and is trusted
+    assert profiles.import_embedding(p["id"], raw)["has_embedding"] is True
