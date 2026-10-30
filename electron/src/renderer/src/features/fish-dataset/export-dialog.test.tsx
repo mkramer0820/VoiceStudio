@@ -417,6 +417,12 @@ describe('Qwen option helpers', () => {
     expect(qwenTrainInvalid({ mode: 'full', edits: { lora_rank: '0' } })).toEqual([]);
   });
 
+  it('sends instruct conditioning only when ticked', () => {
+    expect(qwenTrainBody({ edits: {} })).toEqual({});
+    expect(qwenTrainBody({ instruct: true, edits: {} })).toEqual({ instruct_conditioning: true });
+    expect(qwenTrainBody({ mode: 'lora', instruct: true, edits: {} })).toEqual({ instruct_conditioning: true, train_mode: 'lora' });
+  });
+
   it('writes the multi-speaker option and no reference clip', () => {
     expect(qwenBody(EMPTY_QWEN, 'k2')).toMatchObject({ reference_key: 'k2' });
     expect(qwenBody(EMPTY_QWEN, 'k2')).not.toHaveProperty('multi_speaker');

@@ -4015,6 +4015,8 @@
     "qtr_mode_full": "Full fine-tune (the whole model)",
     "qtr_mode_lora": "LoRA (small adapters, experimental)",
     "qtr_lora_note": "LoRA trains small adapters on a frozen model and uses its own learning rate (an unconfirmed starting value, not tuned). Every epoch is still saved as a normal merged checkpoint, plus the adapter. Not yet verified on a GPU.",
+    "qtr_instruct": "Latih dengan pengondisian --instruct (suara tetap saat memakai instruct)",
+    "qtr_instruct_hint": "[Tag] tiap klip (berbisik, mendesah, ...) ditulis ke kolom instruct dan dilatih sebagai blok instruksi, dilewati 30% waktu. Mati = pelatihan biasa. Belum diverifikasi di GPU.",
     "qtr_lora_rank": "LoRA rank",
     "qtr_lora_alpha": "LoRA alpha",
     "qtr_lora_dropout": "LoRA dropout",

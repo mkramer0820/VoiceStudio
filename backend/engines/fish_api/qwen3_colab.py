@@ -68,6 +68,8 @@ class TrainSettings:
     lora_rank: int = runner.DEFAULT_LORA_RANK
     lora_alpha: float = runner.DEFAULT_LORA_ALPHA
     lora_dropout: float = runner.DEFAULT_LORA_DROPOUT
+    instruct_conditioning: bool = False  # train with the instruction block generation prepends; the export then writes an `instruct` field from the [tags] (UNVERIFIED on a GPU)
+    instruct_dropout: float = runner.INSTRUCT_DEFAULT_DROPOUT
 
     _RANGES = {"epochs": (1, 100), "learning_rate": (1e-7, 1e-3), "batch_size": (1, 256)}
 
@@ -98,6 +100,9 @@ def settings_from(spec: Optional[dict]) -> TrainSettings:
     if not (1 <= out.lora_rank <= 256 and 0 < out.lora_alpha <= 1024 and 0 <= out.lora_dropout <= 0.5):
         raise ValueError("lora_rank must be 1-256, lora_alpha above 0 (up to 1024) and lora_dropout 0 to 0.5.")
     out.lora_rank, out.lora_alpha, out.lora_dropout = int(out.lora_rank), float(out.lora_alpha), float(out.lora_dropout)
+    if not isinstance(out.instruct_conditioning, bool) or not 0.0 <= float(out.instruct_dropout) <= 1.0:
+        raise ValueError("instruct_conditioning must be true or false and instruct_dropout between 0 and 1.")
+    out.instruct_dropout = float(out.instruct_dropout)
     for key in ("base_model", "tokenizer_model"):
         if not MODEL_RE.fullmatch(getattr(out, key) or ""):
             raise ValueError(f"{key} must be a Hugging Face model id such as {BASE_MODEL}.")
@@ -145,7 +150,8 @@ def runner_args(settings: TrainSettings, speaker: str, data_source: str) -> str:
         "--batch-size", str(settings.batch_size), "--base-model", shlex.quote(settings.base_model),
         "--tokenizer-model", shlex.quote(settings.tokenizer_model)]
         + (["--train-mode", settings.train_mode, "--lora-rank", str(settings.lora_rank), "--lora-alpha", f"{settings.lora_alpha:g}",
-            "--lora-dropout", f"{settings.lora_dropout:g}"] if settings.train_mode != runner.DEFAULT_TRAIN_MODE else []))
+            "--lora-dropout", f"{settings.lora_dropout:g}"] if settings.train_mode != runner.DEFAULT_TRAIN_MODE else [])
+        + (["--instruct-conditioning", "true", "--instruct-dropout", f"{settings.instruct_dropout:g}"] if settings.instruct_conditioning else []))
 
 
 def start_commands(speaker: str, folder_name: str, zip_name: str, settings: TrainSettings) -> dict:
@@ -417,6 +423,8 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         f"LORA_RANK = {st.lora_rank}",
         f"LORA_ALPHA = {st.lora_alpha:g}",
         f"LORA_DROPOUT = {st.lora_dropout:g}",
+        f"INSTRUCT_CONDITIONING = {st.instruct_conditioning}  # True: train with the instruction block that --instruct generation prepends (tags from the export become the instruction; UNVERIFIED on a GPU)",
+        f"INSTRUCT_DROPOUT = {st.instruct_dropout:g}  # chance a tagged clip is trained without its tags",
         f"LORA_SCALE = {runner.LORA_DEFAULT_SCALE:g}  # multiplier on alpha/r when each epoch's adapter is merged into its checkpoint. default 0.3 (range 0.0-1.0; warn above 0.5; 0.0 = base model)",
         "SPEAKERS = ''  # several speakers in one model: comma-separated names. Empty: taken from the `speaker` of each clip in the export, else SPEAKER_NAME alone",
         f"FAST_SETUP = {bool(fast_setup)}  # True: clone the Qwen repo and download the models straight into /content and keep pip's cache there (saves minutes of slow Drive reads each session). Your data, codes, checkpoints and logs stay on Drive either way.",
@@ -493,7 +501,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "import importlib, voicestudio_qwen3_colab as vs",
         "importlib.reload(vs)",
         "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LORA_LR if TRAIN_MODE == 'lora' else LR,",
-        "    train_mode=TRAIN_MODE, lora_rank=LORA_RANK, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT, lora_scale=LORA_SCALE, speakers=SPEAKERS,",
+        "    train_mode=TRAIN_MODE, lora_rank=LORA_RANK, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT, lora_scale=LORA_SCALE, instruct_conditioning=INSTRUCT_CONDITIONING, instruct_dropout=INSTRUCT_DROPOUT, speakers=SPEAKERS,",
         "    batch_size=BATCH_SIZE, grad_accum=GRAD_ACCUM, fast_setup=FAST_SETUP, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
         "    keep_first=KEEP_FIRST, keep_final=KEEP_FINAL, sample_text=SAMPLE_TEXT, sample_seed=SAMPLE_SEED, cache_models_on_drive=CACHE_MODELS_ON_DRIVE, val_fraction=VAL_FRACTION, drive_skip_first=DRIVE_SKIP_FIRST,",
         "    attn_fallback=ATTN_FALLBACK, use_venv=USE_VENV, build_flash_attn=BUILD_FLASH_ATTN, flash_wheel=FLASH_WHEEL, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",

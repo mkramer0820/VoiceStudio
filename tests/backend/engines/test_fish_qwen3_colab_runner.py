@@ -1143,7 +1143,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
           "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "VAL_FRACTION": 0.05, "DRIVE_SKIP_FIRST": 3, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "FAST_SETUP": True, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
-          "COMPARE_UNITS_PER_HOUR": None, "TRAIN_MODE": "full", "LORA_LR": vs.LORA_DEFAULT_LR, "LORA_RANK": 16, "LORA_ALPHA": 32, "LORA_DROPOUT": 0.05, "LORA_SCALE": 1.0, "SPEAKERS": ""}
+          "COMPARE_UNITS_PER_HOUR": None, "TRAIN_MODE": "full", "LORA_LR": vs.LORA_DEFAULT_LR, "LORA_RANK": 16, "LORA_ALPHA": 32, "LORA_DROPOUT": 0.05, "LORA_SCALE": 1.0, "INSTRUCT_CONDITIONING": False, "INSTRUCT_DROPOUT": 0.3, "SPEAKERS": ""}
     saved_path = list(sys.path)
     try:
         mount_cell = next(t for t in cells.values() if "drive.mount" in t)
@@ -1833,9 +1833,9 @@ def _release(tag, *names):
     return {"tag_name": tag, "assets": [{"name": n, "browser_download_url": f"https://example.test/{tag}/{n}"} for n in names]}
 
 
-def test_the_runner_version_is_22_everywhere_it_is_asserted():
-    assert vs.RUNNER_VERSION == "22" and qwen3_colab.runner.RUNNER_VERSION == "22"
-    assert qwen3_colab.bundle_id() in qwen3_colab.default_notebook_text() and "RUNNER_VERSION = \"22\"" in open(RUNNER_PATH, encoding="utf-8").read()
+def test_the_runner_version_is_23_everywhere_it_is_asserted():
+    assert vs.RUNNER_VERSION == "23" and qwen3_colab.runner.RUNNER_VERSION == "23"
+    assert qwen3_colab.bundle_id() in qwen3_colab.default_notebook_text() and "RUNNER_VERSION = \"23\"" in open(RUNNER_PATH, encoding="utf-8").read()
 
 
 def test_community_wheel_matching_is_exact_and_prefers_the_newest():

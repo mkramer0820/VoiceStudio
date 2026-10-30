@@ -4015,6 +4015,8 @@
     "qtr_mode_full": "Full fine-tune (the whole model)",
     "qtr_mode_lora": "LoRA (small adapters, experimental)",
     "qtr_lora_note": "LoRA trains small adapters on a frozen model and uses its own learning rate (an unconfirmed starting value, not tuned). Every epoch is still saved as a normal merged checkpoint, plus the adapter. Not yet verified on a GPU.",
+    "qtr_instruct": "--instruct कंडीशनिंग के साथ प्रशिक्षण (instruct पर आवाज़ बनी रहती है)",
+    "qtr_instruct_hint": "हर क्लिप के [टैग] (फुसफुसाना, आह...) instruct फ़ील्ड में लिखे जाते हैं और निर्देश ब्लॉक के रूप में सिखाए जाते हैं, 30% बार छोड़े जाते हैं। बंद = सामान्य प्रशिक्षण। GPU पर अभी सत्यापित नहीं।",
     "qtr_lora_rank": "LoRA rank",
     "qtr_lora_alpha": "LoRA alpha",
     "qtr_lora_dropout": "LoRA dropout",

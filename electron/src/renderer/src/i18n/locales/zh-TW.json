@@ -4015,6 +4015,8 @@
     "qtr_mode_full": "Full fine-tune (the whole model)",
     "qtr_mode_lora": "LoRA (small adapters, experimental)",
     "qtr_lora_note": "LoRA trains small adapters on a frozen model and uses its own learning rate (an unconfirmed starting value, not tuned). Every epoch is still saved as a normal merged checkpoint, plus the adapter. Not yet verified on a GPU.",
+    "qtr_instruct": "使用 --instruct 條件化訓練（使用 instruct 時保持音色）",
+    "qtr_instruct_hint": "每個片段的 [標籤]（低語、嘆氣等）寫入 instruct 欄位，並作為指令區塊訓練，其中 30% 的時間省略。關閉則為一般訓練。尚未在 GPU 上驗證。",
     "qtr_lora_rank": "LoRA rank",
     "qtr_lora_alpha": "LoRA alpha",
     "qtr_lora_dropout": "LoRA dropout",

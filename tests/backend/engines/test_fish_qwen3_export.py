@@ -700,3 +700,19 @@ def test_manifest_names_the_mode_and_a_lora_export_never_lands_on_the_full_one(c
     assert mf["parameters"]["learning_rate"] == 2e-6
     # the dataset itself does not depend on the mode
     assert _jsonl(os.path.join(full["path"], "train.jsonl")) == _jsonl(os.path.join(lora["path"], "train.jsonl"))
+
+
+def test_instruct_conditioning_writes_the_tags_as_a_flat_instruct_field_and_off_changes_nothing(corpus, tmp_path):
+    off = _export(corpus, tmp_path, name="plain")
+    on = _export(corpus, tmp_path, name="cond", training={"instruct_conditioning": True})
+    rows_off = _jsonl(os.path.join(off["path"], "train.jsonl"))
+    rows_on = _jsonl(os.path.join(on["path"], "train.jsonl"))
+    assert all("instruct" not in r for r in rows_off)  # the default export is unchanged
+    assert [{k: v for k, v in r.items() if k != "instruct"} for r in rows_on] == rows_off
+    tagged = [r for r in rows_on if "instruct" in r]
+    assert tagged and all("[" not in r["text"] and "[" not in r["instruct"] for r in tagged)
+    assert all(r["instruct"] == ", ".join(dict.fromkeys(x.strip() for x in r["instruct"].split(","))) for r in tagged)  # flat, no duplicates
+    manifest = json.load(open(os.path.join(on["path"], "manifest.json"), encoding="utf-8"))
+    assert manifest["parameters"]["instruct_conditioning"] is True
+    settings = json.load(open(os.path.join(on["path"], "training_settings.json"), encoding="utf-8"))
+    assert settings["instruct_conditioning"] is True and "--instruct-conditioning" in open(os.path.join(on["path"], "colab_commands.txt"), encoding="utf-8").read()

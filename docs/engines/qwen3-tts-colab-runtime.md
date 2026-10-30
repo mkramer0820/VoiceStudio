@@ -133,3 +133,13 @@ Update this file together with the code: a new pinned wheel (`COMMUNITY_PINNED_W
 ## One bundle per export (runner 22)
 
 Every export ships the runner, the notebook, `colab_setup.sh`, `train_local.sh` / `train_local.ps1` (the same runner on your own CUDA GPU, Linux or WSL2, not Colab) and `README.txt`. All of them carry one **bundle id** (`runner 22 (<fingerprint>)`), which is also recorded in `manifest.json`. The notebook and scripts hold no logic of their own, they only call the runner, so they cannot drift apart; if two copies show different bundles, the older one is stale. The runner prints a warning when its own fingerprint differs from the dataset's manifest. The local script is unverified on a GPU.
+
+## `--instruct` conditioning (runner 23, off by default, unverified on a GPU)
+
+Qwen's training script never includes the instruction block that generation prepends (`<|im_start|>user\n{instruct}<|im_end|>\n`, text channel only, before the assistant header), so a fine-tune can drift toward the stock voices when `--instruct` is used. With **Train with --instruct conditioning** (export dialog), `INSTRUCT_CONDITIONING = True` (notebook) or `--instruct-conditioning true` (`train_local.sh`):
+
+- The export writes each clip's `[tags]` as a flat, de-duplicated comma list into an `instruct` field; the spoken `text` stays tag-free. The trainer also strips any `[tag]` left in the text and merges an `instruct`, `emotion` or `style` field.
+- A clip with tags is trained without them 30% of the time (`INSTRUCT_DROPOUT`). A clip without tags gets no instruction half of the time and a short baseline (`neutral, steady` or `calm, narration`) otherwise, so the conditioned and plain prefixes map to the same speaker.
+- The collator puts the instruction tokens at `0:L`, the assistant header at `L:L+3`, the codec prefix at `L+3:L+8` and the speaker vector at `L+6` (`batch['speaker_pos']`). `L = 0` without an instruction is the original layout, checked tensor by tensor in `tests/backend/engines/test_fish_qwen3_instruct.py`. Labels exist only on the target audio codes and the end token.
+- The codec prefix stays `nothink` (language Auto). Generation switches to `think` because of the language, not because of an instruct; a per-clip language is a separate, untrained feature.
+- Validation loss uses the same random instruction choice, so it is a little noisier than before.

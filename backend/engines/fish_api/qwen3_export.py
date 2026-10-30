@@ -315,7 +315,7 @@ def _manifest(settings, report: dict, speaker: str, n: int, seconds: float, reje
                    "files": ["voicestudio_qwen3_colab.py", qwen3_colab.NOTEBOOK_NAME, "train_local.sh", "train_local.ps1", "colab_setup.sh"]},
         "clips": n, "minutes": round(seconds / 60, 2), "rejected": len(rejected),
         "rejected_by_reason": report["rejected_by_reason"], "qwen_commit": runner.QWEN_COMMIT,
-        "parameters": {"learning_rate": settings.learning_rate, "epochs": settings.epochs, "batch_size": settings.batch_size,
+        "parameters": {"instruct_conditioning": settings.instruct_conditioning, "learning_rate": settings.learning_rate, "epochs": settings.epochs, "batch_size": settings.batch_size,
                        **({"lora_rank": settings.lora_rank, "lora_alpha": settings.lora_alpha, "lora_dropout": settings.lora_dropout,
                            "inference_lora_scale": runner.LORA_DEFAULT_SCALE, "scale_sweep": list(runner.LORA_SCALE_SWEEP)} if lora else {})},
         "note": "One export is one voice" + (" and one adapter." if lora else " and one full fine-tune."),
@@ -493,6 +493,10 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
         row = {"audio": rel, "text": c["text"], "ref_audio": REFERENCE_PATH}
         if opts.multi_speaker:  # the optional `speaker` field: the runner caches one embedding per speaker and gives each its own codec row
             row = {**row, "ref_audio": speaker_refs[c["line"]["voice_id"]]["rel"], "speaker": model_speakers[c["line"]["voice_id"]]}
+        if settings.instruct_conditioning and c["tags"]:  # the [tags] the text lost, as one flat comma list for the trainer's instruction block
+            tags = qwen3_colab.runner.flatten_tags(c["tags"])
+            if tags:
+                row = {**row, "instruct": tags}
         train_rows.append(row)
         mapping.append({"original": c["line"]["file"], "exported": rel, "text": c["text"],
                         "duration_s": round(c["duration"], 3), "chapter": c["line"]["chapter"],

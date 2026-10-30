@@ -244,6 +244,8 @@ export const QWEN_CLIPS_PER_UPDATE = 8; // batch x accumulation of the recipe th
 export interface QwenTrainForm {
   /** "full" (the default, whole model) or "lora" (adapters). An untouched learning rate follows the default of the chosen mode. */
   mode?: QwenMode;
+  /** Train with the instruction block that --instruct generation prepends; the [tags] of each clip become an `instruct` field. Off by default. */
+  instruct?: boolean;
   /** Fields the user typed into, as typed. An untouched field follows the script's default. */
   edits: Partial<Record<QwenNumberKey | QwenTextKey | QwenLoraKey, string>>;
 }
@@ -285,6 +287,7 @@ export function qwenTrainInvalid(form: QwenTrainForm): Array<QwenNumberKey | Qwe
 /** Only what differs from the script's defaults, so the backend's defaults apply to the rest. */
 export function qwenTrainBody(form: QwenTrainForm): Record<string, unknown> {
   const body: Record<string, unknown> = {};
+  if (form.instruct) body.instruct_conditioning = true;
   if (qwenMode(form) === 'lora') {
     body.train_mode = 'lora';
     for (const key of QWEN_LORA_KEYS) {

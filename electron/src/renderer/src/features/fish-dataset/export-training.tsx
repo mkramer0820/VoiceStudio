@@ -292,6 +292,11 @@ export function QwenTrainingSection({
         </select>
         {mode === 'lora' && <p className="text-[11px] leading-snug text-muted-foreground">{t('fishDataset.qtr_lora_note')}</p>}
       </div>
+      <label className="flex items-center gap-2 text-xs">
+        <input type="checkbox" checked={!!form.instruct} onChange={(e) => onChange({ ...form, instruct: e.target.checked })} />
+        {t('fishDataset.qtr_instruct')}
+      </label>
+      {form.instruct && <p className="text-[11px] leading-snug text-muted-foreground">{t('fishDataset.qtr_instruct_hint')}</p>}
       <div className="grid grid-cols-2 gap-3">{(Object.keys(QWEN_NUMBERS) as QwenNumberKey[]).map(number)}</div>
       {mode === 'lora' && <div className="grid grid-cols-3 gap-3">{QWEN_LORA_KEYS.map(lora)}</div>}
       {text('drive_folder')}

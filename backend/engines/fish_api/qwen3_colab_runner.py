@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "22"
+RUNNER_VERSION = "23"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -184,6 +184,155 @@ target_speaker_embedding = None'''
 ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_OLD, ALIGN_C_NEW), (ALIGN_HELPER_ANCHOR, ALIGN_HELPER),
                (ALIGN_HELPER_ANCHOR, VAL_HELPER), (VAL_DATA_OLD, VAL_DATA_NEW), (VAL_PREP_OLD, VAL_PREP_NEW), (VAL_EPOCH_OLD, VAL_EPOCH_NEW),
                (VAL_SAVE_OLD, VAL_SAVE_NEW))
+# --- --instruct conditioning (runner 23) -----------------------------------------------------------------------------------------
+# Qwen's training never includes the instruction block that generation prepends (`<|im_start|>user\n{instruct}<|im_end|>\n`, text channel only,
+# BEFORE the assistant header). A model trained without it drifts back toward the stock voices when an instruct is passed. With
+# INSTRUCT_CONDITIONING the training sequence is built the way generation builds it: instruction tokens at 0:L, the assistant header at L:L+3,
+# the codec prefix at L+3:L+8 and the speaker slot at L+6, with L = 0 for a sample without an instruction. Off by default; the plain script
+# is byte-for-byte unchanged. The pure helpers below are exec'd here (tests, export) AND pasted into the patched script, one source for both.
+# NOTE: the codec prefix stays nothink/think_bos/think_eos (language Auto). Generation switches to codec_think_id because of the LANGUAGE, not
+# because of an instruct, so training with Auto language matches generation with Auto language.
+INSTRUCT_DEFAULT_DROPOUT = 0.30
+INSTRUCT_PURE_SOURCE = '''import random
+import re
+
+INSTRUCT_BASELINES = ("neutral, steady", "calm, narration")
+_TAG_BEFORE_PUNCT = re.compile(r"[ \\t]*\\[[^\\]]+\\][ \\t]*([,.;:!?])")
+_TAG_RE = re.compile(r"\\[([^\\]]+)\\]")
+
+
+def flatten_tags(*parts):
+    """Any mix of "[a, b]", "a, b" and lists of them -> one flat "a, b" string: brackets removed, nested commas flattened, duplicates
+    dropped (case-insensitive) in order of first appearance."""
+    seen, out = set(), []
+    for part in parts:
+        if not part:
+            continue
+        if isinstance(part, (list, tuple)):
+            part = ",".join(str(x) for x in part)
+        for piece in str(part).replace("[", ",").replace("]", ",").split(","):
+            tag = " ".join(piece.split())
+            if tag and tag.lower() not in seen:
+                seen.add(tag.lower())
+                out.append(tag)
+    return ", ".join(out)
+
+
+def split_tags(text):
+    """("[whispering, tense] Don't move... [sigh] stay." -> ("Don't move... stay.", "whispering, tense, sigh")): the spoken text without
+    the [tags] (spacing repaired) and the flat comma-separated tag list."""
+    text = text or ""
+    tags = _TAG_RE.findall(text)
+    spoken = _TAG_BEFORE_PUNCT.sub(r"\\1", text)
+    spoken = _TAG_RE.sub(" ", spoken)
+    spoken = re.sub(r"[ \\t]+", " ", spoken)
+    return spoken.strip(), flatten_tags(*tags)
+
+
+def choose_instruct(csv, rnd, dropout=0.30):
+    """The instruction used for one training sample. With tags: dropped (None) with probability `dropout`, so the model learns that the
+    conditioned and the plain prefix are the same speaker. Without tags: None half of the time, else a short neutral baseline."""
+    if csv:
+        return None if rnd.random() < dropout else csv
+    return None if rnd.random() < 0.5 else rnd.choice(INSTRUCT_BASELINES)
+'''
+exec(INSTRUCT_PURE_SOURCE)  # flatten_tags, split_tags, choose_instruct, INSTRUCT_BASELINES at module level
+
+INSTRUCT_DATASET = '''import os
+
+_VsBaseDataset = TTSDataset
+
+
+class TTSDataset(_VsBaseDataset):
+    """VoiceStudio: instruction conditioning. [tags] in the text and an optional instruct/emotion/style field become one flat instruct
+    string (dropped at random, see choose_instruct); the instruction tokens are prepended in the text channel and every later position,
+    including the speaker slot, moves by their length (batch['speaker_pos'])."""
+
+    def __init__(self, data_list, processor, config, lag_num=-1):
+        prepared = []
+        for row in data_list:
+            spoken, csv = split_tags(row["text"])
+            prepared.append({**row, "text": spoken, "_vs_instruct": flatten_tags(csv, row.get("instruct"), row.get("emotion"), row.get("style"))})
+        super().__init__(prepared, processor, config, lag_num)
+        self._vs_rng = random.Random(int(os.environ.get("VS_INSTRUCT_SEED", "1234")))
+        self._vs_dropout = float(os.environ.get("VS_INSTRUCT_DROPOUT", "0.3"))
+
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        chosen = choose_instruct(self.data_list[idx]["_vs_instruct"], self._vs_rng, self._vs_dropout)
+        item["instruct_ids"] = self._tokenize_texts(f"<|im_start|>user\\n{chosen}<|im_end|>\\n") if chosen else None  # 1, L (same template as generation)
+        return item
+
+    def collate_fn(self, batch):
+        assert self.lag_num == -1
+        tc = self.config.talker_config
+        offsets = [0 if b.get("instruct_ids") is None else int(b["instruct_ids"].shape[1]) for b in batch]
+        max_length = max(o + b["text_ids"].shape[1] + b["audio_codes"].shape[0] for o, b in zip(offsets, batch)) + 8
+        n, t = len(batch), max_length
+        input_ids = torch.zeros((n, t, 2), dtype=torch.long)
+        codec_ids = torch.zeros((n, t, 16), dtype=torch.long)
+        text_embedding_mask = torch.zeros((n, t), dtype=torch.bool)
+        codec_embedding_mask = torch.zeros((n, t), dtype=torch.bool)
+        codec_mask = torch.zeros((n, t), dtype=torch.bool)
+        attention_mask = torch.zeros((n, t), dtype=torch.long)
+        codec_0_labels = torch.full((n, t), -100, dtype=torch.long)
+        speaker_pos = torch.zeros((n,), dtype=torch.long)
+        for i, (o, data) in enumerate(zip(offsets, batch)):
+            text_ids, audio_codes = data["text_ids"], data["audio_codes"]
+            audio_codec_0 = audio_codes[:, 0]
+            tl, cl = text_ids.shape[1], audio_codec_0.shape[0]
+            e = o + 8 + tl + cl  # end of the sequence
+            if o:
+                input_ids[i, :o, 0] = data["instruct_ids"][0]  # text channel only: no codec embedding is added under it
+            # text channel
+            input_ids[i, o:o + 3, 0] = text_ids[0, :3]
+            input_ids[i, o + 3:o + 7, 0] = self.config.tts_pad_token_id
+            input_ids[i, o + 7, 0] = self.config.tts_bos_token_id
+            input_ids[i, o + 8:o + 8 + tl - 3, 0] = text_ids[0, 3:]
+            input_ids[i, o + 8 + tl - 3, 0] = self.config.tts_eos_token_id
+            input_ids[i, o + 8 + tl - 2:e, 0] = self.config.tts_pad_token_id
+            text_embedding_mask[i, :e] = True
+            # codec channel
+            input_ids[i, o + 3:o + 8, 1] = torch.tensor([tc.codec_nothink_id, tc.codec_think_bos_id, tc.codec_think_eos_id, 0, tc.codec_pad_id])
+            input_ids[i, o + 8:o + 8 + tl - 3, 1] = tc.codec_pad_id
+            input_ids[i, o + 8 + tl - 3, 1] = tc.codec_pad_id
+            input_ids[i, o + 8 + tl - 2, 1] = tc.codec_bos_id
+            input_ids[i, o + 8 + tl - 1:o + 8 + tl - 1 + cl, 1] = audio_codec_0
+            input_ids[i, o + 8 + tl - 1 + cl, 1] = tc.codec_eos_token_id
+            codec_0_labels[i, o + 8 + tl - 1:o + 8 + tl - 1 + cl] = audio_codec_0
+            codec_0_labels[i, o + 8 + tl - 1 + cl] = tc.codec_eos_token_id
+            codec_ids[i, o + 8 + tl - 1:o + 8 + tl - 1 + cl, :] = audio_codes
+            codec_embedding_mask[i, o + 3:e] = True
+            codec_embedding_mask[i, o + 6] = False  # the speaker slot
+            codec_mask[i, o + 8 + tl - 1:o + 8 + tl - 1 + cl] = True
+            attention_mask[i, :e] = True
+            speaker_pos[i] = o + 6
+        ref_mels = torch.cat([data["ref_mel"] for data in batch], dim=0)
+        return {
+            "input_ids": input_ids, "ref_mels": ref_mels, "attention_mask": attention_mask,
+            "text_embedding_mask": text_embedding_mask.unsqueeze(-1), "codec_embedding_mask": codec_embedding_mask.unsqueeze(-1),
+            "codec_0_labels": codec_0_labels, "codec_ids": codec_ids, "codec_mask": codec_mask, "speaker_pos": speaker_pos,
+        }
+
+
+def _vs_put_speaker(codec_embedding, batch, speaker_embedding):
+    """Put the speaker vector into each sample's own slot (instruction length + 6); without speaker_pos it is the fixed slot 6 of the original."""
+    pos = batch.get("speaker_pos") if hasattr(batch, "get") else None
+    if pos is None:
+        codec_embedding[:, 6, :] = speaker_embedding
+        return
+    rows = torch.arange(codec_embedding.size(0), device=codec_embedding.device)
+    codec_embedding[rows, pos.to(codec_embedding.device)] = speaker_embedding
+
+
+target_speaker_embedding = None'''
+INSTRUCT_SPK_TRAIN_OLD = '\n                input_codec_embedding[:, 6, :] = speaker_embedding\n'
+INSTRUCT_SPK_TRAIN_NEW = '\n                _vs_put_speaker(input_codec_embedding, batch, speaker_embedding)\n'
+INSTRUCT_SPK_VAL_OLD = '\n    input_codec_embedding[:, 6, :] = speaker_embedding\n'
+INSTRUCT_SPK_VAL_NEW = '\n    _vs_put_speaker(input_codec_embedding, batch, speaker_embedding)\n'
+INSTRUCT_PAIRS = ((ALIGN_HELPER_ANCHOR, INSTRUCT_PURE_SOURCE + "\n\n" + INSTRUCT_DATASET), (INSTRUCT_SPK_TRAIN_OLD, INSTRUCT_SPK_TRAIN_NEW),
+                  (INSTRUCT_SPK_VAL_OLD, INSTRUCT_SPK_VAL_NEW))
+
 # --- LoRA (PEFT) and multi-speaker training, runner 21 ---------------------------------------------------------------------------
 # Everything below is applied ONLY when TRAIN_MODE is "lora" or the data names several speakers; the default full fine-tune script is
 # byte-for-byte what runner 20 wrote. Checked against the pinned sft_12hz.py / dataset.py / modeling_qwen3_tts.py (commit 022e286).
@@ -484,6 +633,8 @@ class Params:
     lora_rank: int = DEFAULT_LORA_RANK
     lora_alpha: float = DEFAULT_LORA_ALPHA
     lora_dropout: float = DEFAULT_LORA_DROPOUT
+    instruct_conditioning: bool = False  # True: train with the instruction block generation prepends (see INSTRUCT_PURE_SOURCE); off = the plain script
+    instruct_dropout: float = INSTRUCT_DEFAULT_DROPOUT  # chance a sample WITH tags is trained without them (the timbre lock)
     lora_scale: float = LORA_DEFAULT_SCALE  # multiplier on alpha/r when the adapter is merged into the saved checkpoint (default 0.3, range 0.0-1.0)
     speakers: str = ""  # comma-separated speaker names for a multi-speaker model; empty: taken from a `speaker` field in the data, else SPEAKER_NAME alone
     val_fraction: float = 0.05  # share of the clips held out (fixed seed) to score every epoch; 0 turns validation off
@@ -521,6 +672,9 @@ class Params:
             raise StepFailed("TRAIN_MODE must be 'full' or 'lora'.")
         self.lora_rank, self.lora_alpha, self.lora_dropout = int(self.lora_rank), float(self.lora_alpha), float(self.lora_dropout)
         self.lora_scale = float(self.lora_scale)
+        self.instruct_conditioning, self.instruct_dropout = _truthy(self.instruct_conditioning), float(self.instruct_dropout)
+        if not 0.0 <= self.instruct_dropout <= 1.0:
+            raise StepFailed("INSTRUCT_DROPOUT must be between 0 and 1.")
         if not 1 <= self.lora_rank <= 256 or not 0 < self.lora_alpha <= 1024 or not 0.0 <= self.lora_dropout <= 0.5 or not LORA_SCALE_RANGE[0] <= self.lora_scale <= LORA_SCALE_RANGE[1]:
             raise StepFailed("LORA_RANK must be 1-256, LORA_ALPHA above 0 (up to 1024), LORA_DROPOUT 0 to 0.5 and LORA_SCALE 0.0 to 1.0 (0.0 is the base model; above 0.5 is risky).")
         self.speakers = ",".join(s.strip() for s in str(self.speakers or "").split(",") if s.strip())
@@ -592,7 +746,7 @@ def _truthy(v) -> bool:
 
 _ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "fast_setup", "base_model", "tokenizer_model", "run_id",
                "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "val_fraction", "drive_skip_first", "sample_after_training",
-               "train_mode", "lora_rank", "lora_alpha", "lora_dropout", "lora_scale", "speakers", "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
+               "train_mode", "lora_rank", "lora_alpha", "lora_dropout", "lora_scale", "instruct_conditioning", "instruct_dropout", "speakers", "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour", "local_root")
 
 
@@ -610,7 +764,8 @@ def params_from(overrides: Optional[dict] = None, settings_path: Optional[str] =
         p.sources["drive_root"] = "export"
         for key, field in (("speaker_name", "speaker_name"), ("epochs", "epochs"), ("learning_rate", "lr"),
                            ("batch_size", "batch_size"), ("base_model", "base_model"), ("tokenizer_model", "tokenizer_model"),
-                           ("train_mode", "train_mode"), ("lora_rank", "lora_rank"), ("lora_alpha", "lora_alpha"), ("lora_dropout", "lora_dropout"), ("lora_scale", "lora_scale")):
+                           ("train_mode", "train_mode"), ("lora_rank", "lora_rank"), ("lora_alpha", "lora_alpha"), ("lora_dropout", "lora_dropout"), ("lora_scale", "lora_scale"),
+                           ("instruct_conditioning", "instruct_conditioning"), ("instruct_dropout", "instruct_dropout")):
             if settings.get(key) is not None:
                 setattr(p, field, settings[key])
                 p.sources[field] = "export"
@@ -2794,7 +2949,7 @@ def ensure_codes(p: Params, lay: Layout, folder: str, dataset_hash: str, rows: i
 
 
 # --------------------------------------------------------------------------------------------- training
-def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL, *, lora_or_speakers: bool = False) -> str:
+def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL, *, lora_or_speakers: bool = False, instruct: bool = False) -> str:
     """Copy sft_12hz.py to /content with the changes this runner needs. The cached repo is never touched.
 
     Always: a TensorBoard log directory is added to the Accelerator (the installed accelerate refuses ``log_with="tensorboard"`` without
@@ -2808,7 +2963,7 @@ def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL, 
         raise StepFailed("sft_12hz.py does not contain the expected lines exactly once, so it cannot be patched safely "
                          "(the repo is not the pinned commit?).")
     text = text.replace(ACCEL_LINE, ACCEL_FIXED)  # no-op when the line is already fixed
-    for old, new in ALIGN_PAIRS + (LORA_PAIRS if lora_or_speakers else ()):  # training-loop fixes, see the comments inside ALIGN_* (Qwen3-TTS issues #39, #179, #278, #371)
+    for old, new in ALIGN_PAIRS + (INSTRUCT_PAIRS if instruct else ()) + (LORA_PAIRS if lora_or_speakers else ()):  # training-loop fixes, see the comments inside ALIGN_* (Qwen3-TTS issues #39, #179, #278, #371)
         if text.count(old) != 1:
             raise StepFailed("sft_12hz.py does not contain the expected training lines exactly once, so the label-alignment fix cannot be applied "
                              "safely (the repo is not the pinned commit, or the copy was edited).")
@@ -2899,7 +3054,7 @@ def max_code_frames(codes_jsonl: str) -> int:
 
 def train_env(p: Params, lay: Layout) -> dict:
     """Environment of the patched script: training mode, LoRA settings and the speaker rows. Nothing else changes the default run."""
-    env = {"VS_TRAIN_MODE": p.train_mode, "VS_RUNNER_VERSION": RUNNER_VERSION, "VS_MERGE_MIN_PCT": f"{MERGE_MIN_CHANGED_PCT:g}"}
+    env = {"VS_INSTRUCT_DROPOUT": f"{p.instruct_dropout:g}", "VS_TRAIN_MODE": p.train_mode, "VS_RUNNER_VERSION": RUNNER_VERSION, "VS_MERGE_MIN_PCT": f"{MERGE_MIN_CHANGED_PCT:g}"}
     if p.train_mode == "lora":
         env.update({"VS_LORA_RANK": str(p.lora_rank), "VS_LORA_ALPHA": f"{p.lora_alpha:g}", "VS_LORA_DROPOUT": f"{p.lora_dropout:g}",
                     "VS_LORA_SCALE": f"{p.lora_scale:g}", "VS_LORA_TARGETS": LORA_TARGET_REGEX})
@@ -2995,13 +3150,13 @@ def _preflight(p: Params, lay: Layout, gpu: Optional[Gpu]) -> tuple:
     return path, batch
 
 
-def _announce_patch(path: str, lay: Layout, lora_or_speakers: bool = False) -> Optional[str]:
+def _announce_patch(path: str, lay: Layout, lora_or_speakers: bool = False, instruct: bool = False) -> Optional[str]:
     if path != "sdpa":
-        patched = build_patched_script(lay, None, lora_or_speakers=lora_or_speakers)
+        patched = build_patched_script(lay, None, lora_or_speakers=lora_or_speakers, instruct=instruct)
         say(f"Training script: a copy of Qwen's sft_12hz.py ({patched}) with a TensorBoard log directory, the text projection and the label/sub-talker "
             "alignment fixes; attention is untouched (FlashAttention 2). Qwen's repo is unchanged.")
         return patched
-    patched = build_patched_script(lay, lora_or_speakers=lora_or_speakers)
+    patched = build_patched_script(lay, lora_or_speakers=lora_or_speakers, instruct=instruct)
     say("*" * 78)
     say("ATTENTION: training with a PATCHED COPY of sft_12hz.py (PyTorch SDPA attention instead of FlashAttention 2).")
     say(f"Copy: {patched}. Qwen's cached repo is unchanged.")
@@ -3038,7 +3193,7 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
         check_manifest(folder, p.train_mode)
         names = resolve_speakers(p, os.path.join(folder, "train.jsonl"))
         p.speakers = ",".join(names)
-        patched = _announce_patch(path, lay, p.train_mode == "lora" or bool(names))
+        patched = _announce_patch(path, lay, p.train_mode == "lora" or bool(names), p.instruct_conditioning)
         log = new_log(lay, p, "train", per_run=True)
         env = detect_environment()
         status.update(status="preparing")
@@ -3532,6 +3687,8 @@ def build_parser() -> argparse.ArgumentParser:
                        ("lora-rank", int), ("lora-alpha", float), ("lora-dropout", float), ("lora-scale", float), ("lr", float), ("units-per-hour", float), ("units-available", float), ("compare-epoch-seconds", float),
                        ("compare-units-per-hour", float)):
         ap.add_argument("--" + flag, type=kind)
+    ap.add_argument("--instruct-conditioning", choices=("true", "false"), help="train with the instruction block generation prepends (default false; UNVERIFIED on a GPU)")
+    ap.add_argument("--instruct-dropout", type=float, help="chance a tagged sample is trained without its tags (default 0.30)")
     ap.add_argument("--train-mode", choices=TRAIN_MODES, help="full (default): train the whole model; lora: adapters on a frozen model (UNVERIFIED on a GPU)")
     for flag in ("keep-all", "keep-first", "keep-final", "cache-models-on-drive", "sample-after-training"):
         ap.add_argument("--" + flag, choices=("true", "false"), help="default depends on the setting")

@@ -15,6 +15,7 @@ metadata and the backend fallback mirror it.
 ### Added
 
 - Qwen story page: a multi-voice book for Qwen3-TTS with saved voice profiles (record or upload a sample and press Save voice; the speaker embedding is prepared automatically), emotion presets (unverified on the fine-tuned narrator), character-to-profile mapping, bulk edit of selected chunks, a tags dialog, per-chunk render and re-render, and a Fish-style output folder — thanks @mkramer0820!
+- Qwen3-TTS training can condition on --instruct (opt-in checkbox in the export dialog): the clip [tags] become an instruct field trained as the instruction block with 30% dropout, so a fine-tune keeps its voice when an instruct is used (unverified on a GPU) — thanks @mkramer0820!
 - Qwen story: a prepared speaker embedding is tied to its reference clip and is rebuilt when the clip changes; an imported embedding is left alone — thanks @mkramer0820!
 - Qwen3-TTS exports include plain `train_local.sh` / `train_local.ps1` scripts next to the Colab notebook, and every file carries one bundle id (also in manifest.json) so a stale copy is easy to spot — thanks @mkramer0820!
 - Qwen playground can load a LoRA adapter as a model: pick an adapter scale (default 0.3), it merges into its Base on the CPU once and caches the result — thanks @mkramer0820!
