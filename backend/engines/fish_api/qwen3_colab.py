@@ -28,8 +28,7 @@ CLIPS_PER_UPDATE = 8  # the recipe that worked: batch x accumulation = 8 clips p
 LEGACY_DRIVE_FOLDERS = {"VoiceStudio-training": DEFAULT_DRIVE_FOLDER}  # an old default; a dialog that kept it in memory must not reach a notebook
 # Community wheel for Colab's current default runtime (Python 3.13, torch 2.11, CUDA 13). The runner checks the file name against the
 # runtime before installing and quietly falls back to its own choices when it does not fit, so a stale value cannot break a run.
-COLAB_FLASH_WHEEL = ("https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/"
-                     "flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl")
+COLAB_FLASH_WHEEL = runner.COMMUNITY_PINNED_WHEEL  # the runner also looks the right wheel up for any other runtime (GitHub API) and uses this one as the fallback
 TRAILING_SILENCE_NOTE = "1 s of silence at the end of every training clip (reported to stop rushed speech and noise, Qwen3-TTS issue #39)"
 
 
@@ -38,7 +37,7 @@ def accum_for(batch_size: int) -> int:
 RUNNER_NAME = "voicestudio_qwen3_colab.py"
 NOTEBOOK_NAME = "Qwen3_TTS_Colab_Training.ipynb"
 DEFAULT_SAMPLE_TEXT = runner.DEFAULT_SAMPLE_TEXT
-DEFAULT_SPEAKER, DEFAULT_FOLDER_NAME = "MySpeaker", "my-dataset"  # the committed notebooks/ copy uses these
+DEFAULT_SPEAKER, DEFAULT_FOLDER_NAME = runner.DEFAULT_SPEAKER, "my-dataset"  # the committed notebooks/ copy uses these
 LAYOUT = {
     "cache/models": "base model and tokenizer, downloaded once",
     "cache/Qwen3-TTS": "the official repo at the pinned commit",
@@ -59,12 +58,16 @@ class TrainSettings:
     """What the official scripts take as arguments. Gradient accumulation (4), bf16 precision, FlashAttention 2 and
     saving once per epoch are fixed inside ``sft_12hz.py`` and are not options, so they are not offered here."""
 
-    epochs: int = 10  # the script's default is 3; the last epochs of the 105-minute run were still the best, so 10, and listen to every one
-    learning_rate: float = 1e-6  # --lr. The script's own default (2e-5) makes the 1.7B model produce noise and never stop (Qwen3-TTS issue #39); 1e-6 gave the good run
-    batch_size: int = 4  # --batch_size (the script's default is 2); 4 x accumulation 2 = 8 clips per update, the same recipe as 2 x 4, but faster
+    epochs: int = runner.DEFAULT_EPOCHS  # the script's default is 3; the last epochs of the 105-minute run were still the best, so 10, and listen to every one
+    learning_rate: float = runner.DEFAULT_LR  # --lr (owner chose to try 2e-6 against the 1e-6 run, 2026-10-27). The script's own default (2e-5) makes the 1.7B model produce noise and never stop (Qwen3-TTS issue #39); 1e-6 gave the good run
+    batch_size: int = runner.DEFAULT_BATCH_SIZE  # --batch_size (the script's default is 2); 4 x accumulation 2 = 8 clips per update, the same recipe as 2 x 4, but faster
     base_model: str = BASE_MODEL  # --init_model_path
     tokenizer_model: str = TOKENIZER  # prepare_data.py --tokenizer_model_path
     drive_folder: str = DEFAULT_DRIVE_FOLDER  # everything lives under My Drive/<drive_folder>
+    train_mode: str = runner.DEFAULT_TRAIN_MODE  # "full" (the whole model, learning_rate default runner.DEFAULT_LR) or "lora" (adapters; own default runner.LORA_DEFAULT_LR)
+    lora_rank: int = runner.DEFAULT_LORA_RANK
+    lora_alpha: float = runner.DEFAULT_LORA_ALPHA
+    lora_dropout: float = runner.DEFAULT_LORA_DROPOUT
 
     _RANGES = {"epochs": (1, 100), "learning_rate": (1e-7, 1e-3), "batch_size": (1, 256)}
 
@@ -72,6 +75,10 @@ class TrainSettings:
 def settings_from(spec: Optional[dict]) -> TrainSettings:
     """Validated settings; unknown keys, bad ranges and unsafe names raise ``ValueError``."""
     data = {k: v for k, v in dict(spec or {}).items() if v is not None}
+    if data.get("train_mode", runner.DEFAULT_TRAIN_MODE) not in runner.TRAIN_MODES:
+        raise ValueError("train_mode must be 'full' or 'lora'.")
+    if data.get("train_mode") == "lora" and "learning_rate" not in data:
+        data["learning_rate"] = runner.LORA_DEFAULT_LR  # LoRA has its own default (an unconfirmed placeholder), never the full fine-tune one
     unknown = sorted(set(data) - {f.name for f in dataclasses.fields(TrainSettings)})
     if unknown:
         raise ValueError("Unknown Qwen3-TTS training setting(s): " + ", ".join(unknown) + ".")
@@ -83,6 +90,9 @@ def settings_from(spec: Optional[dict]) -> TrainSettings:
     if int(out.epochs) != out.epochs or int(out.batch_size) != out.batch_size:
         raise ValueError("epochs and batch_size must be whole numbers.")
     out.epochs, out.batch_size, out.learning_rate = int(out.epochs), int(out.batch_size), float(out.learning_rate)
+    if not (1 <= out.lora_rank <= 256 and 0 < out.lora_alpha <= 1024 and 0 <= out.lora_dropout <= 0.5):
+        raise ValueError("lora_rank must be 1-256, lora_alpha above 0 (up to 1024) and lora_dropout 0 to 0.5.")
+    out.lora_rank, out.lora_alpha, out.lora_dropout = int(out.lora_rank), float(out.lora_alpha), float(out.lora_dropout)
     for key in ("base_model", "tokenizer_model"):
         if not MODEL_RE.fullmatch(getattr(out, key) or ""):
             raise ValueError(f"{key} must be a Hugging Face model id such as {BASE_MODEL}.")
@@ -128,7 +138,9 @@ def runner_args(settings: TrainSettings, speaker: str, data_source: str) -> str:
         "--drive-root", shlex.quote(drive_root(settings)), "--data-source", shlex.quote(data_source),
         "--speaker-name", shlex.quote(speaker), "--epochs", str(settings.epochs), "--lr", f"{settings.learning_rate:g}",
         "--batch-size", str(settings.batch_size), "--base-model", shlex.quote(settings.base_model),
-        "--tokenizer-model", shlex.quote(settings.tokenizer_model)])
+        "--tokenizer-model", shlex.quote(settings.tokenizer_model)]
+        + (["--train-mode", settings.train_mode, "--lora-rank", str(settings.lora_rank), "--lora-alpha", f"{settings.lora_alpha:g}",
+            "--lora-dropout", f"{settings.lora_dropout:g}"] if settings.train_mode != runner.DEFAULT_TRAIN_MODE else []))
 
 
 def start_commands(speaker: str, folder_name: str, zip_name: str, settings: TrainSettings) -> dict:
@@ -364,19 +376,21 @@ Trains Qwen3-TTS on the dataset folder VoiceStudio exported, using Qwen's offici
 1. **Runtime > Change runtime type > pick the GPU.** A100, H100 and L4 use the original script (FlashAttention 2). The **G4** (RTX PRO 6000 Blackwell) uses a patched SDPA copy by default (unverified). A **T4** cannot run FlashAttention 2 and needs `ATTN_FALLBACK = True` (unverified, may run out of memory).
 2. **Compute units.** A runtime uses units while connected, idle or not, and each GPU type has its own rate (see Colab's runtime menu). Run once with `SMOKE_RUN = True` for a short timing run that projects time and units, then set it back to `False`.
 3. Copy the export zip (or folder) to Drive and set `DATA_SOURCE` below to it.
-4. Run the cells top to bottom. The first run on a new runtime type installs packages and downloads models; later runs reuse the Drive cache. FlashAttention is used only when a ready-made package exists for the runtime (newest Colab runtimes, such as Python 3.13 with a new CUDA, often have none): then PyTorch's built-in attention is used and **nothing is compiled** unless you set `BUILD_FLASH_ATTN = True`.
+4. Run the cells top to bottom. The first run on a new runtime type installs packages and downloads models; later runs reuse the Drive cache. FlashAttention is used only when a ready-made wheel exists for the runtime's exact Python, torch and CUDA: the runner looks one up in the community wheel releases (the pinned Python 3.13 / torch 2.11 / CUDA 13 wheel is the fallback). With no wheel, PyTorch's built-in attention (SDPA) is used, which gives the same training result (FlashAttention only changes speed and memory), and **nothing is compiled** unless you set `BUILD_FLASH_ATTN = True`.
 5. When finished, **disconnect and delete the runtime** (last cell, or Runtime > Disconnect and delete runtime).
 6. **To cancel fast:** press the stop button on the running cell (it stops the training and first saves the epochs that already finished), then **Runtime > Disconnect and delete runtime**. Compute units are used while the runtime is connected, not while a cell is running, so disconnecting is what stops the spending. Finished epochs stay on Drive; the epoch in progress is lost, because the official script cannot resume. If anything looks stuck, go straight to Disconnect and delete runtime."""
 
 
 def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAULT_FOLDER_NAME, zip_name: Optional[str] = None,
                     settings: Optional[TrainSettings] = None, embed_runner: bool = False, flash_wheel: str = "",
-                    smoke_run: bool = False, grad_accum: int = ACCUMULATION, fast_setup: bool = True) -> str:
+                    smoke_run: bool = False, grad_accum: Optional[int] = None, fast_setup: bool = True) -> str:
     """The Colab notebook for one export (nbformat 4). Same input, same text.
 
     ``embed_runner`` stores the runner script inside the notebook (compressed), so the notebook alone is enough besides the data zip.
     ``flash_wheel`` pre-fills FLASH_WHEEL; ``smoke_run`` pre-sets the timing run."""
     st = settings or TrainSettings()
+    D = runner.Params()  # the runner's own defaults: the parameters cell shows exactly what a run without it would use
+    grad_accum = accum_for(st.batch_size) if grad_accum is None else grad_accum  # batch x accumulation = 8 clips per update, as in an export
     zip_name = zip_name or folder_name + ".zip"
     root = drive_root(st)
     params = "\n".join([
@@ -385,26 +399,33 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         f"DATA_SOURCE = {_py(f'{root}/datasets/{zip_name}')}  # where the training data is: a .zip or a folder on Drive, or an unzipped folder under /content",
         f"SPEAKER_NAME = {_py(speaker)}  # the name the fine-tuned model answers to",
         f"EPOCHS = {st.epochs}",
-        f"LR = {st.learning_rate:g}",
+        f"LR = {(st.learning_rate if st.train_mode != 'lora' else runner.DEFAULT_LR):g}  # learning rate of a FULL fine-tune (TRAIN_MODE = 'full')",
+        "TRAIN_MODE = " + _py(st.train_mode) + "  # 'full': train the whole model (LR). 'lora': train small adapters on a frozen model (LORA_LR); every epoch is still saved as a normal merged checkpoint, plus the adapter. LoRA is UNVERIFIED on a GPU",
+        f"LORA_LR = {(st.learning_rate if st.train_mode == 'lora' else runner.LORA_DEFAULT_LR):g}  # learning rate of a LoRA run. UNCONFIRMED placeholder default, not tuned",
+        f"LORA_RANK = {st.lora_rank}",
+        f"LORA_ALPHA = {st.lora_alpha:g}",
+        f"LORA_DROPOUT = {st.lora_dropout:g}",
+        f"LORA_SCALE = {runner.LORA_DEFAULT_SCALE:g}  # multiplier on alpha/r when each epoch's adapter is merged into its checkpoint. 1.0 = as trained (unconfirmed); 0.3 is a candidate from another project, not measured here",
+        "SPEAKERS = ''  # several speakers in one model: comma-separated names. Empty: taken from the `speaker` of each clip in the export, else SPEAKER_NAME alone",
         f"FAST_SETUP = {bool(fast_setup)}  # True: clone the Qwen repo and download the models straight into /content and keep pip's cache there (saves minutes of slow Drive reads each session). Your data, codes, checkpoints and logs stay on Drive either way.",
         f"GRAD_ACCUM = {int(grad_accum)}  # micro-batches per update (the script fixes 4). BATCH_SIZE x GRAD_ACCUM = clips per update: 2 x 4 or 4 x 2 both make 8",
         f"BATCH_SIZE = {st.batch_size}  # a number, or 'auto' for the suggestion for this GPU (untested estimates, see the GPU section of the output)",
         f"BASE_MODEL = {_py(st.base_model)}",
         "RUN_ID = ''  # empty: a new timestamped run folder every time, so a second run never overwrites the first",
-        "KEEP_ALL = True  # True keeps every checkpoint (each is several GB). Nothing is ever deleted while this is True",
-        "KEEP_LAST_N = 0  # only with KEEP_ALL = False: keep the newest N epochs (plus KEEP_FIRST / KEEP_FINAL)",
-        "KEEP_FIRST = False",
-        "KEEP_FINAL = True",
+        f"KEEP_ALL = {D.keep_all}  # True keeps every checkpoint (each is several GB). Nothing is ever deleted while this is True",
+        f"KEEP_LAST_N = {D.keep_last_n}  # only with KEEP_ALL = False: keep the newest N epochs (plus KEEP_FIRST / KEEP_FINAL)",
+        f"KEEP_FIRST = {D.keep_first}",
+        f"KEEP_FINAL = {D.keep_final}",
         "ATTN_FALLBACK = 'auto'  # 'auto': FlashAttention 2 when a ready-made package exists for this runtime, otherwise PyTorch's built-in attention (patched copy of the script, unverified); True: always the patched copy; False: require FlashAttention 2",
         "USE_VENV = 'auto'  # 'auto': when this runtime has no FlashAttention package, build an isolated Python 3.12 + torch environment that has one (a few minutes, once per runtime). True: always. False: never.",
-        f"FLASH_WHEEL = {_py(flash_wheel)}  # optional: the full path of a flash_attn .whl you put on Drive (or a URL) for THIS runtime's Python/torch/CUDA; tried first. Leave empty for the automatic choice.",
+        f"FLASH_WHEEL = {_py(flash_wheel)}  # a flash_attn .whl (Drive path or URL) for THIS runtime's Python/torch/CUDA, tried first; it is name-checked, never installed when it does not fit. Empty: the runner looks the right one up",
         "BUILD_FLASH_ATTN = False  # True: compile FlashAttention from source when no ready-made package exists. Takes an hour or more, may fail on a new Python/CUDA, and uses compute units the whole time. Leave False.",
         "RESTART = False  # True lets a RUN_ID you re-use replace its own checkpoints (the official script cannot resume)",
         "SAMPLE_TEXT = " + _py(DEFAULT_SAMPLE_TEXT) + "  # sentence for final.wav after training",
-        "SAMPLE_SEED = 1234",
-        "CACHE_MODELS_ON_DRIVE = False  # False: download models straight to /content (Drive only keeps your epochs). True also caches the models on Drive",
-        "VAL_FRACTION = 0.05  # share of your clips held out and scored every epoch (validation loss in metrics.csv). 0 turns it off",
-        "DRIVE_SKIP_FIRST = 3  # the first N epochs stay on /content and are not copied to Drive (the final epoch is always copied)",
+        f"SAMPLE_SEED = {D.sample_seed}",
+        f"CACHE_MODELS_ON_DRIVE = {D.cache_models_on_drive}  # False: download models straight to /content (Drive only keeps your epochs). True also caches the models on Drive",
+        f"VAL_FRACTION = {D.val_fraction:g}  # share of your clips held out and scored every epoch (validation loss in metrics.csv). 0 turns it off",
+        f"DRIVE_SKIP_FIRST = {D.drive_skip_first}  # the first N epochs stay on /content and are not copied to Drive (the final epoch is always copied)",
         f"SMOKE_RUN = {bool(smoke_run)}  # True: a short timing run (one epoch on the first SMOKE_CLIPS clips, scratch folder) instead of real training",
         "SMOKE_CLIPS = 40",
         "UNITS_PER_HOUR = None  # this runtime's compute units per hour; empty = looked up for known GPUs (owner's figures, unverified)",
@@ -459,7 +480,8 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "    sys.path.insert(0, CACHE)",
         "import importlib, voicestudio_qwen3_colab as vs",
         "importlib.reload(vs)",
-        "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LR,",
+        "P = vs.params_from(dict(drive_root=DRIVE_ROOT, data_source=DATA_SOURCE, speaker_name=SPEAKER_NAME, epochs=EPOCHS, lr=LORA_LR if TRAIN_MODE == 'lora' else LR,",
+        "    train_mode=TRAIN_MODE, lora_rank=LORA_RANK, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT, lora_scale=LORA_SCALE, speakers=SPEAKERS,",
         "    batch_size=BATCH_SIZE, grad_accum=GRAD_ACCUM, fast_setup=FAST_SETUP, base_model=BASE_MODEL, tokenizer_model=TOKENIZER_MODEL, run_id=RUN_ID, keep_all=KEEP_ALL, keep_last_n=KEEP_LAST_N,",
         "    keep_first=KEEP_FIRST, keep_final=KEEP_FINAL, sample_text=SAMPLE_TEXT, sample_seed=SAMPLE_SEED, cache_models_on_drive=CACHE_MODELS_ON_DRIVE, val_fraction=VAL_FRACTION, drive_skip_first=DRIVE_SKIP_FIRST,",
         "    attn_fallback=ATTN_FALLBACK, use_venv=USE_VENV, build_flash_attn=BUILD_FLASH_ATTN, flash_wheel=FLASH_WHEEL, restart=RESTART, smoke_run=SMOKE_RUN, smoke_clips=SMOKE_CLIPS, units_per_hour=UNITS_PER_HOUR, units_available=UNITS_AVAILABLE,",
@@ -467,7 +489,7 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         "print('Runner', vs.RUNNER_VERSION, 'loaded from', cached)",
     ])
     cells = [
-        _cell("markdown", 1, INTRO_MD),
+        _cell("markdown", 1, INTRO_MD.replace("(VoiceStudio)", f"(VoiceStudio) - runner {runner.RUNNER_VERSION}", 1)),
         _cell("code", 2, "# GPU check: which GPU did Colab give you? (details and the attention path are printed again by the setup cell)\n"
                          "!nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv"),
         _cell("markdown", 3, "## Parameters\nEdit the values in the next cell. `DATA_SOURCE` is where the training data is: the export zip or folder on Drive "
@@ -510,10 +532,16 @@ def _embedded_lines(embed: bool) -> list:
             f"EMBEDDED = zlib.decompress(base64.b64decode('{blob}'))"]
 
 
+def default_notebook_text() -> str:
+    """The committed notebook: what an export writes (the verified Colab FlashAttention wheel, the accumulation that makes 8 clips per update)
+    with the runner stored inside, so it works without the export zip's helper files."""
+    return render_notebook(embed_runner=True, flash_wheel=COLAB_FLASH_WHEEL, grad_accum=accum_for(TrainSettings().batch_size))
+
+
 def write_default_notebook(path: str) -> None:
     """Refresh the committed copy: ``cd backend && python -c "from engines.fish_api import qwen3_colab as c; c.write_default_notebook('../notebooks/Qwen3_TTS_Colab_Training.ipynb')"``."""
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(render_notebook())
+        fh.write(default_notebook_text())  # self-contained: the runner inside is always the current one
 
 
 def runner_source() -> str:
@@ -549,7 +577,7 @@ def _summary(report: dict) -> str:
         "  Audio: 24000 Hz, mono, WAV PCM16" + (f", plus {report['trailing_silence_s']:g} s of silence appended to every training clip"
                                                 if report.get("trailing_silence_s") else ""),
         f"  Reference: {ref['path']} from {ref['source']} ({ref['duration']} s): {ref['reason']}",
-        f"  Train samples: {c['train']}   Validation samples: 0 (Qwen's scripts have none)",
+        f"  Train samples: {c['train']}   Validation: a fixed-seed {runner.Params().val_fraction:.0%} of the clips is held out by the runner (VAL_FRACTION in the notebook; 0 turns it off)",
     ]
     rows += [f"  WARNING: {w['message']}" for w in report["warnings"]]
     return "\n".join(rows)

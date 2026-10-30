@@ -109,9 +109,12 @@ def _clean_times(monkeypatch):
     vs._FLASH["ok"] = None
     vs.PYTHON[0] = sys.executable
     monkeypatch.setattr(vs, "flash_functional", lambda: (True, "test"))
+    monkeypatch.setattr(vs, "fetch_community_releases", lambda page=1: [])  # no network; the pinned community wheel is the only candidate
+    vs._COMMUNITY.clear()
     monkeypatch.setattr(vs, "conv_functional", lambda: (True, "test"))  # tests assume FlashAttention 2 works unless they say otherwise
     yield
     vs._TIMES.clear()
+    vs._COMMUNITY.clear()
     vs._FLASH["ok"] = None
 
 
@@ -1140,7 +1143,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
           "TOKENIZER_MODEL": vs.TOKENIZER, "RUN_ID": "", "KEEP_ALL": True, "KEEP_LAST_N": 0, "KEEP_FIRST": False, "KEEP_FINAL": True,
           "SAMPLE_TEXT": vs.DEFAULT_SAMPLE_TEXT, "SAMPLE_SEED": 1, "CACHE_MODELS_ON_DRIVE": True, "VAL_FRACTION": 0.05, "DRIVE_SKIP_FIRST": 3, "ATTN_FALLBACK": "auto", "GRAD_ACCUM": 4, "FAST_SETUP": True, "USE_VENV": "auto", "BUILD_FLASH_ATTN": False, "FLASH_WHEEL": "", "RESTART": False,
           "SMOKE_RUN": False, "SMOKE_CLIPS": 40, "UNITS_PER_HOUR": None, "UNITS_AVAILABLE": 100, "COMPARE_EPOCH_SECONDS": None,
-          "COMPARE_UNITS_PER_HOUR": None}
+          "COMPARE_UNITS_PER_HOUR": None, "TRAIN_MODE": "full", "LORA_LR": vs.LORA_DEFAULT_LR, "LORA_RANK": 16, "LORA_ALPHA": 32, "LORA_DROPOUT": 0.05, "LORA_SCALE": 1.0, "SPEAKERS": ""}
     saved_path = list(sys.path)
     try:
         mount_cell = next(t for t in cells.values() if "drive.mount" in t)
@@ -1160,7 +1163,7 @@ def test_the_mount_and_load_cell_runs_against_a_fake_colab(tmp_path, monkeypatch
 
 
 def test_committed_notebook_matches_what_the_generator_produces():
-    expected = qwen3_colab.render_notebook()
+    expected = qwen3_colab.default_notebook_text()
     assert os.path.isfile(NOTEBOOK_COMMITTED), "notebooks/Qwen3_TTS_Colab_Training.ipynb is missing"
     actual = open(NOTEBOOK_COMMITTED, encoding="utf-8", newline="").read().replace("\r\n", "\n")
     assert actual == expected, ("The committed notebook is out of date. Refresh it with: cd backend && python -c \"from engines.fish_api import "
@@ -1512,7 +1515,7 @@ def test_an_embedded_runner_is_written_to_the_cache_and_a_newer_cached_one_wins(
     ns = {}
     exec("import base64, zlib\n" + cell[start:cell.index("\n", start)], ns)
     assert ns["EMBEDDED"].decode("utf-8").replace("\r\n", "\n") == qwen3_colab.runner_source()
-    assert "EMBEDDED = None" in qwen3_colab.render_notebook()  # the default notebook stays small and identical to the committed copy
+    assert "EMBEDDED = None" in qwen3_colab.render_notebook()  # an export notebook relies on the zip; the committed copy embeds the runner
 
 
 def test_a_wheel_url_with_an_encoded_plus_is_saved_and_read_with_the_plus():
@@ -1663,7 +1666,7 @@ def test_the_push_starts_at_the_narrators_median_pace_not_a_constant():
 
 
 def test_gradient_accumulation_is_a_setting_that_reaches_the_training_script(tmp_path):
-    assert vs.params_from({}, env={}).grad_accum == 4  # the script's own value stays the default
+    assert vs.params_from({}, env={}).grad_accum == vs.DEFAULT_GRAD_ACCUM == 2  # batch 4 x 2 = the 8 clips per update of the 2 x 4 recipe
     p = vs.params_from({"grad_accum": 2, "batch_size": 4, "drive_root": "/content/drive/MyDrive/X"}, env={})
     assert p.grad_accum == 2 and vs.plan_commands(p, vs.Layout(p), "/d", 4)["env"]["VS_GRAD_ACCUM"] == "2"
     assert vs.params_from({}, env={"GRAD_ACCUM": "3"}).grad_accum == 3
@@ -1806,3 +1809,100 @@ def test_a_short_run_never_skips_its_final_epoch_and_the_new_settings_are_checke
     for bad in ({"val_fraction": 0.5}, {"val_fraction": -1}, {"drive_skip_first": -1}):
         with pytest.raises(vs.StepFailed):
             vs.params_from(bad, env={})
+
+
+def test_a_warning_on_stderr_does_not_become_the_last_line_of_a_probe_result():
+    code, out = vs.capture([sys.executable, "-c", "import sys; print('{\"ok\": true}'); print('UserWarning: no numpy', file=sys.stderr)"])
+    assert code == 0 and out.strip().splitlines()[-1] == '{"ok": true}'  # a success returns stdout only
+    code, out = vs.capture([sys.executable, "-c", "import sys; print('why', file=sys.stderr); sys.exit(3)"])
+    assert code == 3 and "why" in out  # a failure keeps stderr for the error message
+
+
+def test_the_committed_notebook_has_the_verified_flash_attention_wheel_and_the_export_recipe():
+    text = qwen3_colab.default_notebook_text()
+    assert qwen3_colab.COLAB_FLASH_WHEEL.replace("+", "%2B") in text or qwen3_colab.COLAB_FLASH_WHEEL in text  # not empty: an export fills it in
+    assert 'FLASH_WHEEL = \\"\\"' not in text and "GRAD_ACCUM = 2" in text and "LR = 2e-06" in text
+
+
+# ------------------------------------------------------------------------------------------------ community FlashAttention wheel lookup (runner 21)
+PY313_TORCH211 = {"python": "cp313", "python_version": "3.13.16", "platform": "linux-x86_64", "torch": "2.11.0", "torch_mm": "2.11", "cuda": "13.0",
+                  "cuda_tag": "cu13", "cxx11abi": True, "gpu": "NVIDIA A100-SXM4-40GB", "gpu_cc": "8.0"}
+
+
+def _release(tag, *names):
+    return {"tag_name": tag, "assets": [{"name": n, "browser_download_url": f"https://example.test/{tag}/{n}"} for n in names]}
+
+
+def test_the_runner_version_is_21_everywhere_it_is_asserted():
+    assert vs.RUNNER_VERSION == "21" and qwen3_colab.runner.RUNNER_VERSION == "21"
+    assert "runner 21" in qwen3_colab.default_notebook_text() and "RUNNER_VERSION = \"21\"" in open(RUNNER_PATH, encoding="utf-8").read()
+
+
+def test_community_wheel_matching_is_exact_and_prefers_the_newest():
+    rels = [_release("v0.9.31", "flash_attn-2.8.3+cu130torch2.11-cp313-cp313-linux_x86_64.whl", "flash_attn-2.8.3+cu130torch2.11-cp313t-cp313t-linux_x86_64.whl",
+                     "flash_attn-2.8.3+cu128torch2.11-cp313-cp313-linux_x86_64.whl", "flash_attn-2.8.3+cu130torch2.10-cp313-cp313-linux_x86_64.whl",
+                     "flash_attn-2.8.3+cu130torch2.11-cp312-cp312-linux_x86_64.whl", "flash_attn-2.8.3+cu130torch2.11-cp313-cp313-win_amd64.whl"),
+            _release("v0.9.4", "flash_attn-2.8.3+cu130torch2.11-cp313-cp313-linux_x86_64.whl"),
+            _release("v0.5.0", "flash_attn-2.7.4+cu130torch2.11-cp313-cp313-linux_x86_64.whl")]
+    hits = vs.community_wheel_matches(rels, "cp313", "2.11", "cu130")
+    assert [u.split("/")[3] for _n, u in hits] == ["v0.9.31", "v0.9.4", "v0.5.0"]  # free-threaded, other CUDA/torch/Python/OS never match; 2.8.3 beats 2.7.4
+    assert vs.community_wheel_matches(rels, "cp314", "2.11", "cu130") == []
+
+
+def test_the_right_community_wheel_is_looked_up_for_the_runtime_and_asked_once():
+    pages = {1: [_release("v1", "flash_attn-2.8.3+cu130torch2.12-cp313-cp313-linux_x86_64.whl")] * 100,
+             2: [_release("v2", "flash_attn-2.8.3+cu130torch2.11-cp313-cp313-linux_x86_64.whl")]}
+    got = vs.community_wheel(PY313_TORCH211, fetch=lambda page: pages.get(page, []))
+    assert got == ("https://example.test/v2/flash_attn-2.8.3+cu130torch2.11-cp313-cp313-linux_x86_64.whl", "found for this runtime")  # second page searched
+    calls = []
+    vs.fetch_community_releases = lambda page=1: calls.append(page) or pages[1][:0]  # restored by the fixture's monkeypatch? no: reset below
+    try:
+        assert vs.community_wheel(dict(PY313_TORCH211, torch_mm="2.12")) is None
+        assert vs.community_wheel(dict(PY313_TORCH211, torch_mm="2.12")) is None
+        assert calls == [1]  # remembered
+    finally:
+        vs.fetch_community_releases = lambda page=1: []
+
+
+def test_a_failed_lookup_is_not_fatal_and_falls_back_to_the_pinned_wheel_only_when_it_fits(capsys):
+    def boom(page):
+        raise OSError("rate limited")
+
+    assert vs.community_wheel(PY313_TORCH211, fetch=boom) == (vs.COMMUNITY_PINNED_WHEEL, "pinned")
+    assert vs.community_wheel(dict(PY313_TORCH211, torch_mm="2.12"), fetch=boom) is None  # never a wheel for the wrong runtime
+    assert vs.community_wheel(dict(PY313_TORCH211, platform="win32"), fetch=boom) is None
+    assert vs.community_wheel({"python": None}, fetch=boom) is None
+    assert "Could not look up" in capsys.readouterr().out
+    assert qwen3_colab.COLAB_FLASH_WHEEL == vs.COMMUNITY_PINNED_WHEEL and vs.wheel_fits(vs.COMMUNITY_PINNED_WHEEL, PY313_TORCH211)[0]
+
+
+def test_setup_installs_the_looked_up_community_wheel_when_no_wheel_was_given_and_never_compiles(tmp_path, monkeypatch):
+    e = Env(tmp_path)  # FLASH_WHEEL empty
+    vs.ensure_layout(e.p, create_run=False)
+    monkeypatch.setattr(vs, "fetch_community_releases", lambda page=1: [_release("v9", "flash_attn-2.8.4+cu130torch2.11-cp313-cp313-linux_x86_64.whl")])
+    state, downloaded = {"works": False}, []
+
+    def installs(cmd, *_):
+        if "install" in cmd and any(str(c).endswith(".whl") for c in cmd):
+            state["works"] = True
+        return 0
+
+    s = FakeStream(installs)
+    got = vs.ensure_flash_attn(e.p, e.lay, PY313_TORCH211, A100, "log", stream=s, functional=lambda: (state["works"], "x"), exists=lambda u: False,
+                               download=lambda url, dest: (downloaded.append(url), open(dest, "wb").write(b"w")))
+    assert got == "prebuilt wheel" and downloaded == ["https://example.test/v9/flash_attn-2.8.4+cu130torch2.11-cp313-cp313-linux_x86_64.whl"]
+    assert not any("wheel" in c and "-w" in c for c in s.calls)  # nothing compiled
+    assert vs.find_cached_wheel(e.lay, PY313_TORCH211) is not None
+
+
+def test_with_no_wheel_anywhere_setup_uses_sdpa_and_the_isolated_environment_is_the_last_resort(tmp_path):
+    e = Env(tmp_path)
+    vs.ensure_layout(e.p, create_run=False)
+    no_pkg = dict(PY313_TORCH211, torch_mm="2.13", torch="2.13.0")  # nothing exists for it
+    stream = FakeStream()
+    got = vs.ensure_flash_attn(e.p, e.lay, no_pkg, A100, "log", stream=stream, functional=lambda: (False, "x"), exists=lambda u: False)
+    assert got == "not available (using SDPA)" and stream.calls == []
+    assert vs.want_venv(e.p, e.lay, no_pkg, A100, exists=lambda u: False, functional=lambda: (False, "x")) == vs.VENV_DEFAULT  # python 3.12 path kept
+    assert vs.want_venv(e.p, e.lay, PY313_TORCH211, A100, exists=lambda u: False, functional=lambda: (False, "x")) is None  # the pinned/looked-up wheel avoids it
+    assert vs.attention_choice(G4_96, "auto")[0] == "sdpa"  # Blackwell: SDPA by default
+    assert vs.attention_choice(T4, True)[0] == "sdpa" and vs.attention_choice(T4, "auto")[0] == "refuse"  # Turing: SDPA only when asked for

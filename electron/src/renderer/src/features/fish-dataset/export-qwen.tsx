@@ -37,13 +37,18 @@ export function QwenSection({
   return (
     <div className="space-y-3 rounded-md border border-border/50 p-2" data-testid="qwen-section">
       <p className="text-[11px] leading-snug text-muted-foreground">{t('fishDataset.qwen_note')}</p>
-      {speakerCount > 1 && (
+      {speakerCount > 1 && !form.multi && (
         <p role="alert" className="text-[11px] leading-snug text-amber-500">
           {t('fishDataset.qwen_multi', { count: speakerCount })}
         </p>
       )}
       {field('speaker', t('fishDataset.qwen_speaker'), t('fishDataset.qwen_speaker_hint'))}
-      {referencePanel}
+      <label className="flex items-center gap-2 text-xs font-medium">
+        <input type="checkbox" checked={!!form.multi} onChange={(e) => set({ multi: e.target.checked })} />
+        {t('fishDataset.qwen_multi_speaker')}
+      </label>
+      {form.multi && <p className="text-[11px] leading-snug text-muted-foreground">{t('fishDataset.qwen_multi_speaker_hint')}</p>}
+      {!form.multi && referencePanel}
       <div className="grid grid-cols-2 gap-3">
         {field('minDuration', t('fishDataset.qwen_min'), undefined, true)}
         {field('maxDuration', t('fishDataset.qwen_max'), undefined, true)}

@@ -266,7 +266,7 @@ def test_training_settings_accept_only_what_the_official_script_takes(bad):
     with pytest.raises(ValueError):
         qwen3_colab.settings_from(bad)
     ok = qwen3_colab.settings_from({"epochs": 5, "drive_folder": "A/b-c"})
-    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 4, 1e-6)  # the recipe that gave the good run: batch 4 (x accumulation 2 = 8 clips per update), lr 1e-6
+    assert (ok.epochs, ok.batch_size, ok.learning_rate) == (5, 4, 2e-6)  # batch 4 (x accumulation 2 = 8 clips per update), lr 2e-6 (owner chose to try it against the 1e-6 run)
 
 
 def test_the_estimate_follows_the_scripts_loop_not_an_audio_rate():
@@ -657,3 +657,32 @@ def test_a_backend_running_older_code_than_the_files_on_disk_refuses_to_export(m
     settings = qwen3_colab.settings_from({})
     with pytest.raises(ValueError, match="Restart the app"):
         qwen3_colab.render_files(speaker="S", folder_name="f", zip_name="f.zip", settings=settings, report={})
+
+
+def test_a_multi_speaker_export_writes_a_speaker_and_a_reference_per_clip_and_the_runner_reads_it(corpus, tmp_path):
+    result = _export(corpus, tmp_path, spec={"voice_ids": [NARR, SIDE]}, name="multi", multi_speaker=True, speaker_name="Duo")
+    out = result["path"]
+    rows = _jsonl(os.path.join(out, "train.jsonl"))
+    assert {r["speaker"] for r in rows} == {"narrator", "noctis"} and set(result["speakers"]) == {"narrator", "noctis"}
+    for r in rows:
+        assert r["ref_audio"] == f"reference/{r['speaker']}.wav" and os.path.isfile(os.path.join(out, *r["ref_audio"].split("/")))
+        assert sf.info(os.path.join(out, *r["ref_audio"].split("/"))).samplerate == 24000
+    assert not os.path.exists(os.path.join(out, "reference", "ref.wav"))
+    report = json.load(open(os.path.join(out, "dataset_report.json"), encoding="utf-8"))
+    assert report["reference"]["mode"] == "per_speaker" and report["model_rows"] == {"narrator": 3000, "noctis": 3020}
+    from engines.fish_api import qwen3_colab_runner as runner
+    assert runner.dataset_speakers(os.path.join(out, "train.jsonl")) == (["narrator", "noctis"], True)
+    # the default stays one speaker per export, in the exact old row schema
+    with pytest.raises(ValueError, match="one speaker"):
+        _export(corpus, tmp_path, spec={"voice_ids": [NARR, SIDE]}, name="refused")
+    with pytest.raises(ValueError, match="picks each speaker's reference"):
+        qwen3_export.options_from({"multi_speaker": True, "reference_key": "x"})
+
+
+def test_lora_settings_reach_training_settings_json_with_their_own_learning_rate(corpus, tmp_path):
+    result = _export(corpus, tmp_path, name="lora", training={"train_mode": "lora"})
+    cfg = json.load(open(os.path.join(result["path"], "training_settings.json"), encoding="utf-8"))
+    from engines.fish_api import qwen3_colab_runner as runner
+    assert cfg["train_mode"] == "lora" and cfg["learning_rate"] == runner.LORA_DEFAULT_LR and cfg["lora_rank"] == 16
+    plain = json.load(open(os.path.join(_export(corpus, tmp_path, name="full")["path"], "training_settings.json"), encoding="utf-8"))
+    assert plain["train_mode"] == "full" and plain["learning_rate"] == runner.DEFAULT_LR == 2e-6

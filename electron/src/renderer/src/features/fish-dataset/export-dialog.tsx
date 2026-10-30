@@ -186,7 +186,7 @@ export function ExportDialog({
   const writeTraining = omni && training;
   const trainSeconds = seconds * (1 - Math.max(0, Math.min(0.49, Number(val) / 100 || 0)));
   const trainingInvalid = writeTraining && invalidKeys(trainingForm).length > 0;
-  const qwenBlocked = qwen && (qwenInvalid(qwenForm).length > 0 || qwenTrainInvalid(qwenTrain).length > 0 || speakerCount > 1 || levelBad);
+  const qwenBlocked = qwen && (qwenInvalid(qwenForm).length > 0 || qwenTrainInvalid(qwenTrain).length > 0 || (qwenForm.multi ? speakerCount > 4 : speakerCount > 1) || levelBad);
 
   const run = async () => {
     setBusy(true);

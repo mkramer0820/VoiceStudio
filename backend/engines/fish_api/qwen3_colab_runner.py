@@ -35,7 +35,7 @@ from typing import Callable, Optional
 
 DISCONNECT_CELL = "from google.colab import runtime; runtime.unassign()"
 
-RUNNER_VERSION = "19"
+RUNNER_VERSION = "21"
 SESSION = "qwen-train"  # the session name used in the colab command-line examples
 QWEN_REPO = "https://github.com/QwenLM/Qwen3-TTS.git"
 QWEN_COMMIT = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
@@ -45,6 +45,9 @@ BASE_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 TOKENIZER = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
 SAMPLE_RATE = 24000
 DEFAULT_DRIVE_FOLDER = "Qwen3TTS"
+# The one set of training defaults. qwen3_colab.TrainSettings, the notebook's parameters cell and Params all read these; the export dialog
+# (electron/.../export-options.ts QWEN_NUMBERS) repeats the numbers and tests/backend/engines/test_fish_qwen3_defaults.py keeps them equal.
+DEFAULT_EPOCHS, DEFAULT_LR, DEFAULT_BATCH_SIZE, DEFAULT_GRAD_ACCUM, DEFAULT_SPEAKER = 10, 2e-6, 4, 2, "MySpeaker"
 SPEAKER_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
 FOLDER_RE = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -66,6 +69,13 @@ FLASH_PREBUILT = {  # torch major.minor -> python tags with a prebuilt Linux x86
     "2.7": ("cp39", "cp310", "cp311", "cp312", "cp313"),
     "2.8": ("cp39", "cp310", "cp311", "cp312", "cp313"),
 }
+# Community FlashAttention wheels (CUDA 13, newer torch). Looked up for the runtime's exact Python/torch/CUDA through the GitHub releases API;
+# the pinned URL is the fallback when the lookup fails (offline, rate limit) and is used only if its file name fits the runtime.
+COMMUNITY_REPO = "mjun0812/flash-attention-prebuild-wheels"
+COMMUNITY_API = "https://api.github.com/repos/" + COMMUNITY_REPO + "/releases?per_page=100&page={page}"
+COMMUNITY_PINNED_WHEEL = ("https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/"
+                          "flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl")  # verified on a Colab A100, Python 3.13, torch 2.11
+COMMUNITY_MAX_PAGES = 5
 ATTN_FALLBACK_IMPL = "sdpa"
 FLASH_LINE = 'attn_implementation="flash_attention_2"'  # sft_12hz.py line 51 at the pinned commit
 ACCEL_LINE = 'Accelerator(gradient_accumulation_steps=4, mixed_precision="bf16", log_with="tensorboard")'  # line 44; no logging_dir
@@ -174,6 +184,240 @@ target_speaker_embedding = None'''
 ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_OLD, ALIGN_C_NEW), (ALIGN_HELPER_ANCHOR, ALIGN_HELPER),
                (ALIGN_HELPER_ANCHOR, VAL_HELPER), (VAL_DATA_OLD, VAL_DATA_NEW), (VAL_PREP_OLD, VAL_PREP_NEW), (VAL_EPOCH_OLD, VAL_EPOCH_NEW),
                (VAL_SAVE_OLD, VAL_SAVE_NEW))
+# --- LoRA (PEFT) and multi-speaker training, runner 21 ---------------------------------------------------------------------------
+# Everything below is applied ONLY when TRAIN_MODE is "lora" or the data names several speakers; the default full fine-tune script is
+# byte-for-byte what runner 20 wrote. Checked against the pinned sft_12hz.py / dataset.py / modeling_qwen3_tts.py (commit 022e286).
+TRAIN_MODES = ("full", "lora")
+DEFAULT_TRAIN_MODE = "full"
+# Full fine-tune lr is DEFAULT_LR (2e-6) above: never 1e-6 as a default, and 2e-5 (the script's own) is what makes the model never stop (issue #39).
+# LoRA has its OWN lr. UNCONFIRMED PLACEHOLDER (the owner has not chosen): 2e-5 is the low end of the planned sweep 2e-5..1e-4
+# (QWEN3_PEFT_PLAN.md; 2e-5 is what 6z6z/qwen3-tts-personalized uses). Not measured. Change it only on the owner's word.
+# NEW EVIDENCE (instavar/qwen3-tts-lora-finetuning, constant lr, no warmup, wd 0.01, bs 4 x accum 4, 10 epochs): its LoRA default is 2e-6, which
+# contradicts the 2e-5..1e-4 range above, so the sweep must also include 2e-6 and 1e-5. This value is a placeholder until the owner confirms.
+LORA_DEFAULT_LR = 2e-5
+# Merge-time multiplier on alpha/r. 1.0 until the owner confirms; 0.3 is a documented CANDIDATE (instavar applies 0.3 at inference and calls 1.0
+# "almost always wrong", sweep 0.2-0.5). Not measured here. The delta-survives-bf16 check always runs at the scale chosen.
+LORA_DEFAULT_SCALE = 1.0
+LORA_SCALE_CANDIDATES = (0.3,)
+DEFAULT_LORA_RANK, DEFAULT_LORA_ALPHA, DEFAULT_LORA_DROPOUT = 16, 32, 0.05  # both community LoRA repos; no Qwen-specific sweep exists
+PEFT_PIN = "peft==0.17.1"  # nearest to the transformers 4.57.3 era; 0.17.1 does NOT import under transformers 5 (HybridCache), checked 2026-10-28
+SPK_ROW_BASE, SPK_ROW_STEP = 3000, 20  # row of speaker idx in the codec embedding table: 3000 + 20 * idx (single-speaker upstream: 3000)
+CODEC_VOCAB_ROWS = 3072  # talker_config.vocab_size of the 12 Hz models: a row must stay below it, so four speakers fit
+STOCK_ROWS = frozenset({3066, 3065, 3010, 3061, 2861, 2873, 2864, 2875, 2878})  # rows of the stock CustomVoice voices (qwen3_studio.registry)
+FRAME_LIMIT = 8192  # Qwen3-TTS issue #378: corrupt gradients above this many codec frames in one micro-batch
+MERGE_MIN_CHANGED_PCT = 0.1  # PLACEHOLDER, not measured: below this share of changed elements the bf16 merge probably erased the adapter
+SPK_MAX_REFS = 8  # reference clips averaged per speaker for the cached embedding
+# LoRA targets: every Linear in the talker's and the code predictor's decoder layers, and nothing else (full-match regex on the module name).
+LORA_TARGET_REGEX = r"talker\.(?:code_predictor\.)?model\.layers\.\d+\.(?:self_attn\.(?:q|k|v|o)_proj|mlp\.(?:gate|up|down)_proj)"
+
+OPT_OLD = '    optimizer = AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)'
+OPT_NEW = ('    # VoiceStudio: cached per-speaker embeddings (when the run names speakers) and, in LoRA mode, adapters on a frozen base.\n'
+           '    _setup_speakers(qwen3tts, train_data + _val_rows, dataset, args)\n'
+           '    optimizer = _build_optimizer(qwen3tts, args)')
+SPK_FWD_OLD = ('                speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()\n'
+               '                if target_speaker_embedding is None:\n'
+               '                    target_speaker_embedding = speaker_embedding')
+SPK_FWD_NEW = ("                if _SPK_CACHE is not None:  # VoiceStudio: the fixed, cached vector of this sample's speaker (the encoder is not run)\n"
+               "                    speaker_embedding = _SPK_CACHE.to(model.device)[batch['speaker_idx'].to(model.device)].to(model.dtype)\n"
+               '                else:\n'
+               '                    speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()\n'
+               '                if target_speaker_embedding is None:\n'
+               '                    target_speaker_embedding = speaker_embedding')
+SPK_VAL_OLD = '\n    speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()\n'
+SPK_VAL_NEW = ('\n    if _SPK_CACHE is not None:\n'
+               "        speaker_embedding = _SPK_CACHE.to(model.device)[batch['speaker_idx'].to(model.device)].to(model.dtype)\n"
+               '    else:\n'
+               '        speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()\n')
+SPK_CFG_OLD = ('            talker_config["spk_id"] = {\n                args.speaker_name: 3000\n            }\n'
+               '            talker_config["spk_is_dialect"] = {\n                args.speaker_name: False\n            }')
+SPK_CFG_NEW = ('            _rows = _SPK_ROWS or {args.speaker_name: 3000}\n'
+               '            talker_config["spk_id"] = dict(_rows)\n'
+               '            talker_config["spk_is_dialect"] = {_n: False for _n in _rows}')
+SPK_ROW_OLD = ("            weight = state_dict['talker.model.codec_embedding.weight']\n"
+               "            state_dict['talker.model.codec_embedding.weight'][3000] = target_speaker_embedding[0].detach().to(weight.device).to(weight.dtype)")
+SPK_ROW_NEW = ("            state_dict = _lora_merge_for_save(state_dict, output_dir, args)  # LoRA mode: merged standard tensors + adapter files; full mode: unchanged\n"
+               "            weight = state_dict['talker.model.codec_embedding.weight']\n"
+               "            if _SPK_CACHE is not None:\n"
+               "                for _n, _r in _SPK_ROWS.items():\n"
+               "                    weight[_r] = _SPK_CACHE[_SPK_INDEX[_n]].detach().to(weight.device).to(weight.dtype)\n"
+               "            else:\n"
+               "                state_dict['talker.model.codec_embedding.weight'][3000] = target_speaker_embedding[0].detach().to(weight.device).to(weight.dtype)")
+LORA_HELPER = '''_SPK_CACHE, _SPK_INDEX, _SPK_ROWS = None, {}, {}
+_BaseTTSDataset = TTSDataset
+
+
+class TTSDataset(_BaseTTSDataset):
+    """VoiceStudio: also hands the sample's speaker index to the collate function (rows without a speaker use the first speaker)."""
+
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        item["spk"] = _SPK_INDEX.get(str(self.data_list[idx].get("speaker", "")).lower(), 0)
+        return item
+
+    def collate_fn(self, batch):
+        spk = [b.pop("spk") for b in batch]
+        out = super().collate_fn(batch)
+        out["speaker_idx"] = torch.tensor(spk, dtype=torch.long)
+        return out
+
+
+def _setup_speakers(qwen3tts, rows, dataset, args):
+    """Cache one fixed float32 embedding per speaker (mean of up to VS_SPK_MAX_REFS reference clips, speaker encoder, no grad) in a file named
+    after the references, so a rerun on the same clips never runs the encoder again."""
+    global _SPK_CACHE, _SPK_INDEX, _SPK_ROWS
+    import hashlib
+    names = json.loads(os.environ.get("VS_SPEAKERS", "[]"))
+    if not names:
+        return
+    _SPK_INDEX = {n: i for i, n in enumerate(names)}
+    _SPK_ROWS = {n: int(r) for n, r in json.loads(os.environ["VS_SPEAKER_ROWS"]).items()}
+    refs = {n: [] for n in names}
+    for row in rows:
+        who = str(row.get("speaker", "")).lower() or names[0]
+        ref = row["ref_audio"]
+        if who in refs and ref not in refs[who] and len(refs[who]) < int(os.environ.get("VS_SPK_MAX_REFS", "8")):
+            refs[who].append(ref)
+    key = hashlib.sha1(json.dumps(refs, sort_keys=True).encode()).hexdigest()[:10]
+    path = os.path.join(os.environ["VS_SPEAKER_CACHE_DIR"], f"speaker_embeddings-{key}.safetensors")
+    from safetensors.torch import load_file, save_file
+    if os.path.isfile(path):
+        have = load_file(path)
+        print(f"SPEAKERS: reusing the cached embeddings {path}", flush=True)
+    else:
+        enc = qwen3tts.model.speaker_encoder
+        dev, dt = next(enc.parameters()).device, next(enc.parameters()).dtype
+        have = {}
+        with torch.no_grad():
+            for n in names:
+                vecs = []
+                for ref in refs[n]:
+                    wav, sr = dataset._load_audio_to_np(ref)
+                    vecs.append(enc(dataset.extract_mels(audio=wav, sr=sr).to(dev).to(dt))[0].float().cpu())
+                if not vecs:
+                    raise RuntimeError(f"no reference clip for speaker {n}")
+                have[n] = torch.stack(vecs).mean(dim=0).contiguous()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        save_file(have, path)
+    for n in names:
+        norm = float(have[n].norm())
+        print(f"SPEAKERS: {n} -> row {_SPK_ROWS[n]}, {len(refs[n])} reference clip(s), embedding norm {norm:.2f}"
+              + ("" if 9.0 <= norm <= 17.0 else "  WARNING: outside 9 to 17, the range of the stock rows (inferred); check the reference clips"), flush=True)
+    _SPK_CACHE = torch.stack([have[n].float() for n in names])
+
+
+def _build_optimizer(qwen3tts, args):
+    if os.environ.get("VS_TRAIN_MODE", "full") != "lora":
+        return AdamW(qwen3tts.model.parameters(), lr=args.lr, weight_decay=0.01)
+    from peft import LoraConfig, inject_adapter_in_model
+    model = qwen3tts.model
+    for prm in model.parameters():
+        prm.requires_grad_(False)
+    cfg = LoraConfig(r=int(os.environ["VS_LORA_RANK"]), lora_alpha=float(os.environ["VS_LORA_ALPHA"]), lora_dropout=float(os.environ["VS_LORA_DROPOUT"]),
+                     bias="none", target_modules=os.environ["VS_LORA_TARGETS"])
+    inject_adapter_in_model(cfg, model)
+    adapters = [prm for name, prm in model.named_parameters() if "lora_" in name]
+    if not adapters:
+        raise RuntimeError("LoRA injected no adapters: the module names did not match (not the pinned Qwen3-TTS commit?)")
+    for prm in adapters:  # inject_adapter_in_model leaves them in the base's bfloat16 (checked on peft 0.17.1); train them in float32
+        prm.data = prm.data.float()
+        prm.requires_grad_(True)
+    assert all(prm.dtype == torch.float32 for prm in adapters), "LoRA adapters must be float32"
+    leaked = [name for name, prm in model.named_parameters() if prm.requires_grad and "lora_" not in name]
+    assert not leaked, f"non-adapter parameters would train: {leaked[:3]}"
+    n_train = sum(prm.numel() for prm in adapters)
+    print(f"LORA: {len(adapters) // 2} adapted layers, {n_train / 1e6:.1f} M trainable parameters (float32) of "
+          f"{sum(prm.numel() for prm in model.parameters()) / 1e6:.0f} M, rank {cfg.r}, alpha {cfg.lora_alpha:g}, dropout {cfg.lora_dropout:g}, lr {args.lr:g}", flush=True)
+    return AdamW(adapters, lr=args.lr, weight_decay=0.0)
+
+
+def _lora_merge_for_save(state, out_dir, args):
+    """LoRA mode: split the state dict into the adapter (float32, written next to the checkpoint) and standard tensors with the delta merged
+    in float32 and rounded once. Refuses an adapter that is all zeros. Other modes: returned unchanged."""
+    if os.environ.get("VS_TRAIN_MODE", "full") != "lora":
+        return state
+    from safetensors.torch import save_file
+    scale = float(os.environ["VS_LORA_ALPHA"]) / float(os.environ["VS_LORA_RANK"]) * float(os.environ.get("VS_LORA_SCALE", "1"))
+    adapter, merged = {}, {}
+    for k, v in state.items():
+        if ".lora_A." in k or ".lora_B." in k:
+            mod, rest = k.split(".lora_", 1)
+            adapter[f"{mod}.lora_{rest[0]}.weight"] = v.float().contiguous()
+        elif k.endswith(".base_layer.weight"):
+            merged[k[:-len(".base_layer.weight")] + ".weight"] = v
+        else:
+            merged[k] = v
+    if any(".base_layer." in k for k in merged):
+        raise RuntimeError("unexpected wrapped tensors in the LoRA state dict")
+    shares, nonzero = [], 0
+    for k in [k for k in adapter if k.endswith(".lora_A.weight")]:
+        mod = k[:-len(".lora_A.weight")]
+        a, b = adapter[k], adapter[mod + ".lora_B.weight"]
+        nonzero += int(float(b.abs().max()) > 0.0)
+        base = merged[mod + ".weight"]
+        new = (base.float() + scale * (b @ a)).to(base.dtype)
+        shares.append(float((new != base).float().mean()) * 100.0)
+        merged[mod + ".weight"] = new
+    if not nonzero:
+        print("LORA FAILED: every lora_B matrix is zero, so nothing was trained.", flush=True)
+        raise RuntimeError("LoRA adapter is all zeros")
+    pct = sum(shares) / len(shares)
+    print(f"MERGE CHECK: {len(shares)} adapted tensors, {pct:.3f}% of their elements changed after the float32 merge rounded to bfloat16"
+          + ("" if pct >= float(os.environ.get("VS_MERGE_MIN_PCT", "0.1")) else "  WARNING: very little survived the rounding; the adapter delta may be below bfloat16 resolution"), flush=True)
+    save_file(adapter, os.path.join(out_dir, "adapter_model.safetensors"), metadata={"format": "pt"})
+    with open(os.path.join(out_dir, "adapter_config.json"), "w", encoding="utf-8") as fh:
+        json.dump({"format": "voicestudio-lora-1", "peft_type": "LORA", "r": int(os.environ["VS_LORA_RANK"]), "lora_alpha": float(os.environ["VS_LORA_ALPHA"]),
+                   "lora_dropout": float(os.environ["VS_LORA_DROPOUT"]), "merge_scale": float(os.environ.get("VS_LORA_SCALE", "1")), "target_regex": os.environ["VS_LORA_TARGETS"], "bias": "none"}, fh, indent=2)
+    with open(os.path.join(out_dir, "speakers.json"), "w", encoding="utf-8") as fh:
+        json.dump(_SPK_ROWS, fh, indent=2)
+    if _SPK_CACHE is not None:
+        save_file({n: _SPK_CACHE[i].contiguous() for n, i in _SPK_INDEX.items()}, os.path.join(out_dir, "speaker_embeddings.safetensors"))
+    with open(os.path.join(out_dir, "lora_meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"base_model": args.init_model_path, "runner_version": os.environ.get("VS_RUNNER_VERSION", ""), "lr": args.lr,
+                   "adapter_dtype": "float32", "merge_changed_pct": pct}, fh, indent=2)
+    return merged
+
+
+target_speaker_embedding = None'''
+LORA_PAIRS = ((ALIGN_HELPER_ANCHOR, LORA_HELPER), (OPT_OLD, OPT_NEW), (SPK_FWD_OLD, SPK_FWD_NEW), (SPK_VAL_OLD, SPK_VAL_NEW),
+              (SPK_CFG_OLD, SPK_CFG_NEW), (SPK_ROW_OLD, SPK_ROW_NEW))
+
+
+def cap_micro_batch(batch: int, grad_accum: int, max_frames: int, limit: int = FRAME_LIMIT) -> tuple:
+    """Keep ``batch x longest clip`` (codec frames) under ``limit`` (Qwen3-TTS issue #378). Returns ``(batch, grad_accum, warning or None)``;
+    clips per update stay the same or grow by less than one micro-batch. A single clip over the limit is refused."""
+    if max_frames > limit:
+        raise StepFailed(f"One clip has {max_frames} codec frames, over the {limit} frame limit of a single micro-batch. Cut it shorter.")
+    if batch * max_frames <= limit:
+        return batch, grad_accum, None
+    new_batch = max(1, limit // max(1, max_frames))
+    new_accum = max(grad_accum, -(-(batch * grad_accum) // new_batch))
+    return new_batch, new_accum, (f"WARNING: batch {batch} x {max_frames} frames is over {limit} frames per micro-batch (Qwen3-TTS issue #378: "
+                                  f"corrupt gradients). Using batch {new_batch} with accumulation {new_accum} ({new_batch * new_accum} clips per update).")
+
+
+def speaker_rows(names, *, vocab_rows: int = CODEC_VOCAB_ROWS, stock_rows=STOCK_ROWS) -> dict:
+    """``{lowercase name: codec-embedding row}`` with row ``3000 + 20 * index``. Qwen looks the requested speaker up lowercased, so names are
+    lowercased; duplicates (also differing only in case), invalid names, a row past the table and a stock voice's row are refused."""
+    rows: dict = {}
+    for idx, raw in enumerate(names):
+        name = str(raw)
+        if not SPEAKER_RE.fullmatch(name):
+            raise StepFailed(f"Speaker name {name!r} may use letters, digits, '_' and '-' only (1-40 characters).")
+        low = name.lower()
+        if low in rows:
+            raise StepFailed(f"Speaker {name!r} is listed twice (names are compared without case).")
+        row = SPK_ROW_BASE + SPK_ROW_STEP * idx
+        if row >= vocab_rows:
+            raise StepFailed(f"Speaker {name!r} would use embedding row {row}, but the table has {vocab_rows} rows: "
+                             f"at most {(vocab_rows - 1 - SPK_ROW_BASE) // SPK_ROW_STEP + 1} speakers fit in one model.")
+        if row in set(stock_rows):
+            raise StepFailed(f"Embedding row {row} belongs to a stock voice.")
+        rows[low] = row
+    if not rows:
+        raise StepFailed("At least one speaker is needed.")
+    return rows
+
+
 ACCEL_FIXED = ('Accelerator(gradient_accumulation_steps=int(os.environ.get("VS_GRAD_ACCUM", "4")), mixed_precision="bf16", log_with="tensorboard", '
                'project_dir=os.environ.get("VS_TENSORBOARD_DIR", "tensorboard"))')
 
@@ -217,11 +461,11 @@ DEFAULT_SAMPLE_TEXT = "The lighthouse keeper counted seven ships before the fog 
 class Params:
     drive_root: str = f"{DRIVE_MOUNT}/MyDrive/{DEFAULT_DRIVE_FOLDER}"
     data_source: str = ""  # a folder or .zip anywhere on Drive, or an unzipped folder under /content
-    speaker_name: str = "speaker"
-    epochs: int = 3
-    lr: float = 2e-6  # NOT the script's 2e-5 default: that gives noise and a model that never stops (Qwen3-TTS issue #39)
-    batch_size: object = 2  # an int, or "auto"
-    grad_accum: int = 4  # micro-batches per optimizer update. The script hard-codes 4; the patched copy reads it. batch_size x grad_accum = clips per update
+    speaker_name: str = DEFAULT_SPEAKER
+    epochs: int = DEFAULT_EPOCHS
+    lr: float = DEFAULT_LR  # NOT the script's 2e-5 default: that gives noise and a model that never stops (Qwen3-TTS issue #39)
+    batch_size: object = DEFAULT_BATCH_SIZE  # an int, or "auto"
+    grad_accum: int = DEFAULT_GRAD_ACCUM  # micro-batches per optimizer update. The script hard-codes 4; the patched copy reads it. batch_size x grad_accum = clips per update
     base_model: str = BASE_MODEL
     tokenizer_model: str = TOKENIZER
     run_id: str = ""  # empty: a new timestamp. Re-using an id is explicit (and refused over existing checkpoints unless restart)
@@ -237,6 +481,12 @@ class Params:
     local_root: str = "/content"
     fast_setup: bool = True  # clone the Qwen repo and download the models straight into /content and keep pip's cache there too: reading them back from Drive took 60 to 150 s each session
     cache_models_on_drive: bool = False  # True: also cache the models on Drive. Default False: models download straight to /content, Drive only keeps epochs
+    train_mode: str = DEFAULT_TRAIN_MODE  # "full": the whole model (lr DEFAULT_LR); "lora": adapters on a frozen base (lr LORA_DEFAULT_LR, its own constant)
+    lora_rank: int = DEFAULT_LORA_RANK
+    lora_alpha: float = DEFAULT_LORA_ALPHA
+    lora_dropout: float = DEFAULT_LORA_DROPOUT
+    lora_scale: float = LORA_DEFAULT_SCALE  # multiplier on alpha/r when the adapter is merged into the saved checkpoint (1.0 = as trained; unconfirmed, see LORA_DEFAULT_SCALE)
+    speakers: str = ""  # comma-separated speaker names for a multi-speaker model; empty: taken from a `speaker` field in the data, else SPEAKER_NAME alone
     val_fraction: float = 0.05  # share of the clips held out (fixed seed) to score every epoch; 0 turns validation off
     drive_skip_first: int = 3  # the first N epochs stay on /content and are not copied to Drive (the final epoch is always copied)
     sample_after_training: bool = True
@@ -267,6 +517,18 @@ class Params:
         if not RUN_ID_RE.fullmatch(self.run_id):
             raise StepFailed("RUN_ID may use letters, digits, '.', '_' and '-' only (up to 60 characters).")
         self.epochs, self.keep_last_n = int(self.epochs), int(self.keep_last_n or 0)
+        self.train_mode = str(self.train_mode or DEFAULT_TRAIN_MODE).strip().lower()
+        if self.train_mode not in TRAIN_MODES:
+            raise StepFailed("TRAIN_MODE must be 'full' or 'lora'.")
+        self.lora_rank, self.lora_alpha, self.lora_dropout = int(self.lora_rank), float(self.lora_alpha), float(self.lora_dropout)
+        self.lora_scale = float(self.lora_scale)
+        if not 1 <= self.lora_rank <= 256 or not 0 < self.lora_alpha <= 1024 or not 0.0 <= self.lora_dropout <= 0.5 or not 0.0 < self.lora_scale <= 2.0:
+            raise StepFailed("LORA_RANK must be 1-256, LORA_ALPHA above 0 (up to 1024), LORA_DROPOUT 0 to 0.5 and LORA_SCALE above 0 (up to 2).")
+        self.speakers = ",".join(s.strip() for s in str(self.speakers or "").split(",") if s.strip())
+        if self.speakers:
+            speaker_rows(self.speakers.split(","))
+        if self.train_mode == "lora" and "lr" not in self.sources:
+            self.lr = LORA_DEFAULT_LR  # LoRA has its own default; an explicit lr (export, environment, override) always wins
         self.lr = float(self.lr)
         self.val_fraction, self.drive_skip_first = float(self.val_fraction), int(self.drive_skip_first)
         if not 0.0 <= self.val_fraction <= 0.2 or self.drive_skip_first < 0:
@@ -308,7 +570,8 @@ class Params:
         """Where each resolved setting came from: official script default, our default, the export dialog, or an owner override."""
         out = {}
         for key in ("epochs", "lr", "batch_size", "base_model", "tokenizer_model", "speaker_name", "attn_fallback", "keep_all", "keep_last_n",
-                    "keep_first", "keep_final", "sample_text", "sample_seed", "cache_models_on_drive", "val_fraction", "drive_skip_first", "restart", "run_id", "drive_root"):
+                    "keep_first", "keep_final", "sample_text", "sample_seed", "cache_models_on_drive", "val_fraction", "drive_skip_first", "restart", "run_id", "drive_root",
+                    "train_mode", "lora_rank", "lora_alpha", "lora_dropout", "lora_scale", "speakers"):
             value, src = getattr(self, key), self.sources.get(key, "default")
             if key in OFFICIAL_DEFAULTS:
                 same = value == OFFICIAL_DEFAULTS[key]
@@ -330,7 +593,7 @@ def _truthy(v) -> bool:
 
 _ENV_FIELDS = ("drive_root", "data_source", "speaker_name", "epochs", "lr", "batch_size", "grad_accum", "fast_setup", "base_model", "tokenizer_model", "run_id",
                "keep_all", "keep_last_n", "keep_first", "keep_final", "attn_fallback", "use_venv", "build_flash_attn", "flash_wheel", "restart", "cache_models_on_drive", "val_fraction", "drive_skip_first", "sample_after_training",
-               "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
+               "train_mode", "lora_rank", "lora_alpha", "lora_dropout", "lora_scale", "speakers", "sample_text", "sample_seed", "heartbeat_seconds", "smoke_run", "smoke_clips", "units_per_hour", "units_available",
                "compare_epoch_seconds", "compare_units_per_hour")
 
 
@@ -347,7 +610,8 @@ def params_from(overrides: Optional[dict] = None, settings_path: Optional[str] =
         p.drive_root = f"{DRIVE_MOUNT}/MyDrive/{folder}"
         p.sources["drive_root"] = "export"
         for key, field in (("speaker_name", "speaker_name"), ("epochs", "epochs"), ("learning_rate", "lr"),
-                           ("batch_size", "batch_size"), ("base_model", "base_model"), ("tokenizer_model", "tokenizer_model")):
+                           ("batch_size", "batch_size"), ("base_model", "base_model"), ("tokenizer_model", "tokenizer_model"),
+                           ("train_mode", "train_mode"), ("lora_rank", "lora_rank"), ("lora_alpha", "lora_alpha"), ("lora_dropout", "lora_dropout"), ("lora_scale", "lora_scale")):
             if settings.get(key) is not None:
                 setattr(p, field, settings[key])
                 p.sources[field] = "export"
@@ -465,10 +729,11 @@ def read_json(path: str, default=None):
 
 # --------------------------------------------------------------------------------------------- processes
 def capture(cmd: list, **kw) -> tuple:
-    """(returncode, combined output). Never raises for a missing program."""
+    """(returncode, output). Never raises for a missing program. On success the output is stdout only: callers parse it, and a harmless
+    warning on stderr (NumPy missing in a fresh venv) must not become its last line. On failure stderr is added."""
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, **kw)
-        return r.returncode, (r.stdout or "") + (r.stderr or "")
+        return r.returncode, (r.stdout or "") + ("" if r.returncode == 0 else (r.stderr or ""))
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, str(exc)
 
@@ -957,7 +1222,8 @@ def check_table(rows: list) -> bool:
 
 
 def dependency_rows(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, probe: Callable = probe_module,
-                    flash_probe: Callable = None, sdpa_probe: Callable = None, arch_probe: Callable = None, conv_probe: Callable = None) -> list:
+                    flash_probe: Callable = None, sdpa_probe: Callable = None, arch_probe: Callable = None, conv_probe: Callable = None,
+                    peft_probe: Callable = None) -> list:
     rows = [("python / torch", "INFO", f"python {env.get('python_version')}, torch {env.get('torch') or 'not importable'}, CUDA {env.get('cuda')}")]
     rows.append(("gpu", "PASS" if gpu else "FAIL", f"{gpu.name}, {gpu.vram_gb:g} GB" if gpu else "no GPU runtime selected"))
     for mod in CHECK_MODULES:
@@ -979,6 +1245,9 @@ def dependency_rows(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, pr
                      detail + "; the patched training copy itself is UNVERIFIED" if ok else detail))
     else:
         rows.append(("attention", "FAIL", why))
+    if p.train_mode == "lora":
+        ok, detail = (peft_probe or peft_functional)()
+        rows.append(("peft (LoRA)", "PASS" if ok else "FAIL", detail))
     repo_ok = os.path.isfile(os.path.join(lay.local_repo, "finetuning", "sft_12hz.py"))
     head = _git_head(lay.local_repo) if repo_ok else None
     rows.append(("Qwen3-TTS repo", "PASS" if head == QWEN_COMMIT else "FAIL",
@@ -1029,6 +1298,20 @@ def sdpa_functional() -> tuple:
                          "print('ok')\n"])
     last = (out.strip().splitlines() or [""])[-1]
     return code == 0, ("SDPA ran on the GPU in bfloat16" if code == 0 else last[:160] or "SDPA failed")
+
+
+def peft_functional() -> tuple:
+    """peft imports under this runtime's transformers and injects an adapter into a Linear (runs on the CPU; the 4.57.3 / 0.17.1 pair is
+    the one this runner pins, newer peft may assume transformers 5)."""
+    code, out = capture([py(), "-c",
+                         "import torch, peft, transformers\n"
+                         "from peft import LoraConfig, inject_adapter_in_model\n"
+                         "m = torch.nn.Sequential(torch.nn.Linear(8, 8)).to(torch.bfloat16)\n"
+                         "inject_adapter_in_model(LoraConfig(r=4, lora_alpha=8, target_modules=['0']), m)\n"
+                         "assert any('lora_A' in n for n, _ in m.named_parameters())\n"
+                         "print('peft', peft.__version__, 'with transformers', transformers.__version__, '(adapter injected on the CPU)')\n"])
+    last = (out.strip().splitlines() or [""])[-1]
+    return code == 0, (last if code == 0 else (last[:200] or "peft is not importable") + f" (install {PEFT_PIN} with --no-deps, do not upgrade transformers)")
 
 
 def flash_functional() -> tuple:
@@ -1315,6 +1598,20 @@ def _install_flash_attn(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], l
             return "cached wheel"
         say("The cached wheel did not work on this GPU; marking it rejected and trying the next option.")
         _reject_wheel(cached)
+    community = community_wheel(env)
+    if community and community[0] != p.flash_wheel:
+        url, how = community
+        say(f"Community wheel ({how}): {wheel_basename(url)}  (expected: a minute or two)")
+        try:
+            os.makedirs(wheel_dir(lay, env), exist_ok=True)
+            dest = os.path.join(wheel_dir(lay, env), wheel_basename(url))
+            download(url, dest)
+            if stream(pip + [dest], log_path=log, max_seconds=PIP_MAX_SECONDS) == 0 and functional()[0]:
+                _write_wheel_meta(dest, env, f"community wheel ({how})")
+                return "prebuilt wheel"
+            say("The community wheel did not install or does not work on this GPU; trying the next option.")
+        except (urllib.error.URLError, OSError) as exc:
+            say(f"Download failed ({exc}); trying the next option.")
     name = prebuilt_wheel_name(env)
     if name and exists(FLASH_URL.format(name=name.replace("+", "%2B"))):
         say(f"Prebuilt wheel from the FlashAttention release {FLASH_TAG}: {name}  (expected: a minute or two)")
@@ -1391,6 +1688,68 @@ def wheel_fits(name: str, env: dict) -> tuple:
     return (not problems), "; ".join(problems) or "matches this runtime"
 
 
+# ------------------------------------------------------------------ community wheel lookup (never compiles, never fatal)
+_COMMUNITY_NAME = re.compile(r"^flash_attn-(?P<version>[\d.]+(?:\.post\d+)?)\+cu(?P<cuda>\d+)torch(?P<torch>\d+\.\d+)(?:\.\d+)?(?:cxx11abi(?:TRUE|FALSE))?"
+                             r"-(?P<py>cp\d+t?)-(?P<abi>cp\d+t?)-linux_x86_64\.whl$")
+_COMMUNITY: dict = {}  # (python, torch_mm, cuda tag) -> (url, how) | None, so the network is asked once per runtime
+
+
+def fetch_community_releases(page: int = 1) -> list:
+    """One page of the community repo's releases (GitHub API, no token). Raises on any network problem; callers treat that as 'no answer'."""
+    req = urllib.request.Request(COMMUNITY_API.format(page=page), headers={"Accept": "application/vnd.github+json", "User-Agent": "voicestudio-colab"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.load(resp)
+
+
+def community_wheel_matches(releases: list, python: str, torch_mm: str, cuda_tag: str) -> list:
+    """Linux x86_64 wheels that fit exactly, newest FlashAttention version and release first, as (name, url). Free-threaded builds never match."""
+    out = []
+    for rel in releases:
+        for asset in rel.get("assets", []) or []:
+            m = _COMMUNITY_NAME.match(asset.get("name", ""))
+            if m and m["py"] == python and m["abi"] == python and m["torch"] == torch_mm and "cu" + m["cuda"] == cuda_tag:
+                url = asset.get("browser_download_url") or (f"https://github.com/{COMMUNITY_REPO}/releases/download/{rel.get('tag_name')}/"
+                                                            + urllib.parse.quote(asset["name"]))
+                version = tuple(int(x) for x in re.findall(r"\d+", m["version"]))
+                out.append((version, tuple(int(x) for x in re.findall(r"\d+", rel.get("tag_name") or "")), asset["name"], url))  # tags compare as numbers: v0.9.31 is newer than v0.9.4
+    out.sort(key=lambda w: (w[0], w[1]), reverse=True)
+    return [(name, url) for _v, _t, name, url in out]
+
+
+def community_wheel(env: dict, fetch: Optional[Callable] = None) -> Optional[tuple]:
+    """(url, how) of a community FlashAttention wheel for this runtime, or None. ``how`` is 'found for this runtime' (API) or 'pinned'.
+    The pinned URL is returned only when its file name fits the runtime exactly. Any network failure just means 'not found'. Remembered per runtime."""
+    if not (env.get("python") and env.get("torch_mm") and env.get("cuda")):
+        return None
+    if not (env.get("platform", "").startswith("linux") and env.get("platform", "").endswith(("x86_64", "amd64"))):
+        return None
+    cuda_tag = "cu" + str(env["cuda"]).replace(".", "")
+    key = (env["python"], env["torch_mm"], cuda_tag)
+    if fetch is None and key in _COMMUNITY:
+        return _COMMUNITY[key]
+    found = None
+    get = fetch or fetch_community_releases
+    try:
+        releases, hits = [], []
+        for page in range(1, COMMUNITY_MAX_PAGES + 1):
+            chunk = get(page)
+            releases += chunk or []
+            hits = community_wheel_matches(releases, env["python"], env["torch_mm"], cuda_tag)
+            if hits or not chunk or len(chunk) < 100:
+                break
+        if hits:
+            found = (hits[0][1], "found for this runtime")
+    except (urllib.error.URLError, OSError, ValueError, TypeError, KeyError) as exc:
+        say(f"Could not look up community FlashAttention wheels ({exc}); using the pinned one if it fits.")
+    if found is None:
+        pinned = _COMMUNITY_NAME.match(wheel_basename(COMMUNITY_PINNED_WHEEL))
+        if pinned and (pinned["py"], pinned["torch"], "cu" + pinned["cuda"]) == key:
+            found = (COMMUNITY_PINNED_WHEEL, "pinned")
+    if fetch is None:
+        _COMMUNITY[key] = found
+    return found
+
+
 PIP_MAX_SECONDS = 25 * 60  # any single pip step is stopped after this long
 TESTED_PYTHON = ("cp310", "cp311", "cp312")  # what the Qwen3-TTS package and FlashAttention wheels were checked against by their authors
 
@@ -1443,6 +1802,8 @@ def want_venv(p: Params, lay: Layout, env: dict, gpu: Optional[Gpu], *, exists: 
     name = prebuilt_wheel_name(env)
     if name and exists(FLASH_URL.format(name=name.replace("+", "%2B"))):
         return None
+    if community_wheel(env):
+        return None
     return tags or dict(VENV_DEFAULT)
 
 
@@ -1470,7 +1831,7 @@ def ensure_venv(p: Params, lay: Layout, target: dict, log: str, *, stream: Calla
             raise StepFailed(f"Could not install torch {spec} for {target['cuda']} from {index}; see the log.")
     code, out = capture([venv_python_path(p), "-c", "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"])
     say(f"Isolated environment torch check: {out.strip()}")
-    if code != 0 or not out.strip().endswith("True"):
+    if code != 0 or not re.search(r"^\S+ \S+ True\s*$", out, re.M):  # a stderr warning after the result line must not fail the check
         raise StepFailed("The isolated environment's PyTorch cannot see the GPU: " + out.strip()[-300:])
     os.makedirs(venv_dir(p), exist_ok=True)
     with open(os.path.join(venv_dir(p), VENV_READY), "w", encoding="utf-8") as fh:
@@ -1517,6 +1878,8 @@ def runtime_check(p: Params, lay: Layout, *, env: Optional[dict] = None, gpu: Op
                 rows.append(("FlashAttention 2", "PASS", "a cached wheel for this exact runtime is on Drive"))
             elif prebuilt_wheel_name(env) and exists(FLASH_URL.format(name=prebuilt_wheel_name(env).replace("+", "%2B"))):
                 rows.append(("FlashAttention 2", "PASS", "a ready-made package exists (a minute or two)"))
+            elif community_wheel(env):
+                rows.append(("FlashAttention 2", "PASS", f"a community wheel exists for this runtime ({community_wheel(env)[1]}; a minute or two)"))
             elif p.build_flash_attn:
                 rows.append(("FlashAttention 2", "INFO", f"no ready-made package; BUILD_FLASH_ATTN is on, so it WILL be compiled (up to {BUILD_MAX_SECONDS // 60} minutes)"))
             elif p.attn_fallback is False:
@@ -1542,6 +1905,10 @@ def ensure_deps(p: Params, lay: Layout, log: str, *, probe: Callable = probe_mod
     elif stream(base + ["-e", lay.local_repo], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
         raise StepFailed("pip install -e of the Qwen3-TTS repository failed or ran past its time limit; see the log. If this runtime is much newer "
                          "than Python 3.12 / CUDA 12, try an older runtime version under Runtime > Change runtime type.")
+    if p.train_mode == "lora" and not probe("peft")[0]:
+        say(f"Installing {PEFT_PIN} (--no-deps: it must not change transformers 4.57.3, accelerate 1.12.0 or torch).")
+        if stream(base + ["--no-deps", PEFT_PIN], log_path=log, max_seconds=PIP_MAX_SECONDS) != 0:
+            raise StepFailed(f"pip install of {PEFT_PIN} failed; see the log.")
     missing = [m for m in ("accelerate", "tensorboard", "librosa", "soundfile", "safetensors", "huggingface_hub") if not probe(m)[0]]
     if missing:
         say("Installing: " + ", ".join(missing))
@@ -2428,11 +2795,12 @@ def ensure_codes(p: Params, lay: Layout, folder: str, dataset_hash: str, rows: i
 
 
 # --------------------------------------------------------------------------------------------- training
-def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) -> str:
+def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL, *, lora_or_speakers: bool = False) -> str:
     """Copy sft_12hz.py to /content with the changes this runner needs. The cached repo is never touched.
 
     Always: a TensorBoard log directory is added to the Accelerator (the installed accelerate refuses ``log_with="tensorboard"`` without
-    one; the script never writes events anyway). With ``impl``: the attention implementation is changed from flash_attention_2."""
+    one; the script never writes events anyway). With ``impl``: the attention implementation is changed from flash_attention_2. With
+    ``lora_or_speakers`` (TRAIN_MODE lora, or several speakers): also the LORA_PAIRS patches; same refusal when a line is not found exactly once."""
     src = os.path.join(lay.local_repo, "finetuning", "sft_12hz.py")
     with open(src, encoding="utf-8") as fh:
         text = fh.read()
@@ -2441,7 +2809,7 @@ def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) 
         raise StepFailed("sft_12hz.py does not contain the expected lines exactly once, so it cannot be patched safely "
                          "(the repo is not the pinned commit?).")
     text = text.replace(ACCEL_LINE, ACCEL_FIXED)  # no-op when the line is already fixed
-    for old, new in ALIGN_PAIRS:  # training-loop fixes, see the comments inside ALIGN_* (Qwen3-TTS issues #39, #179, #278, #371)
+    for old, new in ALIGN_PAIRS + (LORA_PAIRS if lora_or_speakers else ()):  # training-loop fixes, see the comments inside ALIGN_* (Qwen3-TTS issues #39, #179, #278, #371)
         if text.count(old) != 1:
             raise StepFailed("sft_12hz.py does not contain the expected training lines exactly once, so the label-alignment fix cannot be applied "
                              "safely (the repo is not the pinned commit, or the copy was edited).")
@@ -2462,7 +2830,9 @@ def build_patched_script(lay: Layout, impl: Optional[str] = ATTN_FALLBACK_IMPL) 
 def model_speaker_name(p: Params) -> str:
     """The name stored inside the model. Qwen's inference looks the requested name up lowercased (``speaker.lower() in spk_id``) but
     sft_12hz.py stores it as typed, so a name with capitals can never be found; the stored name is therefore always lowercase."""
-    return p.speaker_name.lower()
+    low = p.speaker_name.lower()
+    names = [n for n in p.speakers.split(",") if n]
+    return low if not names or low in [n.lower() for n in names] else names[0].lower()  # a multi-speaker model answers to its own names only
 
 
 def fix_speaker_names(checkpoint_dir: str) -> bool:
@@ -2485,6 +2855,62 @@ def fix_speaker_names(checkpoint_dir: str) -> bool:
     return changed
 
 
+def dataset_speakers(jsonl: str) -> tuple:
+    """(speaker names in order of first appearance, lowercase; True when every row has a speaker) from a `speaker` field in the data rows."""
+    names, missing = [], False
+    with open(jsonl, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            who = str(json.loads(line).get("speaker") or "").strip().lower()
+            if not who:
+                missing = True
+            elif who not in names:
+                names.append(who)
+    return names, not missing
+
+
+def resolve_speakers(p: Params, jsonl: str) -> list:
+    """The speakers this run trains: SPEAKERS if given, else the distinct `speaker` values of a multi-speaker data set, else (LoRA only) the
+    one SPEAKER_NAME. Empty means the upstream single-speaker path (row 3000), unchanged. Row validity is checked here."""
+    if p.speakers:
+        names = [n.lower() for n in p.speakers.split(",")]
+    else:
+        found, complete = dataset_speakers(jsonl)
+        if len(found) > 1:
+            if not complete:
+                raise StepFailed("Some rows have a `speaker` and some do not: every row of a multi-speaker data set needs one.")
+            names = found
+        else:
+            names = [model_speaker_name(p)] if p.train_mode == "lora" else []
+    if names:
+        speaker_rows(names)
+    return names
+
+
+def max_code_frames(codes_jsonl: str) -> int:
+    """Longest clip, in codec frames, of the prepared data (rows hold `audio_codes`)."""
+    longest = 0
+    with open(codes_jsonl, encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                longest = max(longest, len(json.loads(line).get("audio_codes") or []))
+    return longest
+
+
+def train_env(p: Params, lay: Layout) -> dict:
+    """Environment of the patched script: training mode, LoRA settings and the speaker rows. Nothing else changes the default run."""
+    env = {"VS_TRAIN_MODE": p.train_mode, "VS_RUNNER_VERSION": RUNNER_VERSION, "VS_MERGE_MIN_PCT": f"{MERGE_MIN_CHANGED_PCT:g}"}
+    if p.train_mode == "lora":
+        env.update({"VS_LORA_RANK": str(p.lora_rank), "VS_LORA_ALPHA": f"{p.lora_alpha:g}", "VS_LORA_DROPOUT": f"{p.lora_dropout:g}",
+                    "VS_LORA_SCALE": f"{p.lora_scale:g}", "VS_LORA_TARGETS": LORA_TARGET_REGEX})
+    names = [n for n in p.speakers.split(",") if n]
+    if names:
+        env.update({"VS_SPEAKERS": json.dumps(names), "VS_SPEAKER_ROWS": json.dumps(speaker_rows(names)), "VS_SPK_MAX_REFS": str(SPK_MAX_REFS),
+                    "VS_SPEAKER_CACHE_DIR": os.path.join(lay.prepared, "speaker_embeddings")})
+    return env
+
+
 def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patched: Optional[str] = None, codes: Optional[str] = None,
                   out_dir: Optional[str] = None, epochs: Optional[int] = None) -> dict:
     """The official training command with this run's values (checkpoints go to local /content first)."""
@@ -2493,7 +2919,7 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
         "cwd": dataset_dir,
         "env": {"PYTHONPATH": ft + os.pathsep + os.environ.get("PYTHONPATH", ""),
                 "VS_TENSORBOARD_DIR": os.path.join(p.local_root, "tensorboard"), "VS_GRAD_ACCUM": str(p.grad_accum),
-                "VS_VAL_FRACTION": f"{p.val_fraction:g}"},
+                "VS_VAL_FRACTION": f"{p.val_fraction:g}", **train_env(p, lay)},
         "train": [py(), "-u", patched or os.path.join(ft, "sft_12hz.py"), "--init_model_path", local_model_dir(lay, p.base_model),
                   "--output_model_path", out_dir or lay.local_checkpoints, "--train_jsonl", codes or lay.codes_local, "--batch_size", str(batch),
                   "--lr", f"{p.lr:g}", "--num_epochs", str(epochs or p.epochs), "--speaker_name", model_speaker_name(p)],
@@ -2543,13 +2969,13 @@ def _preflight(p: Params, lay: Layout, gpu: Optional[Gpu]) -> tuple:
     return path, batch
 
 
-def _announce_patch(path: str, lay: Layout) -> Optional[str]:
+def _announce_patch(path: str, lay: Layout, lora_or_speakers: bool = False) -> Optional[str]:
     if path != "sdpa":
-        patched = build_patched_script(lay, None)
+        patched = build_patched_script(lay, None, lora_or_speakers=lora_or_speakers)
         say(f"Training script: a copy of Qwen's sft_12hz.py ({patched}) with a TensorBoard log directory, the text projection and the label/sub-talker "
             "alignment fixes; attention is untouched (FlashAttention 2). Qwen's repo is unchanged.")
         return patched
-    patched = build_patched_script(lay)
+    patched = build_patched_script(lay, lora_or_speakers=lora_or_speakers)
     say("*" * 78)
     say("ATTENTION: training with a PATCHED COPY of sft_12hz.py (PyTorch SDPA attention instead of FlashAttention 2).")
     say(f"Copy: {patched}. Qwen's cached repo is unchanged.")
@@ -2583,13 +3009,24 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
         path, batch = _preflight(p, lay, gpu)
         preflight(p, lay, gpu, path, batch)
         folder, result = _data_check(p)
-        patched = _announce_patch(path, lay)
+        names = resolve_speakers(p, os.path.join(folder, "train.jsonl"))
+        p.speakers = ",".join(names)
+        patched = _announce_patch(path, lay, p.train_mode == "lora" or bool(names))
         log = new_log(lay, p, "train", per_run=True)
         env = detect_environment()
         status.update(status="preparing")
         codes = ensure_codes(p, lay, folder, result["dataset_hash"], result["rows"], log, stream=stream)
+        batch, p.grad_accum, warn = cap_micro_batch(batch, p.grad_accum, max_code_frames(codes))
+        if warn:
+            say(warn)
         plan = plan_commands(p, lay, folder, batch, patched=patched, codes=codes)
         write_snapshot(p, lay, env, gpu, path, plan, result["dataset_hash"], started)
+        if p.train_mode == "lora":
+            say(f"== LoRA: rank {p.lora_rank}, alpha {p.lora_alpha:g}, dropout {p.lora_dropout:g} on the talker and code predictor layers, base frozen, adapters in float32; "
+                f"each epoch is saved as a merged standard checkpoint plus adapter_model.safetensors. UNVERIFIED on a GPU. lr {p.lr:g}"
+                + ("" if p.sources.get("lr") else " is LORA_DEFAULT_LR, an UNCONFIRMED placeholder"))
+        if p.speakers:
+            say("== Speakers: " + ", ".join(f"{n} (row {r})" for n, r in speaker_rows(p.speakers.split(",")).items()))
         say(f"== Training: {p.epochs} epochs, batch size {batch} x accumulation {p.grad_accum} = {batch * p.grad_accum} clips per update, "
             f"learning rate {p.lr:g}, speaker {p.speaker_name}, attention {path.upper()}")
         say(f"Checkpoints are written to {lay.local_checkpoints} (local), then each finished epoch is copied to Drive: {lay.checkpoints}")
@@ -3062,12 +3499,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=STEPS, help="all = setup, data, train (incl. samples), results")
     ap.add_argument("--settings", help="training_settings.json from the export (provides the defaults)")
-    for flag in ("drive-root", "data-source", "speaker-name", "batch-size", "base-model", "tokenizer-model", "run-id", "sample-text"):
+    for flag in ("drive-root", "data-source", "speaker-name", "batch-size", "base-model", "tokenizer-model", "run-id", "sample-text", "speakers"):
         ap.add_argument("--" + flag)
     for flag, kind in (("epochs", int), ("keep-last-n", int), ("sample-seed", int), ("smoke-clips", int), ("heartbeat-seconds", int),
-                       ("lr", float), ("units-per-hour", float), ("units-available", float), ("compare-epoch-seconds", float),
+                       ("lora-rank", int), ("lora-alpha", float), ("lora-dropout", float), ("lora-scale", float), ("lr", float), ("units-per-hour", float), ("units-available", float), ("compare-epoch-seconds", float),
                        ("compare-units-per-hour", float)):
         ap.add_argument("--" + flag, type=kind)
+    ap.add_argument("--train-mode", choices=TRAIN_MODES, help="full (default): train the whole model; lora: adapters on a frozen model (UNVERIFIED on a GPU)")
     for flag in ("keep-all", "keep-first", "keep-final", "cache-models-on-drive", "sample-after-training"):
         ap.add_argument("--" + flag, choices=("true", "false"), help="default depends on the setting")
     ap.add_argument("--attn-fallback", choices=("auto", "true", "false"), help="auto (default): FlashAttention 2 on Ampere/Ada/Hopper, patched SDPA "

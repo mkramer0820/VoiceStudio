@@ -20,7 +20,7 @@ vi.mock('./clip-player', () => ({
 import { ExportDialog } from './export-dialog';
 import {
   estimatePasses, keepTagsOf, parseDictionary, suggestSteps, trainingBody, EMPTY_TRAINING,
-  qwenEstimate, qwenTrainBody, qwenTrainInvalid,
+  qwenEstimate, qwenTrainBody, qwenTrainInvalid, qwenBody, qwenNumber, QWEN_NUMBERS, QWEN_LORA_NUMBERS, EMPTY_QWEN,
 } from './export-options';
 import type { ExportResult } from './use-fish-dataset';
 
@@ -320,7 +320,7 @@ describe('Qwen3-TTS in the shared Training setup', () => {
     omniOn(dialog); // untick
     qwenOn(dialog);
     expect(within(dialog).getByLabelText('fishDataset.qtr_epochs')).toHaveValue(10);
-    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(1e-6);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_learning_rate')).toHaveValue(2e-6);
     expect(within(dialog).getByLabelText('fishDataset.qtr_batch_size')).toHaveValue(4);
     expect(within(dialog).queryByLabelText('fishDataset.tr_steps')).not.toBeInTheDocument();
     expect(within(dialog).getByText('fishDataset.qtr_colab_only')).toBeInTheDocument();
@@ -403,6 +403,52 @@ describe('Qwen option helpers', () => {
     });
     expect(qwenTrainInvalid({ edits: { base_model: 'x; ls' } })).toEqual(['base_model']);
     expect(qwenEstimate(0, 2, 3)).toBeNull();
+  });
+
+  it('shows 2e-6 for a full fine-tune and the separate LoRA default for LoRA, and sends only what differs from the mode default', () => {
+    expect(qwenNumber({ edits: {} }, 'learning_rate')).toBe(2e-6);
+    expect(qwenNumber({ mode: 'full', edits: {} }, 'learning_rate')).toBe(QWEN_NUMBERS.learning_rate.def);
+    expect(qwenNumber({ mode: 'lora', edits: {} }, 'learning_rate')).toBe(QWEN_LORA_NUMBERS.lora_learning_rate.def);
+    expect(QWEN_LORA_NUMBERS.lora_learning_rate.def).not.toBe(QWEN_NUMBERS.learning_rate.def);
+    expect(qwenTrainBody({ mode: 'lora', edits: {} })).toEqual({ train_mode: 'lora' });
+    expect(qwenTrainBody({ mode: 'lora', edits: { learning_rate: '2e-6', lora_rank: '32' } })).toEqual({ train_mode: 'lora', learning_rate: 2e-6, lora_rank: 32 });
+    expect(qwenTrainBody({ mode: 'full', edits: { lora_rank: '32', learning_rate: '2e-6' } })).toEqual({}); // LoRA edits never leak into a full run
+    expect(qwenTrainInvalid({ mode: 'lora', edits: { lora_rank: '0' } })).toEqual(['lora_rank']);
+    expect(qwenTrainInvalid({ mode: 'full', edits: { lora_rank: '0' } })).toEqual([]);
+  });
+
+  it('writes the multi-speaker option and no reference clip', () => {
+    expect(qwenBody(EMPTY_QWEN, 'k2')).toMatchObject({ reference_key: 'k2' });
+    expect(qwenBody(EMPTY_QWEN, 'k2')).not.toHaveProperty('multi_speaker');
+    expect(qwenBody({ ...EMPTY_QWEN, multi: true }, 'k2')).toMatchObject({ multi_speaker: true, reference_key: null });
+  });
+});
+
+describe('Qwen3-TTS training mode and speakers in the dialog', () => {
+  it('switches the learning rate with the mode and sends train_mode only for LoRA', async () => {
+    const { dialog, onExport } = setup();
+    qwenOn(dialog);
+    const lr = () => within(dialog).getByLabelText('fishDataset.qtr_learning_rate') as HTMLInputElement;
+    expect(Number(lr().value)).toBe(2e-6);
+    fireEvent.change(within(dialog).getByLabelText('fishDataset.qtr_train_mode'), { target: { value: 'lora' } });
+    expect(Number(lr().value)).toBe(QWEN_LORA_NUMBERS.lora_learning_rate.def);
+    expect(within(dialog).getByLabelText('fishDataset.qtr_lora_rank')).toHaveValue(16);
+    fireEvent.click(exportButton(dialog));
+    await waitFor(() => expect(onExport).toHaveBeenCalled());
+    expect(sent(onExport).training).toEqual({ train_mode: 'lora' });
+  });
+
+  it('allows up to four speakers with the multi-speaker option and refuses five', () => {
+    const three = setup({ speakerCount: 3 });
+    qwenOn(three.dialog);
+    expect(exportButton(three.dialog)).toBeDisabled();
+    fireEvent.click(within(three.dialog).getByLabelText('fishDataset.qwen_multi_speaker'));
+    expect(exportButton(three.dialog)).toBeEnabled();
+    cleanup();
+    const five = setup({ speakerCount: 5 });
+    qwenOn(five.dialog);
+    fireEvent.click(within(five.dialog).getByLabelText('fishDataset.qwen_multi_speaker'));
+    expect(exportButton(five.dialog)).toBeDisabled();
   });
 });
 

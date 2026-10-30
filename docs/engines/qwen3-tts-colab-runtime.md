@@ -1,6 +1,6 @@
 # Qwen3-TTS on Google Colab: the runtime, the FlashAttention wheel, and every trap we hit
 
-Written 2026-10-25 from the first real training runs (an A100 40 GB). Read this before setting up a Colab runtime for any training phase,
+Written from the first real training runs (an A100 40 GB). Read this before setting up a Colab runtime for any training phase,
 before changing Python or torch, and before touching the FlashAttention settings. "Verified" means it ran on a real Colab; "not verified"
 means it was built and tested with fakes only. The code lives in `backend/engines/fish_api/qwen3_colab_runner.py` (the runner) and
 `qwen3_colab.py` (the notebook generator); the training story is in [../agents/QWEN3_TRAINING_STATE.md](../agents/QWEN3_TRAINING_STATE.md).
@@ -37,28 +37,26 @@ A FlashAttention wheel loads only against the **exact** Python, torch and CUDA i
 `flash_attn-2.8.3+cu130torch2.11-cp313-cp313-linux_x86_64.whl` = FlashAttention 2.8.3, CUDA 13.0, torch 2.11, Python 3.13, Linux x86_64.
 
 - **Official wheels** (Dao-AILab release v2.8.3.post2): Linux x86_64, **CUDA 12 only**, torch 2.4 to 2.8, `cp313` only for torch 2.5 and newer. **None exist for CUDA 13.**
-- **Community wheels:** [mjun0812/flash-attention-prebuild-wheels](https://github.com/mjun0812/flash-attention-prebuild-wheels) builds CUDA 13 and newer torch. As of 2026-10-25 it has `cp313` Linux x86_64 FlashAttention 2.8.3 wheels for:
-
-  | CUDA | torch | release tags |
-  |---|---|---|
-  | cu130 | 2.9 | v0.5.2, v0.6.8, v0.7.16, v0.9.0, v0.9.21 |
-  | cu130 | 2.10 | v0.7.12, v0.7.16, v0.9.0, v0.9.21 |
-  | **cu130** | **2.11** | **v0.9.4** (the one in use), v0.9.31 |
-  | cu130 | 2.12 | v0.9.17 |
-  | cu128 | 2.9, 2.10, 2.11 | several |
-
-  The one in use:
+- **Community wheels:** [mjun0812/flash-attention-prebuild-wheels](https://github.com/mjun0812/flash-attention-prebuild-wheels) builds CUDA 13 and newer torch for `cp313`.
+  The one verified on Colab (A100, Python 3.13, torch 2.11, CUDA 13.0) is pinned as `qwen3_colab_runner.COMMUNITY_PINNED_WHEEL` (also `qwen3_colab.COLAB_FLASH_WHEEL`, pre-filled into every notebook):
   `https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.4/flash_attn-2.8.3%2Bcu130torch2.11-cp313-cp313-linux_x86_64.whl`
-  (the `+` is `%2B` in the URL; the runner decodes it, pip needs the real name). It is `qwen3_colab.COLAB_FLASH_WHEEL`, pre-filled into every
-  notebook the export writes.
-- **Find the right file for any runtime** with `python scripts/find_flash_wheel.py` (reads the runtime's Python, torch and CUDA) or
-  `--python cp313 --torch 2.11 --cuda cu130`. It ignores `cp313t` (the free-threaded build; it does not load on a normal Python 3.13).
-- **Which GPUs can use it:** FlashAttention 2 supports Ampere (A100, RTX 30), Ada (L4, RTX 40) and Hopper (H100). **Not** Blackwell (G4, RTX 50xx) and **not** Turing (T4): those use PyTorch's built-in attention (SDPA) through a patched copy of the training script (not verified on Colab).
-- **Never compile it on Colab.** An early runner built FlashAttention from source automatically because no wheel existed for CUDA 13: it ran for about an hour and wasted the owner's compute. The runner now only compiles with `BUILD_FLASH_ATTN = True` (capped at 90 minutes), and the runtime check says up front whether a package exists.
-- **How the notebook uses it:** `FLASH_WHEEL = '<url or Drive path>'`. The runner reads the file name, compares it to the runtime (`wheel_fits`: Python, torch, CUDA), and only then installs it, then runs a real GPU forward pass (`attention: flash_attn PASS (ran on the GPU)`). A wheel that does not fit is skipped with the reason, never installed.
-- **The check that counts:** the setup table row `attention: flash_attn  PASS  2.8.3 (ran on the GPU)`.
+  (the `+` is `%2B` in the URL; the runner decodes it, pip needs the real name).
+- **The runner finds the right wheel itself (runner 20).** Setup asks the GitHub releases API of that repo (no token, up to 5 pages, once per runtime) for the Linux x86_64 wheel whose Python, torch major.minor and CUDA match the runtime exactly (`cp313t` free-threaded builds never match; the newest FlashAttention version and release win, tags compared as numbers). If the lookup fails (offline, rate limit) it is not an error: the pinned wheel is used when its file name fits this runtime, otherwise nothing. The runtime check row says which one it found. It is **not verified on Colab** that a looked-up wheel other than the pinned one installs and passes the GPU test; the pinned one is.
+- **Find a file by hand** with `python scripts/find_flash_wheel.py` (same lookup as the runner; reads the runtime's Python, torch and CUDA, or `--python cp313 --torch 2.11 --cuda cu130`) and put it in `FLASH_WHEEL`.
+- **Never compile it on Colab.** An early runner built FlashAttention from source automatically because no wheel existed for CUDA 13: it ran for about an hour and wasted compute. The runner compiles only with `BUILD_FLASH_ATTN = True` (capped at 90 minutes), and the runtime check says up front whether a package exists.
+- **How an install is decided**, in this order, stopping at the first that installs *and* passes a real GPU forward pass (`attention: flash_attn PASS (ran on the GPU)`): already working > the `FLASH_WHEEL` you set (name-checked first; a wheel that does not fit is skipped with the reason, never installed) > a wheel cached on Drive for this exact runtime and GPU architecture > the community wheel (looked up, else pinned) > the official CUDA 12 wheel > no wheel (below). FlashAttention is never installed on a GPU that cannot use it.
 
-If the runtime changes and no wheel exists: (a) Runtime > Change runtime type > an older runtime version; (b) `USE_VENV = 'auto'` builds an isolated Python 3.12 + torch 2.8 (cu126) environment with the official wheel (**not verified on Colab**); (c) `ATTN_FALLBACK = True` trains with PyTorch attention (not verified).
+### Decision table
+
+| Runtime and GPU | What happens | Training result |
+|---|---|---|
+| Ampere / Ada / Hopper (A100, L4, H100) and an exact-match wheel exists (community or official) | The wheel is installed and tested; the patched copy of `sft_12hz.py` runs with FlashAttention 2 | The reference path |
+| Same GPU, **no** wheel for this Python / torch / CUDA | The patched copy trains with PyTorch SDPA attention. Nothing is compiled. **This is the supported fallback**: FlashAttention changes speed and memory, not what is learned | Same training quality; slower and more memory (not measured here) |
+| Blackwell (G4, RTX 50xx) | SDPA by default; FlashAttention 2 does not support it (`ATTN_FALLBACK = False` forces it and will likely fail) | Same quality, SDPA speed |
+| Turing (T4) | Refused in `auto`; `ATTN_FALLBACK = True` trains with SDPA (may run out of memory on a 15 GB card) | Same quality if it fits |
+| No wheel, and you want FlashAttention anyway | `USE_VENV = 'auto'` builds an isolated Python 3.12 + torch 2.8 (cu126) environment with the official wheel. **Last resort**: minutes of setup, not verified on Colab. `BUILD_FLASH_ATTN = True` compiles instead (an hour or more, may fail) | Same quality |
+
+The SDPA copy has not been verified end to end on Colab. When no wheel exists, prefer SDPA over the isolated environment unless speed matters; an older runtime version (Runtime > Change runtime type) also works.
 
 ## 3. Setting up a fresh runtime (the order that worked)
 
@@ -79,7 +77,7 @@ Drive layout (`Qwen3TTS` is the folder name; the old default `VoiceStudio-traini
 | `operator torchvision::nms does not exist` on `import qwen_tts` | torch was upgraded in place; torchvision/torchaudio stayed old | **Never upgrade torch in the runtime.** The setup repairs mismatched companions |
 | `CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH` in the audio-code step | torch upgraded next to Colab's older cuDNN | Same rule. Setup now runs a real GPU convolution and says so |
 | `ValueError: Logging with tensorboard requires a logging_dir` | accelerate 1.12 vs Qwen's `sft_12hz.py` | The runner trains from a patched copy of the script (adds `project_dir`) |
-| Noise from every epoch, loss still falls | lr 2e-5 (script default) and bugs in the training loop (text projection missing, labels shifted twice) | lr 1e-6 and the patched script. Details: QWEN3_TRAINING_STATE.md |
+| Noise from every epoch, loss still falls | lr 2e-5 (script default) and bugs in the training loop (text projection missing, labels shifted twice) | lr 1e-6 to 2e-6 and the patched script. Details: QWEN3_TRAINING_STATE.md |
 | `NotImplementedError: Speaker X not implemented` | Qwen looks the speaker name up in lowercase; the script stores it as typed | The runner trains with a lowercase name |
 | `FileNotFoundError ... does not exist, so nothing was created` / two `Qwen3TTS` folders on Drive | Colab could not see the Drive folder yet and the code created a second one | The notebook and runner never create the Drive root. Create the folder in Drive first and wait for it to sync |
 | The stop button left training running | the child process was not in the cell's process group | The runner starts it in its own group and kills the group on interrupt |
@@ -100,21 +98,34 @@ Harmless messages, ignore: `diffusers requires huggingface-hub<2.0,>=1.32` (Qwen
 
 ## 6. Settings that worked
 
-epochs 10 (the last epochs of the first good run were the best), batch 4 with `GRAD_ACCUM` 2 (8 clips per update, the same recipe as 2 x 4), lr 1e-6, `USE_VENV` auto, `FAST_SETUP` True, clips 4 to 20 s at 24 kHz mono with 1 s of silence at the end (the export adds it). Training speed at batch 2: 3.7 steps per second, about 1 min 46 s per epoch of 683 clips, 21 GB peak GPU memory. Batch 4 with `GRAD_ACCUM` 2 (1378 clips) ran on the same card at about 25 GB.
+epochs 10 (the last epochs of the first good run were the best), batch 4 with `GRAD_ACCUM` 2 (8 clips per update, the same recipe as 2 x 4), lr 1e-6 for the good runs (the shipped default is 2e-6, being tried against it), `USE_VENV` auto, `FAST_SETUP` True, clips 4 to 20 s at 24 kHz mono with 1 s of silence at the end (the export adds it). Training speed at batch 2: 3.7 steps per second, about 1 min 46 s per epoch of 683 clips, 21 GB peak GPU memory. Batch 4 with `GRAD_ACCUM` 2 (1378 clips) ran on the same card at about 25 GB.
 
-## 6b. Runner 19: validation loss, safe save, Drive only for epochs (2026-10-27)
+**One set of defaults.** `qwen3_colab_runner.DEFAULT_EPOCHS / DEFAULT_LR / DEFAULT_BATCH_SIZE / DEFAULT_GRAD_ACCUM / DEFAULT_SPEAKER` feed `qwen3_colab.TrainSettings`, the notebook's parameters cell and the runner's `Params`; the export dialog (`export-options.ts`, `QWEN_NUMBERS`) repeats the numbers and `tests/backend/engines/test_fish_qwen3_defaults.py` fails if any layer drifts. The notebook has one parameters cell, near the top.
 
-- **Validation loss.** `VAL_FRACTION` (default 0.05, `0` turns it off) holds out that share of the clips with a fixed seed. After every epoch the patched script prints `Epoch N | Val loss: x` and the runner writes it to its own `val_loss` column of `metrics.csv` (the training rows leave it empty). Read it as: while it falls, more epochs help; once it stops falling while the training loss keeps falling, they do not. Fewer than 20 clips: skipped, and it says so.
+## 6b. Validation loss, safe save, Drive only for epochs
+
+- **Validation loss.** `VAL_FRACTION` (default 0.05, `0` turns it off) holds out that share of the clips with a fixed seed. After every epoch the patched script prints `Epoch N | Val loss: x` and the runner writes it to its own `val_loss` column of `metrics.csv` (the training rows leave it empty). While it falls, more epochs help; once it stops falling while the training loss keeps falling, they do not. Fewer than 20 clips: skipped, and it says so.
 - **Safe save.** The checkpoint is written to `.tmp-checkpoint-epoch-N` and renamed to `checkpoint-epoch-N` only after it is verified, so a crash can no longer leave the untrained base weights under a finished-looking name (upstream issue #365). The check compares a sample of tensors with the base model; `SAVE VERIFIED` appears when it passes and `SAVE FAILED` (training stops) when none differ. It also prints `SAVE CHECK: x% of elements changed vs the base model`.
-- **Drive only for epochs.** Models download straight to `/content` (`CACHE_MODELS_ON_DRIVE` now defaults to `False`). `DRIVE_SKIP_FIRST` (default 3) keeps the first N epochs on `/content` and does not copy them to Drive; the final epoch is always copied.
-- **Learning rate.** Set `LR` in the notebook (the runner default is 2e-6; earlier runs used 1e-6).
-- **Not run on a GPU yet.** All patches apply to the real pinned `sft_12hz.py` and the result compiles; the new helpers `_val_loss` and `_verify_saved` have only been unit-tested (the save check on small files). The first real run should be a short one. Regenerate the notebook (or re-export) so it embeds runner 19.
-- **Possible reason low learning rates change little (Inferred, not tested):** the model is loaded in bf16 and trained in bf16 without fp32 master weights, so an update of about 1e-6 on a weight of about 0.02 is smaller than bf16's resolution and rounds away for most weights. `SAVE CHECK` shows how much actually changes; if it is tiny at 1e-6 and larger at 2e-6, that is the reason.
+- **Drive only for epochs.** Models download straight to `/content` (`CACHE_MODELS_ON_DRIVE` defaults to `False`). `DRIVE_SKIP_FIRST` (default 3) keeps the first N epochs on `/content` and does not copy them to Drive; the final epoch is always copied.
+- **The training copy of `sft_12hz.py`** (pinned commit 022e286) carries these fixes, none tied to a model size, and tests run the patched helpers on small tensors: the text goes through `text_projection` before the codec embeddings are added (the 0.6B model's text embedding is wider than its codec embedding, so without it that model crashes, and the 1.7B one would train on unprojected text); the talker gets unshifted labels and tensors (the loss shifts once); the sub-talker scores its 15 logits against codes 1 to 15 with plain cross entropy (no second shift). The mozi1924 EasyFinetuning script does not fix the double shift; ours follows the issue #179 analysis.
+- **Not run on a GPU yet:** `_val_loss` and `_verify_saved` have run only against fake tensors and small files. The first real run should be a short one.
+- **Possible reason low learning rates change little (inferred, not tested):** the model is loaded in bf16 and trained in bf16 without fp32 master weights, so an update of about 1e-6 on a weight of about 0.02 is smaller than bf16's resolution and rounds away for most weights. `SAVE CHECK` shows how much actually changes; if it is tiny at 1e-6 and larger at 2e-6, that is the reason.
+
+## 6c. LoRA and multi-speaker training (runner 21; built and tested with fakes, NOT run on a GPU)
+
+- **`TRAIN_MODE`** `'full'` (default, unchanged: the whole model, `LR` = `DEFAULT_LR` = 2e-6) or `'lora'` (adapters on a frozen model). LoRA has its **own** constants: `LORA_LR` (`qwen3_colab_runner.LORA_DEFAULT_LR`), `LORA_RANK` 16, `LORA_ALPHA` 32, `LORA_DROPOUT` 0.05, `LORA_SCALE` (`LORA_DEFAULT_SCALE`). **The LoRA learning rate (2e-5) and the merge scale (1.0; 0.3 is a candidate) are unconfirmed placeholders**, not tuned: another LoRA trainer uses 2e-6, so a sweep must include 2e-6, 1e-5, 2e-5 and up. Do not present them as recommendations. No sampling defaults (temperature, top_k, top_p) are set per mode.
+- **What trains.** `peft==0.17.1` (installed with `--no-deps`, probed in the setup table as `peft (LoRA)`) injects adapters with `inject_adapter_in_model` into the Linear layers `q,k,v,o,gate,up,down` of `talker.model.layers.*` and `talker.code_predictor.model.layers.*` only (a full-match regex; the speaker encoder, `text_projection`, heads and embeddings stay frozen). Checked on peft 0.17.1 + transformers 4.57.3 (CPU): `inject_adapter_in_model` leaves adapters in the base's **bfloat16** (unlike `get_peft_model`), so the patched script casts them to float32 itself and asserts it. peft 0.17.1 does not import under transformers 5, so keep it out of the local sidecar environment.
+- **The patch** is the same pinned `sft_12hz.py` (commit 022e286) with the ALIGN_A/B/C and VAL_* patches intact plus `LORA_PAIRS` (optimizer, speaker embeddings, save block); it refuses any script that does not contain each line exactly once. A full single-speaker run does not get these patches and is byte-for-byte runner 20's script.
+- **Checkpoints.** Each epoch is still a normal merged `checkpoint-epoch-N` (so the save check, the Drive sync, the samples and the playground work unchanged) and also holds `adapter_model.safetensors` (float32), `adapter_config.json`, `speakers.json`, `speaker_embeddings.safetensors` and `lora_meta.json`. The merge adds `scale * B A` in float32 and rounds once to bfloat16; `MERGE CHECK` prints the share of adapted elements that changed and warns below `MERGE_MIN_CHANGED_PCT` (a placeholder). An all-zero adapter stops the run (`LORA FAILED`).
+- **Several speakers in one model.** The export (`multi_speaker`) writes a `speaker` per clip and a reference clip per speaker; the runner reads them (or `SPEAKERS`), caches one fixed float32 embedding per speaker (mean of up to 8 reference clips, encoder on the GPU once, file named after the references so a rerun skips it) and writes speaker `i` into codec row `3000 + 20 * i`. The table has 3072 rows, so **at most 4 speakers fit** (the plan's scheme would reach row 3080 for a fifth). Names are lowercase and checked against the stock rows. Either mode can train several speakers.
+- **Frame guard** (Qwen3-TTS issue #378): `batch x longest clip` in codec frames is kept under 8192 by lowering the batch and raising `GRAD_ACCUM`, with a warning. Not tested on a GPU; the eager code-predictor override from the issue is not built.
+- **Merging after the fact** (CPU, no GPU): `qwen3_peft.merge_adapter(base_dir, adapter_dir, out_dir, lora_scale=...)`, or the app's *Merge adapter* route (`POST /api/qwen/models/merge-adapter`), which writes into a folder listed in Settings -> Storage -> Model locations.
+- **Not verified on a GPU:** adapter gradients through `forward_sub_talker_finetune`, peft 0.17.1 with transformers 4.57.3 on Colab (probed on the CPU only), VRAM and speed, the learning rate, rank and merge scale, that attention/MLP adapters can learn the end-of-speech token, merged versus unmerged logits, the cached embedding versus the per-sample one, multi-speaker separation.
 
 ## 7. Not verified
 
-The isolated Python 3.12 environment (`USE_VENV`) on Colab; Blackwell (G4) and Turing (T4) fallbacks; other GPUs' batch sizes; interrupting a run on Colab; how the 3-hour run's voice compares with the 105-minute run's. When one of these is run for real, change this file in the same commit.
+LoRA and multi-speaker training (section 6c); a looked-up community wheel other than the pinned one; the SDPA fallback copy end to end on Colab; the isolated Python 3.12 environment (`USE_VENV`) on Colab; Blackwell (G4) and Turing (T4) fallbacks; other GPUs' batch sizes; interrupting a run on Colab; the validation loss and safe-save helpers on a GPU; the narrator's `lead_s` start trim as a cold-start remedy (it only shapes the start of the output; a silence-token warm-up prefix needs library internals and is not built). When one of these is run for real, change this file in the same commit.
 
 ## 8. When you change the setup
 
-Update this file together with the code: a new wheel (`COLAB_FLASH_WHEEL` in `qwen3_colab.py`), a new runtime, a new trap. Re-run `python scripts/find_flash_wheel.py` to refresh the table in section 2.
+Update this file together with the code: a new pinned wheel (`COMMUNITY_PINNED_WHEEL` in the runner), a new runtime, a new trap. Run `python scripts/find_flash_wheel.py` to check which wheels exist for a new runtime.

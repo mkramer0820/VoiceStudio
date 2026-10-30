@@ -182,6 +182,8 @@ const DRIVE_FOLDER = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 /** Reference clip, ZIP and duration limits (the Training setup fields are below). */
 export interface QwenForm {
   speaker: string;
+  /** Several voices in one model (at most 4): every clip gets a `speaker`, every speaker its own reference clip. */
+  multi?: boolean;
   zip: boolean;
   minDuration: string;
   maxDuration: string;
@@ -204,21 +206,33 @@ export function qwenInvalid(form: QwenForm): Array<keyof QwenForm> {
 export function qwenBody(form: QwenForm, referenceKey: string | null): Record<string, unknown> {
   return {
     speaker_name: form.speaker.trim(),
-    reference_key: referenceKey,
+    reference_key: form.multi ? null : referenceKey,
+    ...(form.multi ? { multi_speaker: true } : {}),
     make_zip: form.zip,
     min_duration: Number(form.minDuration),
     max_duration: Number(form.maxDuration),
   };
 }
 
-/** The numbers sft_12hz.py really takes; defaults are the script's own. Everything else in it is fixed. */
+/** The numbers sft_12hz.py really takes. Defaults equal the backend's (qwen3_colab_runner DEFAULT_*; tests/backend/engines/test_fish_qwen3_defaults.py keeps them in step), not the script's own. */
 export type QwenNumberKey = 'epochs' | 'learning_rate' | 'batch_size';
 export type QwenTextKey = 'base_model' | 'tokenizer_model' | 'drive_folder';
 export const QWEN_NUMBERS: Record<QwenNumberKey, NumberSpec & { advanced?: boolean }> = {
   epochs: { def: 10, min: 1, max: 100, step: '1' },
-  learning_rate: { def: 1e-6, min: 1e-7, max: 1e-3, step: 'any' },
+  learning_rate: { def: 2e-6, min: 1e-7, max: 1e-3, step: 'any' },
   batch_size: { def: 4, min: 1, max: 256, step: '1' },
 };
+/** LoRA mode: its OWN defaults, never the full fine-tune's. Mirror qwen3_colab_runner DEFAULT_LORA_* / LORA_DEFAULT_LR (kept equal by
+ * tests/backend/engines/test_fish_qwen3_defaults.py). The LoRA learning rate is an UNCONFIRMED placeholder until the owner chooses. */
+export type QwenMode = 'full' | 'lora';
+export type QwenLoraKey = 'lora_rank' | 'lora_alpha' | 'lora_dropout';
+export const QWEN_LORA_NUMBERS: Record<QwenLoraKey | 'lora_learning_rate', NumberSpec> = {
+  lora_learning_rate: { def: 2e-5, min: 1e-7, max: 1e-3, step: 'any' },
+  lora_rank: { def: 16, min: 1, max: 256, step: '1' },
+  lora_alpha: { def: 32, min: 1, max: 1024, step: 'any' },
+  lora_dropout: { def: 0.05, min: 0, max: 0.5, step: 'any' },
+};
+export const QWEN_LORA_KEYS: QwenLoraKey[] = ['lora_rank', 'lora_alpha', 'lora_dropout'];
 export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advanced?: boolean }> = {
   drive_folder: { def: 'Qwen3TTS', test: DRIVE_FOLDER },
   base_model: { def: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base', test: MODEL_ID },
@@ -228,19 +242,34 @@ export const QWEN_TEXT: Record<QwenTextKey, { def: string; test: RegExp; advance
 export const QWEN_CLIPS_PER_UPDATE = 8; // batch x accumulation of the recipe that worked; the notebook sets accumulation from the batch size
 
 export interface QwenTrainForm {
+  /** "full" (the default, whole model) or "lora" (adapters). An untouched learning rate follows the default of the chosen mode. */
+  mode?: QwenMode;
   /** Fields the user typed into, as typed. An untouched field follows the script's default. */
-  edits: Partial<Record<QwenNumberKey | QwenTextKey, string>>;
+  edits: Partial<Record<QwenNumberKey | QwenTextKey | QwenLoraKey, string>>;
 }
 export const EMPTY_QWEN_TRAIN: QwenTrainForm = { edits: {} };
 
+export const qwenMode = (form: QwenTrainForm): QwenMode => form.mode ?? 'full';
+/** The default of a number for the chosen mode: 2e-6 for a full fine-tune, the LoRA constant for LoRA. */
+export const qwenDefault = (form: QwenTrainForm, key: QwenNumberKey): number =>
+  key === 'learning_rate' && qwenMode(form) === 'lora' ? QWEN_LORA_NUMBERS.lora_learning_rate.def : QWEN_NUMBERS[key].def;
 export const qwenNumber = (form: QwenTrainForm, key: QwenNumberKey): number => {
   const raw = form.edits[key];
-  return raw === undefined ? QWEN_NUMBERS[key].def : raw.trim() === '' ? NaN : Number(raw);
+  return raw === undefined ? qwenDefault(form, key) : raw.trim() === '' ? NaN : Number(raw);
+};
+export const qwenLoraNumber = (form: QwenTrainForm, key: QwenLoraKey): number => {
+  const raw = form.edits[key];
+  return raw === undefined ? QWEN_LORA_NUMBERS[key].def : raw.trim() === '' ? NaN : Number(raw);
 };
 export const qwenText = (form: QwenTrainForm, key: QwenTextKey): string => form.edits[key] ?? QWEN_TEXT[key].def;
 
-export function qwenTrainInvalid(form: QwenTrainForm): Array<QwenNumberKey | QwenTextKey> {
-  const bad: Array<QwenNumberKey | QwenTextKey> = [];
+export function qwenTrainInvalid(form: QwenTrainForm): Array<QwenNumberKey | QwenTextKey | QwenLoraKey> {
+  const bad: Array<QwenNumberKey | QwenTextKey | QwenLoraKey> = [];
+  if (qwenMode(form) === 'lora') {
+    for (const key of QWEN_LORA_KEYS) {
+      if (outOfRange(QWEN_LORA_NUMBERS[key], qwenLoraNumber(form, key)) || (key === 'lora_rank' && !Number.isInteger(qwenLoraNumber(form, key)))) bad.push(key);
+    }
+  }
   for (const key of Object.keys(QWEN_NUMBERS) as QwenNumberKey[]) {
     const value = qwenNumber(form, key);
     const whole = key === 'learning_rate' || Number.isInteger(value);
@@ -256,8 +285,14 @@ export function qwenTrainInvalid(form: QwenTrainForm): Array<QwenNumberKey | Qwe
 /** Only what differs from the script's defaults, so the backend's defaults apply to the rest. */
 export function qwenTrainBody(form: QwenTrainForm): Record<string, unknown> {
   const body: Record<string, unknown> = {};
+  if (qwenMode(form) === 'lora') {
+    body.train_mode = 'lora';
+    for (const key of QWEN_LORA_KEYS) {
+      if (form.edits[key] !== undefined && qwenLoraNumber(form, key) !== QWEN_LORA_NUMBERS[key].def) body[key] = qwenLoraNumber(form, key);
+    }
+  }
   for (const key of Object.keys(QWEN_NUMBERS) as QwenNumberKey[]) {
-    if (form.edits[key] !== undefined && qwenNumber(form, key) !== QWEN_NUMBERS[key].def) body[key] = qwenNumber(form, key);
+    if (form.edits[key] !== undefined && qwenNumber(form, key) !== qwenDefault(form, key)) body[key] = qwenNumber(form, key);
   }
   for (const key of Object.keys(QWEN_TEXT) as QwenTextKey[]) {
     const value = form.edits[key]?.trim();

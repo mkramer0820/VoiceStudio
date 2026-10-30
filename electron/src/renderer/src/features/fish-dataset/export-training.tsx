@@ -5,15 +5,22 @@ import {
   CHOICES,
   DEFAULT_CHECKPOINT,
   NUMBERS,
+  QWEN_LORA_KEYS,
+  QWEN_LORA_NUMBERS,
   QWEN_NUMBERS,
   estimatePasses,
   invalidKeys,
   numberOf,
+  qwenDefault,
   qwenEstimate,
+  qwenLoraNumber,
+  qwenMode,
   qwenNumber,
   qwenText,
   qwenTrainInvalid,
   suggestSteps,
+  type QwenLoraKey,
+  type QwenMode,
   type QwenNumberKey,
   type QwenTextKey,
   type QwenTrainForm,
@@ -225,14 +232,26 @@ export function QwenTrainingSection({
 }) {
   const { t } = useTranslation();
   const bad = new Set<string>(qwenTrainInvalid(form));
-  const edit = (key: QwenNumberKey | QwenTextKey, value: string) => onChange({ edits: { ...form.edits, [key]: value } });
+  const edit = (key: QwenNumberKey | QwenTextKey | QwenLoraKey, value: string) => onChange({ ...form, edits: { ...form.edits, [key]: value } });
+  const mode = qwenMode(form);
   const number = (key: QwenNumberKey) => (
     <NumberField
       key={key}
       id={`qtr-${key}`}
       label={t(`fishDataset.qtr_${key}`)}
       spec={QWEN_NUMBERS[key]}
-      value={form.edits[key] ?? String(QWEN_NUMBERS[key].def)}
+      value={form.edits[key] ?? String(qwenDefault(form, key))}
+      invalid={bad.has(key)}
+      onChange={(value) => edit(key, value)}
+    />
+  );
+  const lora = (key: QwenLoraKey) => (
+    <NumberField
+      key={key}
+      id={`qtr-${key}`}
+      label={t(`fishDataset.qtr_${key}`)}
+      spec={QWEN_LORA_NUMBERS[key]}
+      value={form.edits[key] ?? String(qwenLoraNumber(form, key))}
       invalid={bad.has(key)}
       onChange={(value) => edit(key, value)}
     />
@@ -258,7 +277,23 @@ export function QwenTrainingSection({
       <p className="rounded-md bg-muted/40 p-2 text-[11px] leading-snug text-muted-foreground">
         {t('fishDataset.qtr_colab_only')}
       </p>
+      <div className="space-y-1">
+        <label htmlFor="qtr-train_mode" className="text-xs font-medium">
+          {t('fishDataset.qtr_train_mode')}
+        </label>
+        <select
+          id="qtr-train_mode"
+          className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+          value={mode}
+          onChange={(e) => onChange({ ...form, mode: e.target.value as QwenMode })}
+        >
+          <option value="full">{t('fishDataset.qtr_mode_full')}</option>
+          <option value="lora">{t('fishDataset.qtr_mode_lora')}</option>
+        </select>
+        {mode === 'lora' && <p className="text-[11px] leading-snug text-muted-foreground">{t('fishDataset.qtr_lora_note')}</p>}
+      </div>
       <div className="grid grid-cols-2 gap-3">{(Object.keys(QWEN_NUMBERS) as QwenNumberKey[]).map(number)}</div>
+      {mode === 'lora' && <div className="grid grid-cols-3 gap-3">{QWEN_LORA_KEYS.map(lora)}</div>}
       {text('drive_folder')}
       <p className="break-all font-mono text-[11px] text-muted-foreground" data-testid="qwen-checkpoint-path">
         My Drive/{folder}/runs/{speaker.trim() || '<speaker>'}/{'<run_id>'}/checkpoints

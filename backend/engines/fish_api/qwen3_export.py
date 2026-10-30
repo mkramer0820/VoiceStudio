@@ -54,6 +54,7 @@ class Options:
     min_duration: float = 0.8
     max_duration: float = 30.0
     trailing_silence_s: float = 1.0  # silence appended to every TRAINING clip (not the reference); see qwen3_colab.TRAILING_SILENCE_NOTE
+    multi_speaker: bool = False  # True: the selection may hold several voices (at most 4); every row gets a `speaker`, every speaker its own reference clip
 
 
 def options_from(spec: Optional[dict]) -> Options:
@@ -75,6 +76,9 @@ def options_from(spec: Optional[dict]) -> Options:
     opts.trailing_silence_s = float(opts.trailing_silence_s)
     if opts.reference_key and opts.reference_file:
         raise ValueError("Choose a reference clip or a reference file, not both.")
+    opts.multi_speaker = bool(opts.multi_speaker)
+    if opts.multi_speaker and (opts.reference_key or opts.reference_file):
+        raise ValueError("A multi-speaker export picks each speaker's reference clip itself; leave the reference choice empty.")
     return opts
 
 
@@ -212,14 +216,14 @@ def choose_reference(clips: list[dict]) -> tuple[dict, str]:
     return best["clip"], reference_why(best)
 
 
-def speaker_lines(corpus, f: dict) -> tuple[list[dict], str, str]:
+def speaker_lines(corpus, f: dict, multi: bool = False) -> tuple[list[dict], str, str]:
     """The selected clips in export order and their one speaker's id and name; refuses an empty or
-    multi-speaker selection (the Qwen3-TTS format trains one speaker)."""
+    multi-speaker selection (one speaker per export) unless ``multi`` (then the first voice's id and name are returned)."""
     lines = dataset.select(corpus, {**f, "sort": "order"})
     if not lines:
         raise ValueError("Nothing matches the current filters.")
     voices = collections.OrderedDict((l["voice_id"], l["voice_name"]) for l in lines)
-    if len(voices) > 1:
+    if len(voices) > 1 and not multi:
         raise ValueError("The Qwen3-TTS format trains one speaker, and the selection holds "
                          f"{len(voices)} ({', '.join(sorted(voices.values()))}). Pick one speaker in the filters.")
     voice_id, voice_name = next(iter(voices.items()))
@@ -303,7 +307,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     """Write the selected clips of ONE speaker under ``dest/<name>/`` in Qwen3-TTS's format."""
     opts = options or Options()
     settings = settings or qwen3_colab.TrainSettings()
-    lines, voice_id, voice_name = speaker_lines(corpus, f)
+    lines, voice_id, voice_name = speaker_lines(corpus, f, opts.multi_speaker)
     raw = (dest or "").strip().strip('"')
     if not raw or not os.path.isabs(raw):
         raise ValueError("Enter the full path of the folder to export into.")
@@ -322,6 +326,20 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     speaker = opts.speaker_name or dataset.slug(voice_name, "speaker")[:40]
     if not qwen3_colab.SPEAKER_RE.fullmatch(speaker):
         speaker = "speaker"
+    voice_names = collections.OrderedDict((l["voice_id"], l["voice_name"]) for l in lines)
+    model_speakers: dict[str, str] = {}  # voice id -> the lowercase name inside the model (multi-speaker only)
+    if opts.multi_speaker:
+        for vid, vname in voice_names.items():
+            base = dataset.slug(vname, "speaker")[:36].lower()
+            if not qwen3_colab.SPEAKER_RE.fullmatch(base):
+                base = "speaker"
+            name, n = base, 2
+            while name in model_speakers.values():
+                name, n = f"{base}-{n}", n + 1
+            model_speakers[vid] = name
+        qwen3_colab.runner.speaker_rows(list(model_speakers.values()))  # at most 4 speakers fit one model; raises with the reason
+        if not opts.speaker_name:
+            speaker = "multi-speaker"
 
     # Pass 1: read and judge every clip. Nothing is dropped without a record.
     accepted: list[dict] = []
@@ -378,7 +396,20 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     # The reference clip.
     reference = {"mode": "auto"}
     ref_source: Optional[str] = None
-    if opts.reference_file:
+    speaker_refs: dict[str, dict] = {}  # multi-speaker: voice id -> {path, source, ...}
+    if opts.multi_speaker:
+        for vid, mname in model_speakers.items():
+            mine = [c for c in accepted if c["line"]["voice_id"] == vid]
+            if not mine:
+                raise ValueError(f"No clip of {voice_names[vid]} passed the checks, so that speaker has no reference clip.")
+            picked, why = choose_reference(mine)
+            speaker_refs[vid] = {"name": mname, "picked": picked, "why": why, "rel": f"reference/{mname}.wav",
+                                 "source": os.path.join(corpus.root, picked["line"]["file"])}
+        first = next(iter(speaker_refs.values()))
+        picked, why, ref_source = first["picked"], first["why"], first["source"]
+        reference = {"mode": "per_speaker", "source": picked["line"]["file"], "duration": round(picked["duration"], 3), "reason": why,
+                     "exported_as": f"audio/{picked['number']:06d}.wav"}
+    elif opts.reference_file:
         ref_source = os.path.normpath(opts.reference_file.strip().strip('"'))
         if not os.path.isfile(ref_source):
             raise ValueError("The reference file does not exist.")
@@ -416,13 +447,16 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     os.makedirs(os.path.join(out_dir, "audio"))
     os.makedirs(os.path.join(out_dir, "reference"))
     converted = copied = 0
-    _convert(ref_source, os.path.join(out_dir, "reference", "ref.wav"), loudness_db)
     import soundfile as sf
 
-    ref_info_wav = sf.info(os.path.join(out_dir, "reference", "ref.wav"))
-    if ref_info_wav.samplerate != RATE or ref_info_wav.channels != 1:
-        shutil.rmtree(out_dir, ignore_errors=True)
-        raise ValueError(f"The reference clip could not be converted to {RATE} Hz mono; choose another one.")
+    ref_targets = [(r["source"], os.path.join(out_dir, *r["rel"].split("/"))) for r in speaker_refs.values()] or \
+                  [(ref_source, os.path.join(out_dir, "reference", "ref.wav"))]
+    for ref_from, ref_to in ref_targets:
+        _convert(ref_from, ref_to, loudness_db)
+        ref_info_wav = sf.info(ref_to)
+        if ref_info_wav.samplerate != RATE or ref_info_wav.channels != 1:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise ValueError(f"The reference clip could not be converted to {RATE} Hz mono; choose another one.")
     levels = dataset.LevelReport(loudness_db) if loudness_db is not None else None
     mapping: list[dict] = []
     train_rows: list[dict] = []
@@ -434,7 +468,10 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
         converted += int(not result["copied"])
         if levels is not None:
             levels.add(c["line"]["chapter"], result)
-        train_rows.append({"audio": rel, "text": c["text"], "ref_audio": REFERENCE_PATH})
+        row = {"audio": rel, "text": c["text"], "ref_audio": REFERENCE_PATH}
+        if opts.multi_speaker:  # the optional `speaker` field: the runner caches one embedding per speaker and gives each its own codec row
+            row = {**row, "ref_audio": speaker_refs[c["line"]["voice_id"]]["rel"], "speaker": model_speakers[c["line"]["voice_id"]]}
+        train_rows.append(row)
         mapping.append({"original": c["line"]["file"], "exported": rel, "text": c["text"],
                         "duration_s": round(c["duration"], 3), "chapter": c["line"]["chapter"],
                         "tags_removed": c["tags"], "sha256": _file_sha(os.path.join(out_dir, *rel.split("/"))),
@@ -533,6 +570,11 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
         "loudness_matching": level_summary,
         "chapter_levels_db": chapter_levels,
         "reference": ref_info | {"path": REFERENCE_PATH},
+        **({"speakers": {r["name"]: {"voice": voice_names[vid], "reference": r["picked"]["line"]["file"], "reference_path": r["rel"],
+                                     "clips": sum(1 for c in accepted if c["line"]["voice_id"] == vid),
+                                     "seconds": round(sum(c["duration"] for c in accepted if c["line"]["voice_id"] == vid), 1)}
+                         for vid, r in speaker_refs.items()},
+            "model_rows": qwen3_colab.runner.speaker_rows([r["name"] for r in speaker_refs.values()])} if speaker_refs else {}),
         "validation": "None. The official Qwen3-TTS fine-tuning scripts have no validation input, so no validation file is written.",
         "text": "Spoken transcript only: every [tag] removed, no emotion or speaker labels.",
         "qwen": qwen3_colab.verified_facts(),
@@ -566,7 +608,9 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     logger.info("Qwen3-TTS export: %d accepted, %d rejected -> %s", n, len(rejected), out_dir)
     return {
         "name": name, "clips": n, "hours": round(seconds / 3600, 3), "formats": [FORMAT], "path": out_dir,
-        "speakers": {speaker: {"clips": n, "seconds": round(seconds, 1)}}, "loudness": level_summary,
+        "speakers": ({r["name"]: {"clips": report["speakers"][r["name"]]["clips"], "seconds": report["speakers"][r["name"]]["seconds"]}
+                      for r in speaker_refs.values()} if speaker_refs else {speaker: {"clips": n, "seconds": round(seconds, 1)}}),
+        "loudness": level_summary,
         "qwen3": {"accepted": n, "rejected": len(rejected), "rejected_by_reason": report["rejected_by_reason"],
                   "reference": ref_info, "warnings": [{"code": w["code"], "message": w["message"]} for w in warnings],
                   "zip": zipped, "files": ["train.jsonl", "dataset_report.json", "rejected_samples.jsonl", "training_settings.json", *helper],

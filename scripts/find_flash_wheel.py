@@ -48,7 +48,7 @@ def matches(releases: list, python: str, torch_mm: str, cuda: str) -> list:
                 out.append({"name": asset["name"], "version": p["version"], "release": rel["tag_name"],
                             "url": asset.get("browser_download_url") or f"https://github.com/{REPO}/releases/download/{rel['tag_name']}/"
                                    + urllib.parse.quote(asset["name"])})
-    return sorted(out, key=lambda w: ([int(x) for x in re.findall(r"\d+", w["version"])], w["release"]), reverse=True)
+    return sorted(out, key=lambda w: ([int(x) for x in re.findall(r"\d+", w["version"])], [int(x) for x in re.findall(r"\d+", w["release"])]), reverse=True)  # numeric: v0.9.31 beats v0.9.4
 
 
 def fetch_releases() -> list:
