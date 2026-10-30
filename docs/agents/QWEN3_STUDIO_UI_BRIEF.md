@@ -15,7 +15,7 @@ Written 2026-10-25 for the manager agent, who hands the two prompts below to wor
 | HTTP API | `backend/api/routers/qwen_studio.py`, mounted in `backend/main.py` |
 | Tests (fake engine, no GPU) | `tests/test_qwen_studio.py`, `tests/test_qwen3_narrator.py` |
 
-**Built since this brief was written (2026-10-25/27, unverified in a real window):** the playground page, its nav entry, the changelog line and the user docs page (`docs/engines/qwen3-playground.md`), and Settings -> Storage -> Model locations. Translations are English placeholders in the 20 non-English locales. **Still not built:** story mode (characters, voice catalogs, story render); Prompt 1 below is done, Prompt 2 is next.
+**Built since this brief was written (2026-10-25/27, unverified in a real window):** the playground page, its nav entry, the changelog line and the user docs page (`docs/engines/qwen3-playground.md`), and Settings -> Storage -> Model locations. Translations are English placeholders in the 20 non-English locales. **Story mode built 2026-10-28 (unverified, never run):** `/qwen-story`, see `docs/engines/qwen3-story.md` (profiles replace the voice catalogs; Prompt 2 below is the original plan). Prompt 1 is done.
 
 **Decided by listening (owner, 2026-10-25), do not reopen:** the narrator is EP09 as **custom_voice**, speaker `ss_narrator`, **no instruct** (instruct moves the voice away from the narrator; offer it as an experimental control only). Clones use **stock Base**, reference clip plus its text by default; "speaker embedding only" is an option with free tempo. The "hybrid" (EP09 weights inside Base) was **dropped**. **Not yet judged by ear:** "clone on custom voice" (the new kind). Label it experimental in the UI.
 

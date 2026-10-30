@@ -14,6 +14,8 @@ metadata and the backend fallback mirror it.
 
 ### Added
 
+- Qwen story page: a multi-voice book for Qwen3-TTS with saved voice profiles (record or upload a sample and press Save voice; the speaker embedding is prepared automatically), emotion presets (unverified on the fine-tuned narrator), character-to-profile mapping, bulk edit of selected chunks, a tags dialog, per-chunk render and re-render, and a Fish-style output folder — thanks @mkramer0820!
+- Qwen3-TTS Colab training: an experimental LoRA mode (adapters on a frozen model, each epoch still saved as a normal merged checkpoint), up to four speakers in one model, a batch-size guard for corrupt gradients and a Merge adapter route for the Qwen playground registry; full fine-tuning is unchanged and nothing has been run on a GPU yet — thanks @mkramer0820!
 - Settings -> Storage -> Model locations: one place to list the folders holding your local models and fine-tuned checkpoints, used by the Qwen playground (replaces its checkpoint-folder box) — thanks @mkramer0820!
 - Qwen3-TTS Colab training: a held-out validation loss per epoch, a checkpoint save that is verified against the base weights, models downloaded straight to the runtime, and only later epochs copied to Drive — thanks @mkramer0820!
 - Qwen playground page: try Qwen3-TTS narrator, clone and experimental voices in one multi-take run with every setting, A/B compare, notes, stars, past sessions and a manifest per run — thanks @mkramer0820!

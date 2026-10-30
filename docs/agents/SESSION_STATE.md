@@ -24,10 +24,10 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 | Export formats (jsonl, `.lab`, LJSpeech, OmniVoice bundle, Qwen3-TTS folder) | Done | `dataset.py`, `qwen3_export.py`; tests | nothing |
 | Qwen3 export: loudness match, reference chooser, **1 s trailing silence by default**, validated defaults (10 epochs, batch 4, lr 1e-6), notebook with the FlashAttention wheel pre-filled, refuses to export on an outdated backend | Done | `qwen3_export.py`, `qwen3_colab.py`; tests | a checkbox for the silence in the dialog (the payload field `trailing_silence_s` works) |
 | Colab runner and notebook (runtime check, wheel handling, patched training script, fast setup, per-epoch samples) | **Done, verified on an A100** (runs of 2026-10-24/25). Runner 19 (2026-10-27: validation loss, verified atomic save, Drive only for epochs 4+) is **tests only, not run on a GPU yet** | `qwen3_colab_runner.py`, `notebooks/`, [runtime guide](../engines/qwen3-tts-colab-runtime.md) section 6b | a short `SMOKE_RUN` on the A100; other GPUs, `USE_VENV` |
-| **Colab training runs** | Run 1 (script defaults) gave noise; run 2 (patched script, lr 1e-6) gave a narrator-like voice, epochs 4 to 8 best; run 3 (3 hours, 10 epochs) done: epochs 4, 7, 8, 9 best, epoch 9 kept as the narrator; run 4 (lr 2e-6, validation loss, runner 19) not run yet | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare run 3 by ear, then one change at a time |
+| **Colab training runs** | 105-minute run (patched script, lr 1e-6) gave a narrator-like voice; 3-hour run (10 epochs): epoch 9 kept as the narrator; next run (lr 2e-6, validation loss, runner 19) not run yet | [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md) | compare run 3 by ear, then one change at a time |
 | Fast per-epoch sample test (faster-qwen3-tts, CUDA graphs) | Done, verified on an A100 (about 0.9x real time per worker, 3 to 6 workers) | owner's `epoch_test_fast.py` (see the state doc) | not in the repo; a stable copy could move to `scripts/` |
 | FlashAttention wheel finder | Done | `scripts/find_flash_wheel.py`; test | nothing |
-| Trailing-silence padder for older exports | Done | `scripts/pad_qwen3_dataset.py`; test | nothing |
+| Trailing-silence padder for older exports (the export now pads itself) | Done | `scripts/pad_qwen3_dataset.py`; test | nothing |
 | OmniVoice LoRA path and local Train dialog | Done, unverified | `omnivoice/training/lora.py` | not part of the Qwen plan |
 | Agent docs (this folder) | Done | `docs/agents/` | keep this file current |
 | Push branch / pull request | Branch pushed 2026-10-25; no PR | n/a | PR only if the owner asks |
@@ -38,7 +38,7 @@ Status words: **Not started**, **In progress**, **Blocked** (say why), **Done** 
 ## Verified on real hardware, and not
 - **Verified on a Colab A100 40 GB (Python 3.13, torch 2.11 cu130):** the runtime check, the FlashAttention wheel install and GPU test, model download, code preparation, the timing run, training with progress lines, per-epoch checkpoint copy to Drive with verification, sampling, the fast sample test.
 - **Not verified:** the isolated Python 3.12 environment (`USE_VENV`), Blackwell (G4) and T4 paths, the other GPUs' batch sizes, interrupting a run on Colab, the Explorer/export dialog by eye beyond what the owner used, compute-unit rates (the owner's figures).
-- **Unproven claims to avoid:** why one epoch sounds better than another; that the patched training script alone (vs. lr and padding) fixed the noise: run 2 changed all three together.
+- **Unproven claims to avoid:** why one epoch sounds better than another; that the patched training script alone (vs. lr and padding) fixed the noise: the 105-minute run changed all three together.
 
 ## Not built (on purpose)
 True resume with optimizer state (the official script saves weights only), TensorBoard (the official script writes no events), a per-file hash manifest, Fish S2 local. (A Qwen validation split and a verified checkpoint save were built in runner 19, 2026-10-27; loading a trained model into the app is done, see the table.)
@@ -55,7 +55,7 @@ True resume with optimizer state (the official script saves weights only), Tenso
 3. (Mostly answered: only epochs 4 and later go to Drive now, about 4.2 GB each.)
 
 ## What to do next
-The local backend (engine `qwen3-narrator`) and the Qwen playground are built; **start with [QWEN3_NEXT_SESSION.md](QWEN3_NEXT_SESSION.md)** for the current state and the ordered next steps (real playground test, story mode, a short Colab smoke run of runner 19). Older record: item 00 of [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md), plan in [NEXT_SESSION_LOCAL_BACKEND.md](NEXT_SESSION_LOCAL_BACKEND.md). For further training work use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
+The local backend (engine `qwen3-narrator`) and the Qwen playground are built; **start with [QWEN3_NEXT_SESSION.md](QWEN3_NEXT_SESSION.md)** for the current state and the ordered next steps (real playground test, story mode, a short Colab smoke run of runner 19). For further training work use the "Next steps" in [QWEN3_TRAINING_STATE.md](QWEN3_TRAINING_STATE.md). Fix whatever breaks in `qwen3_colab_runner.py` with a failing-then-passing test in `tests/backend/engines/test_fish_qwen3_colab_runner.py`, regenerate the committed notebook (`write_default_notebook`), and keep the docs in step.
 
 ## Traps already hit
 - Windows + Git Bash: a plain `git add` can rewrite the locale JSON files' CRLF line endings (a 79,000-line diff). Stage them with `git hash-object -w --no-filters <f>` then `git update-index --cacheinfo 100644,<hash>,<f>`. Read and write files with `newline=""`.

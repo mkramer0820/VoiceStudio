@@ -29,7 +29,7 @@ Branch **`ext/qwen3-story`** (on top of `ext/fish-api`). All work is committed l
 ## Do next, in order
 
 1. **Real test of the playground on the 3070** (owner, or the agent with the owner's yes; check the GPU is free: another agent is testing an emotion-control checkpoint). A Narrator take (EP09 + `ss_narrator`) and a Base clone. Fix what the owner sees.
-2. **Story mode** (Prompt 2 in the Qwen brief): characters mapped to voices, `[Tag]` clone variants per character, per-character warm-up, Fish-style output layout and names, persisted assignments. Uses the model-locations list. Start it after the playground test.
+2. **Story mode: built (2026-10-28), never run.** `/qwen-story`, voice profiles, emotion presets, characters mapped to profiles, optional per-voice warm-up (off), Fish-style output layout, per-chunk re-render. Backend and component tests pass; nothing has been seen rendered or run on the GPU. See `docs/engines/qwen3-story.md`. Next: run a short book with the narrator plus one Base clone and fix what the owner sees.
 3. **Feed in the emotion-control checkpoint results** (another agent is testing it) to the findings doc; it may change the voice and instruct rules.
 
 ## Training side (2026-10-27): Colab runner 19, committed as `74cfc628`, not yet run on a GPU

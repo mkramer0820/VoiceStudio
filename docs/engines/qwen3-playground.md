@@ -37,3 +37,5 @@ The advanced group has every setting: language, seed (or a new seed for every re
 `<output folder>/<session name>_<date-time>/` holds one WAV per render (named with the take number, repeat, model, voice kind and label) and `session.json`, the manifest: the run's settings, each take, each result (file, seconds, seed, whether it finished, warnings) and your notes and stars. Notes and stars are the only thing that edits a manifest afterwards. The default output folder is shown on the page; the folder you type is saved as the engine setting so past sessions and notes use the same place.
 
 Voices you add with *Add clone voice* are saved as ordinary voice profiles through the app's existing voices, so they also appear in the rest of the app. Your takes on the page are remembered in the browser for next time.
+
+Under a finished take, **Save as profile** stores its voice as a story-mode profile; see [qwen3-story.md](qwen3-story.md).
