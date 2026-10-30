@@ -342,13 +342,14 @@ def _adapter_setup(studio):
     return folder
 
 
-def test_an_adapter_folder_is_found_as_its_own_kind_and_is_not_runnable(studio):
+def test_an_adapter_folder_is_found_as_its_own_kind_and_the_playground_runs_it_through_a_merge(studio):
     _adapter_setup(studio)
     adapter = next(m for m in registry.discover_models() if m["type"] == "adapter")
     assert adapter["speakers"] == ["amy", "bob"] and adapter["rank"] == 2 and adapter["borrowable_speakers"] == []
     assert registry.resolve_adapter_base(adapter, registry.discover_models())["type"] == "base"
-    with pytest.raises(ValueError, match="merge it into its Base model first"):
-        pg._check_pair(adapter, pg.Voice(kind="custom_voice", speaker="amy"))
+    pg._check_pair(adapter, pg.Voice(kind="custom_voice", speaker="amy"))  # the playground runs an adapter by merging it into a cache
+    with pytest.raises(ValueError, match="needs a base model"):
+        pg._check_pair(adapter, pg.Voice(kind="clone"))
     # a merged checkpoint that also carries its adapter files is listed once, as the checkpoint it is
     both = studio / "ckpts" / "lora-run" / "checkpoint-epoch-3"
     _checkpoint(both, speakers=("amy", "bob"))
@@ -397,3 +398,14 @@ def test_the_merge_route_returns_422_with_the_reason_and_takes_only_a_registered
 
     ok = client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": model_locations.load()[0]["id"], "name": "viaroute", "lora_scale": 1.0, "confirm": True})
     assert ok.status_code == 200 and ok.json()["speakers"] == ["amy", "bob"]
+
+
+def test_the_playground_merges_an_adapter_into_a_cache_at_the_chosen_scale(studio):
+    _adapter_setup(studio)
+    adapter = next(m for m in registry.discover_models() if m["type"] == "adapter")
+    first = registry.ensure_merged(adapter, 0.3)
+    assert registry.read_checkpoint(first)["type"] == "custom_voice" and registry.ensure_merged(adapter, 0.3) == first  # cached
+    assert registry.ensure_merged(adapter, 0.0) != first  # another scale is another merge
+    with pytest.raises(ValueError, match="between 0.0"):
+        registry.ensure_merged(adapter, 1.5)
+    assert os.path.isfile(os.path.join(adapter["path"], "adapter_model.safetensors"))  # the adapter is never touched

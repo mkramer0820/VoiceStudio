@@ -6,7 +6,7 @@
  */
 
 export type VoiceKind = 'custom_voice' | 'clone' | 'clone_on_custom';
-export type ModelType = 'custom_voice' | 'base' | 'voice_design';
+export type ModelType = 'custom_voice' | 'base' | 'voice_design' | 'adapter';
 
 export interface QwenModel {
   id: string;
@@ -78,6 +78,8 @@ export interface TakeDraft {
   seed: number;
   params: TakeParams;
   repeat: number;
+  /** LoRA adapter models only: 0 = the base model, 0.3 default, above 0.5 may turn noisy. Sent as lora_scale. */
+  loraScale: number;
   collapsed: boolean;
 }
 
@@ -155,6 +157,7 @@ export function newTake(models: QwenModel[], over: Partial<TakeDraft> = {}): Tak
     seed: 1234,
     params: { ...DEFAULT_PARAMS },
     repeat: 1,
+    loraScale: 0.3,
     collapsed: false,
     ...over,
   };
@@ -262,7 +265,8 @@ export function validateTake(take: TakeDraft, model: QwenModel | undefined, prof
   if (!model) return out;
   const speakerBorrowed = take.kind === 'custom_voice' && take.speaker.trim() !== '' && isBorrowed(model, take.speaker);
   const want = wantedType(take.kind);
-  if (model.type !== want && !(speakerBorrowed && model.type === 'base')) {
+  const runsAs = model.type === 'adapter' ? 'custom_voice' : model.type; // the playground merges an adapter into a custom voice model
+  if (runsAs !== want && !(speakerBorrowed && model.type === 'base')) {
     out.push({ code: 'pair_mismatch', blocking: false, values: { kind: take.kind, want, type: model.type, model: model.label } });
   }
   if (take.kind !== 'clone') {
@@ -377,6 +381,7 @@ export function buildRunRequest(takes: TakeDraft[], setup: RunSetup) {
       voice: buildVoice(t),
       params: buildParams(t),
       repeat: t.repeat,
+      lora_scale: t.loraScale,
     })),
   };
 }

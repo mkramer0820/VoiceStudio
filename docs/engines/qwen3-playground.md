@@ -39,3 +39,5 @@ The advanced group has every setting: language, seed (or a new seed for every re
 Voices you add with *Add clone voice* are saved as ordinary voice profiles through the app's existing voices, so they also appear in the rest of the app. Your takes on the page are remembered in the browser for next time.
 
 Under a finished take, **Save as profile** stores its voice as a story-mode profile; see [qwen3-story.md](qwen3-story.md).
+
+**LoRA adapters.** An adapter folder (found in Settings -> Storage like any model) can be picked as the model of a take. Pick the *Adapter scale* (0.0 is the Base model, default 0.3, above 0.5 warns); the playground merges the adapter into its Base model on the CPU the first time (about a minute, cached under the app's `qwen_studio/merged-cache`, the newest three kept) and runs that. The adapter folder is never changed. Add several takes with different scales (0.2, 0.3, 0.35, 0.5) to compare them. To keep a merged model as a normal checkpoint use *Merge adapter* (it asks for confirmation and never overwrites).

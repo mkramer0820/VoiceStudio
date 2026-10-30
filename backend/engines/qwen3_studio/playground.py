@@ -64,6 +64,7 @@ class Take(BaseModel):
     model_id: str = Field(..., pattern=r"^[A-Za-z0-9_.-]{1,160}$")
     voice: Voice = Field(default_factory=Voice)
     params: Params = Field(default_factory=Params)
+    lora_scale: float = Field(0.3, ge=0.0, le=1.0)  # only for a LoRA adapter model: 0.0 = the Base model, 0.3 default, warn above 0.5
     repeat: int = Field(1, ge=1, le=8)  # same take rendered this many times (new seed each when seed is unset)
 
 
@@ -226,8 +227,8 @@ def resolve_voice(take: Take, model: dict, settings: dict) -> tuple[dict, dict]:
 
 
 def _check_pair(model: dict, voice: Voice) -> None:
-    if model["type"] == "adapter":
-        raise ValueError(f"{model['label']} is a LoRA adapter, not a runnable model: merge it into its Base model first (Merge adapter).")
+    if model["type"] == "adapter":  # an adapter runs as the custom voice model it merges into (the merge happens when the run starts)
+        model = {**model, "type": "custom_voice"}
     if voice.kind == "clone":
         want = "base"
     else:
@@ -373,6 +374,11 @@ def _run(job: dict, req: RunRequest, order: list[tuple[int, int]], models: dict,
                 break
             take, entry = req.takes[index], job["takes"][index]
             model = models[take.model_id]
+            if model["type"] == "adapter":
+                _log(job, "INFO", f"Take {index + 1}: preparing {model['label']} at adapter scale {take.lora_scale:g} (CPU merge, cached after the first time).")
+                if take.lora_scale > 0.5:
+                    _log(job, "WARN", f"Take {index + 1}: adapter scale {take.lora_scale:g} is above 0.5; the voice may turn noisy.")
+                model = {**model, "path": registry.ensure_merged(model, take.lora_scale, settings), "type": "custom_voice"}
             result: dict = {"rep": rep, "status": "running", "file": None}
             entry["results"].append(result)
             try:
@@ -387,7 +393,7 @@ def _run(job: dict, req: RunRequest, order: list[tuple[int, int]], models: dict,
                     if getattr(take.params, key) is not None:
                         common[key] = getattr(take.params, key)
                 # Warm-up is per resolved voice: an unset speaker and the model's own speaker are the same voice.
-                sig = (take.model_id, take.params.max_seq_len, voice["kind"], voice.get("speaker"),
+                sig = (take.model_id, take.lora_scale, take.params.max_seq_len, voice["kind"], voice.get("speaker"),
                        voice.get("ref_audio"), voice.get("xvec_only"))
                 if sig not in warmed and job["warmup_runs"] > 0:
                     for w in range(job["warmup_runs"]):

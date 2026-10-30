@@ -4215,6 +4215,8 @@
     "xvec_only": "Speaker embedding only",
     "xvec_hint": "Copies only the timbre, not the clip's words or pacing (the library calls this x-vector only). Tempo is freer.",
     "repeat": "Repeat",
+    "loraScale": "Intensité de l'adaptateur",
+    "loraScaleHint": "Intensité de l'adaptateur LoRA : 0 = modèle de base, 0,3 par défaut ; au-delà de 0,5 le son peut devenir bruité.",
     "seed_random": "New seed for every render",
     "seed": "Seed",
     "seed_hint": "Repeats use this seed, then the next numbers.",

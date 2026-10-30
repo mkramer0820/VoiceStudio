@@ -426,6 +426,22 @@ export function TakeCard({
                 />
               )}
             </Field>
+            {model?.type === 'adapter' && (
+              <Field label={t('qwenPlayground.loraScale')} hint={t('qwenPlayground.loraScaleHint')} className="w-28">
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    className="h-8"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={take.loraScale}
+                    onChange={(e) => set({ loraScale: Math.min(1, Math.max(0, Number(e.target.value) || 0)) })}
+                  />
+                )}
+              </Field>
+            )}
             <label className="flex h-8 items-center gap-2 text-xs">
               <input type="checkbox" checked={take.randomSeed} onChange={(e) => set({ randomSeed: e.target.checked })} />
               {t('qwenPlayground.seed_random')}

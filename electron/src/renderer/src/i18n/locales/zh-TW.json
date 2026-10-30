@@ -4213,6 +4213,8 @@
     "xvec_only": "Speaker embedding only",
     "xvec_hint": "Copies only the timbre, not the clip's words or pacing (the library calls this x-vector only). Tempo is freer.",
     "repeat": "Repeat",
+    "loraScale": "轉接器強度",
+    "loraScaleHint": "LoRA 轉接器強度：0 為基礎模型，預設 0.3，超過 0.5 可能出現雜訊。",
     "seed_random": "New seed for every render",
     "seed": "Seed",
     "seed_hint": "Repeats use this seed, then the next numbers.",

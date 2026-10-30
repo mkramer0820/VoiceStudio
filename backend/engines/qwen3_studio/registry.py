@@ -113,7 +113,7 @@ def read_checkpoint(folder: str) -> Optional[dict]:
 
 def read_adapter(folder: str) -> Optional[dict]:
     """What a LoRA adapter folder (``adapter_config.json`` + ``adapter_model.safetensors``, no full weights) says about itself, or None.
-    An adapter is not runnable: it must be merged into its Base model first (``merge_adapter_model``)."""
+    An adapter is run by merging it into its Base model first: the playground does that into a cache (``ensure_merged``)."""
     if os.path.isfile(os.path.join(folder, "model.safetensors")):
         return None  # a merged checkpoint (it may also carry its adapter files); it is listed as the checkpoint it is
     from engines.fish_api import qwen3_peft
@@ -256,6 +256,39 @@ def merge_adapter_model(model_id: str, location_id: str, name: str, lora_scale: 
     return {"path": out, "location": loc["name"], "folder": folder, "base": base["label"], "speakers": report["speakers"],
             "changed_pct": report["changed_pct"], "scale": report["scale"], "lora_scale": report["lora_scale"],
             "warnings": ([f"Scale {float(lora_scale):g} is above 0.5; voices often get noisy or lose the base's clarity."] if float(lora_scale) > 0.5 else [])}
+
+
+MERGED_CACHE_KEEP = 3
+
+
+def ensure_merged(adapter: dict, lora_scale: float, settings: Optional[dict] = None) -> str:
+    """A runnable folder for an adapter at ``lora_scale`` (0.0 = the Base model), for the playground. The merge is CPU only and is cached under
+    the studio data folder by adapter path, modification time and scale, so a repeat run is instant; only the newest few are kept.
+    This is a derived cache, not a model location: the adapter folder is never modified."""
+    import hashlib
+    import shutil
+    from engines.fish_api import qwen3_peft
+
+    scale = float(lora_scale)
+    if not 0.0 <= scale <= 1.0:
+        raise ValueError("The adapter scale must be between 0.0 (the base model) and 1.0.")
+    base = resolve_adapter_base(adapter, discover_models(settings))
+    if base is None:
+        raise ValueError(f"The Base model this adapter was trained on ({adapter.get('base_model') or 'unknown'}) was not found. Download it or add its "
+                         "folder under Settings -> Storage -> Model locations, then try again.")
+    stamp = max((os.path.getmtime(os.path.join(adapter["path"], n)) for n in os.listdir(adapter["path"])), default=0)
+    key = hashlib.sha1(f"{os.path.abspath(adapter['path'])}|{stamp}|{scale:g}|{base['path']}".encode()).hexdigest()[:16]
+    cache = os.path.join(studio_dir(), "merged-cache")
+    out = os.path.join(cache, key)
+    if read_checkpoint(out) is None:
+        os.makedirs(cache, exist_ok=True)
+        qwen3_peft.merge_adapter(base["path"], adapter["path"], out, lora_scale=scale, min_changed_pct=0.0 if scale == 0.0 else qwen3_peft.MERGE_MIN_CHANGED_PCT)  # 0.0 IS the base model: nothing should change
+    os.utime(out, None)
+    stale = sorted((d for d in os.listdir(cache) if os.path.isdir(os.path.join(cache, d)) and d != key and not d.endswith(".tmp")),
+                   key=lambda d: os.path.getmtime(os.path.join(cache, d)), reverse=True)
+    for d in stale[max(0, MERGED_CACHE_KEEP - 1):]:
+        shutil.rmtree(os.path.join(cache, d), ignore_errors=True)
+    return out
 
 
 def first_base(settings: Optional[dict] = None) -> Optional[dict]:
