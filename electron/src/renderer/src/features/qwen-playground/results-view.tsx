@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangleIcon, StarIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { apiJson, describeError } from '@/lib/api/client';
 import { RenderPlayer, type AbPick } from './audio-player';
 import { modelIsMissing, resultWarnings, type QwenModel, type RenderResult, type TakeView } from './qwen-model';
 
@@ -64,6 +65,35 @@ function ResultRow({ session, take, result, ab, onPick }: Pick<Props, 'session' 
   );
 }
 
+/** Saves the voice of this take as a story-mode profile (POST /api/qwen/profiles/from-take). */
+function SaveAsProfile({ session, takeId, label }: { session: string; takeId: string; label: string }) {
+  const { t } = useTranslation();
+  const [name, setName] = useState(label);
+  const [message, setMessage] = useState('');
+  const save = async () => {
+    try {
+      await apiJson('/api/qwen/profiles/from-take', { method: 'POST', body: JSON.stringify({ session, take_id: takeId, name: name.trim() }) });
+      setMessage(t('qwenStory.profile_saved'));
+    } catch (reason) {
+      setMessage(describeError(reason));
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <input
+        aria-label={t('qwenStory.profile_name')}
+        className="h-7 w-40 rounded-md border border-input bg-input/20 px-2"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <Button size="xs" variant="outline" disabled={!name.trim()} onClick={() => void save()}>
+        {t('qwenStory.save_as_profile')}
+      </Button>
+      {message && <span role="status">{message}</span>}
+    </div>
+  );
+}
+
 /** One take's renders, notes and star: used for the live run and for a past session alike. */
 export function ResultsView({ session, take, models, ab, onPick, onAnnotate }: Props) {
   const { t } = useTranslation();
@@ -100,6 +130,9 @@ export function ResultsView({ session, take, models, ab, onPick, onAnnotate }: P
             <ResultRow key={r.rep} session={session} take={take} result={r} ab={ab} onPick={onPick} />
           ))}
         </ul>
+      )}
+      {take.results.some((r) => r.status === 'done') && (
+        <SaveAsProfile session={session} takeId={take.id} label={take.label || `take ${take.number}`} />
       )}
       <textarea
         aria-label={t('qwenPlayground.notes')}

@@ -126,3 +126,20 @@ def pad_tail(wave, sr: int, pad_s: float = 0.3, floor: float = 0.01):
     loud = np.nonzero(np.abs(w) > floor)[0]
     body = w[: int(loud[-1]) + 1] if len(loud) else w[:0]
     return np.concatenate([body, np.zeros(int(round(pad_s * sr)), dtype=np.float32)])
+
+
+def pad_head(wave, sr: int, lead_s: float | None = None, floor: float = 0.01):
+    """Start of the clip: cut the silence before the first audible sample, then
+    begin with exactly ``lead_s`` seconds of silence. ``lead_s=None`` (the
+    default) returns the wave untouched. This only controls what the listener
+    hears at the start; it does not change what the model generates (UNVERIFIED
+    on a GPU as a cold-start remedy: a warm-up prefix of silence codec tokens
+    needs library internals and is not implemented)."""
+    import numpy as np  # noqa: PLC0415
+
+    w = np.asarray(wave, dtype=np.float32).reshape(-1)
+    if lead_s is None:
+        return w
+    loud = np.nonzero(np.abs(w) > floor)[0]
+    body = w[int(loud[0]):] if len(loud) else w[:0]
+    return np.concatenate([np.zeros(int(round(max(0.0, lead_s) * sr)), dtype=np.float32), body])

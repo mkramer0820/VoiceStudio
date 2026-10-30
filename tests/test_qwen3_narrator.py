@@ -185,3 +185,76 @@ def test_pad_tail_trims_trailing_silence_and_adds_exact_padding():
 def test_pad_tail_of_pure_silence_is_just_padding():
     out = logic.pad_tail(np.zeros(500, dtype=np.float32), 1000, pad_s=0.2)
     assert len(out) == 200 and not out.any()
+
+
+def test_pad_head_is_untouched_by_default_and_sets_exact_lead_silence():
+    sr = 1000
+    wave = np.concatenate([np.zeros(80), 0.5 * np.ones(100), np.zeros(40)]).astype(np.float32)
+    assert np.array_equal(logic.pad_head(wave, sr), wave)  # default: nothing changes
+    out = logic.pad_head(wave, sr, lead_s=0.2)
+    assert len(out) == 200 + 100 + 40 and not out[:200].any() and out[200] == 0.5
+    assert len(logic.pad_head(wave, sr, lead_s=0.0)) == 140  # 0 s: leading silence removed
+    assert len(logic.pad_head(np.zeros(50, dtype=np.float32), sr, lead_s=0.1)) == 100
+
+
+def test_lead_s_is_forwarded_to_the_sidecar(monkeypatch):
+    from engines.qwen3_narrator import Qwen3NarratorBackend
+    from services.subprocess_backend import SubprocessBackend
+
+    seen = {}
+    monkeypatch.setattr(SubprocessBackend, "generate", lambda self, text, **kw: seen.update(kw))
+    backend = Qwen3NarratorBackend.__new__(Qwen3NarratorBackend)
+    backend._job_lock = threading.Lock()
+    backend.generate("hi", lead_s=0.25)
+    assert seen == {"lead_s": 0.25}
+
+
+def _sidecar(monkeypatch):
+    import importlib.util
+    import os
+    import sys
+
+    folder = os.path.join(os.path.dirname(__file__), "..", "backend", "engines", "qwen3_narrator")
+    monkeypatch.syspath_prepend(os.path.abspath(folder))
+    spec = importlib.util.spec_from_file_location("qwen3_sidecar_main", os.path.join(folder, "main.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_one_loaded_multi_speaker_model_serves_each_speaker_by_name_without_a_reload(monkeypatch):
+    import io
+    import types
+
+    main = _sidecar(monkeypatch)
+    spoken, loads = [], []
+    cfg = types.SimpleNamespace(spk_id={"amy": 3000, "bob": 3020}, spk_is_dialect={"amy": False, "bob": False})
+    model = types.SimpleNamespace(model=types.SimpleNamespace(model=types.SimpleNamespace(config=types.SimpleNamespace(talker_config=cfg),
+                                                                                         tts_model_type="custom_voice")))
+    model.generate_custom_voice = lambda text, speaker, **kw: (spoken.append(speaker), ([np.zeros(2400, dtype="float32")], 24000))[1]
+
+    def fake_load(stdout, ckpt=None, max_seq=None):
+        loads.append(ckpt)
+        return model
+
+    monkeypatch.setattr(main, "_load_model", fake_load)
+    monkeypatch.setattr(main, "_flush", lambda: None)
+    monkeypatch.setattr(main, "_vram_mb", lambda: (0.0, 0.0))
+    main._STATE.update({"max_seq": 1280, "eos_id": 2150, "type": "custom_voice", "speaker": "amy", "baseline_mib": 0.0})
+    out = io.BytesIO()
+    for who in ("amy", "bob", "Amy", None):
+        main._handle_synthesize({"text": "Hello there.", "model_path": "/m/duo", "speaker": who} if who else {"text": "Hello there.", "model_path": "/m/duo"}, out)
+    assert spoken == ["amy", "bob", "Amy", "amy"]  # per-request speaker; the default is the model's first
+    assert loads == ["/m/duo"] * 4  # the same resident model is asked for each time (_load_model itself returns it without reloading)
+    with pytest.raises(ValueError, match="no speaker 'carl'; it has: amy, bob"):
+        main._handle_synthesize({"text": "Hello there.", "model_path": "/m/duo", "speaker": "carl"}, out)
+
+
+def test_the_real_loader_returns_the_resident_model_for_the_same_checkpoint(monkeypatch):
+    import io
+
+    main = _sidecar(monkeypatch)
+    monkeypatch.setattr(main, "_MODEL", object())
+    main._STATE["key"] = ("/m/duo", 1280)
+    resident = main._MODEL
+    assert main._load_model(io.BytesIO(), "/m/duo", 1280) is resident  # a second speaker never reaches the unload/reload path (no config.json is even needed)

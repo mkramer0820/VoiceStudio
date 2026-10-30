@@ -321,3 +321,79 @@ def test_scan_finds_a_root_that_is_itself_a_checkpoint(tmp_path):
         encoding="utf-8")
     assert [m["id"] for m in registry._scan(str(ckpt))] == ["ss_narrator"]
     assert [m["id"] for m in registry._scan(str(tmp_path))] == ["ss_narrator"]
+
+
+# ── LoRA adapters ──────────────────────────────────────────────────────────
+def _adapter_setup(studio):
+    from safetensors.torch import save_file
+
+    snap = studio / "hf" / "models--Qwen--Qwen3-TTS-12Hz-1.7B-Base" / "snapshots" / "abc"
+    key = "talker.model.layers.0.self_attn.q_proj"
+    g = torch.Generator().manual_seed(0)
+    save_file({key + ".weight": (torch.randn(8, 8, generator=g) * 0.02).to(torch.bfloat16), "talker.model.codec_embedding.weight": torch.zeros(3072, 4, dtype=torch.bfloat16),
+               "speaker_encoder.w": torch.ones(2, dtype=torch.bfloat16)}, str(snap / "model.safetensors"))
+    folder = studio / "ckpts" / "lora-run" / "adapter-epoch-3"
+    folder.mkdir(parents=True)
+    save_file({key + ".lora_A.weight": torch.randn(2, 8, generator=g), key + ".lora_B.weight": torch.randn(8, 2, generator=g) * 0.5}, str(folder / "adapter_model.safetensors"))
+    (folder / "adapter_config.json").write_text(json.dumps({"r": 2, "lora_alpha": 4}))
+    (folder / "speakers.json").write_text(json.dumps({"amy": 3000, "bob": 3020}))
+    (folder / "lora_meta.json").write_text(json.dumps({"base_model": "/content/models/Qwen3-TTS-12Hz-1.7B-Base"}))
+    save_file({"amy": torch.ones(4), "bob": torch.full((4,), 2.0)}, str(folder / "speaker_embeddings.safetensors"))
+    return folder
+
+
+def test_an_adapter_folder_is_found_as_its_own_kind_and_is_not_runnable(studio):
+    _adapter_setup(studio)
+    adapter = next(m for m in registry.discover_models() if m["type"] == "adapter")
+    assert adapter["speakers"] == ["amy", "bob"] and adapter["rank"] == 2 and adapter["borrowable_speakers"] == []
+    assert registry.resolve_adapter_base(adapter, registry.discover_models())["type"] == "base"
+    with pytest.raises(ValueError, match="merge it into its Base model first"):
+        pg._check_pair(adapter, pg.Voice(kind="custom_voice", speaker="amy"))
+    # a merged checkpoint that also carries its adapter files is listed once, as the checkpoint it is
+    both = studio / "ckpts" / "lora-run" / "checkpoint-epoch-3"
+    _checkpoint(both, speakers=("amy", "bob"))
+    (both / "adapter_model.safetensors").write_bytes(b"x")
+    (both / "adapter_config.json").write_text("{}")
+    kinds = [(m["type"], m.get("has_adapter")) for m in registry.discover_models() if "lora-run" in m["id"]]
+    assert ("custom_voice", True) in kinds and kinds.count(("adapter", None)) == 1
+
+
+def test_merging_writes_a_standard_multi_speaker_checkpoint_into_a_settings_storage_folder(studio):
+    from core import model_locations
+
+    _adapter_setup(studio)
+    adapter = next(m for m in registry.discover_models() if m["type"] == "adapter")
+    loc = model_locations.load()[0]
+    result = registry.merge_adapter_model(adapter["id"], loc["id"], "Duo merged", lora_scale=1.0)
+    assert result["speakers"] == ["amy", "bob"] and result["path"].startswith(os.path.abspath(loc["path"])) and result["scale"] == 2.0
+    merged = next(m for m in registry.discover_models() if m["path"] == result["path"])
+    assert merged["type"] == "custom_voice" and merged["speakers"] == ["amy", "bob"]
+    with pytest.raises(ValueError, match="already exists"):
+        registry.merge_adapter_model(adapter["id"], loc["id"], "Duo merged")  # nothing is overwritten
+    with pytest.raises(ValueError, match="Settings -> Storage"):
+        registry.merge_adapter_model(adapter["id"], "not-a-location", "x")  # no free path: only a registered folder
+    with pytest.raises(ValueError, match="not a LoRA adapter"):
+        registry.merge_adapter_model(merged["id"], loc["id"], "y")
+    assert registry.merge_adapter_model(adapter["id"], loc["id"], "scaled", lora_scale=0.3)["scale"] == pytest.approx(0.6)
+
+
+def test_the_merge_route_returns_422_with_the_reason_and_takes_only_a_registered_location(studio):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.dependencies import require_admin
+    from api.routers import qwen_studio
+
+    app = FastAPI()
+    app.include_router(qwen_studio.router)
+    app.dependency_overrides[require_admin] = lambda: None
+    client = TestClient(app)
+    _adapter_setup(studio)
+    adapter = next(m for m in registry.discover_models() if m["type"] == "adapter")
+    bad = client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": "nope", "name": "x"})
+    assert bad.status_code == 422 and "Settings -> Storage" in bad.json()["detail"]
+    assert client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": "../..", "name": "x"}).status_code == 422
+    from core import model_locations
+
+    ok = client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": model_locations.load()[0]["id"], "name": "viaroute", "lora_scale": 1.0})
+    assert ok.status_code == 200 and ok.json()["speakers"] == ["amy", "bob"]

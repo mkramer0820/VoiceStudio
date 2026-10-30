@@ -193,6 +193,25 @@ def _load_model(stdout, ckpt: str | None = None, max_seq: int | None = None):
 _XVEC_CACHE: dict = {}
 
 
+def _load_vec(path: str):
+    """A cached embedding: ``.bin`` = raw float32 with no header (the C engine's x-vector layout), else ``.npy``."""
+    import numpy as np  # noqa: PLC0415
+    import torch  # noqa: PLC0415
+
+    if path.lower().endswith(".bin"):
+        return torch.from_numpy(np.fromfile(path, dtype="<f4").astype("float32"))
+    return torch.from_numpy(np.load(path))
+
+
+def _save_vec(path: str, vec) -> None:
+    import numpy as np  # noqa: PLC0415
+
+    if path.lower().endswith(".bin"):
+        np.asarray(vec, dtype="<f4").tofile(path)
+    else:
+        np.save(path, vec)
+
+
 def _xvector(ref_audio: str, base_dir: str, cache_path: str | None):
     """The speaker embedding (x-vector) of ``ref_audio``, made once by the stock
     Base model on the CPU (a custom_voice checkpoint has no speaker encoder),
@@ -204,7 +223,7 @@ def _xvector(ref_audio: str, base_dir: str, cache_path: str | None):
     if key in _XVEC_CACHE:
         return _XVEC_CACHE[key]
     if cache_path and os.path.isfile(cache_path) and os.path.getmtime(cache_path) >= key[1]:
-        vec = torch.from_numpy(np.load(cache_path))
+        vec = _load_vec(cache_path)
     else:
         from qwen_tts import Qwen3TTSModel  # noqa: PLC0415
 
@@ -216,7 +235,7 @@ def _xvector(ref_audio: str, base_dir: str, cache_path: str | None):
         gc.collect()
         if cache_path:
             os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
-            np.save(cache_path, vec.numpy())
+            _save_vec(cache_path, vec.numpy())
     _XVEC_CACHE[key] = vec
     return vec
 
@@ -232,6 +251,14 @@ def _as_custom_voice(model, enabled: bool):
         yield
     finally:
         inner.tts_model_type = previous
+
+
+def _ensure_speaker(model, speaker: str, borrowed) -> None:
+    """A multi-speaker checkpoint answers to every name in its config, chosen per request with no reload. Refuse a name it does not have
+    with the list it has (the library would only raise NotImplementedError from deep inside generation)."""
+    known = list(model.model.model.config.talker_config.spk_id)
+    if borrowed is None and speaker.lower() not in known:
+        raise ValueError(f"This model has no speaker {speaker!r}; it has: {', '.join(known) or 'none'}.")
 
 
 @contextlib.contextmanager
@@ -266,7 +293,7 @@ def _ref_frames(path: str) -> int:
 
 
 def _generate_chunk(model, text: str, voice: dict, language: str, seed, pad_s: float, slow: float, median: float,
-                    params: dict):
+                    params: dict, lead_s: float | None = None):
     import torch  # noqa: PLC0415
 
     kind = voice.get("kind", "custom_voice")
@@ -301,6 +328,7 @@ def _generate_chunk(model, text: str, voice: dict, language: str, seed, pad_s: f
                 max_new_tokens=cap, **options)
         else:
             speaker = voice.get("speaker") or _STATE["speaker"]
+            _ensure_speaker(model, speaker, borrowed)
             if borrowed is not None:  # a stock voice name this model has no entry for: point it at the stock row
                 cfg = model.model.model.config.talker_config
                 cfg.spk_id[speaker.lower()] = int(borrowed)
@@ -310,7 +338,7 @@ def _generate_chunk(model, text: str, voice: dict, language: str, seed, pad_s: f
                 wavs, sr = model.generate_custom_voice(
                     text=text, speaker=speaker, language=language,
                     instruct=voice.get("instruct") or None, max_new_tokens=cap, **options)
-        wave = logic.pad_tail(wavs[0], sr, pad_s)
+        wave = logic.pad_tail(logic.pad_head(wavs[0], sr, lead_s), sr, pad_s)
     finally:
         _STATE["ramp"] = None
     how = logic.classify(ramp.steps, start, cap)
@@ -323,11 +351,23 @@ def _handle_synthesize(msg: dict, stdout) -> None:
     text = msg.get("text")
     if not text or not isinstance(text, str):
         raise ValueError("synthesize: missing or non-string 'text'")
+    first = msg.get("voice") or {}
+    if first.get("kind") == "prepare_embedding":
+        # Speaker embedding only (no TTS model is loaded): made once by the stock Base model on the CPU and
+        # cached at xvec_path (.bin = raw float32, no header). The reply is one silent sample.
+        for need in ("ref_audio", "base_model_path", "xvec_path"):
+            if not first.get(need):
+                raise ValueError(f"voice.{need} is required for 'prepare_embedding'")
+        vec = _xvector(first["ref_audio"], first["base_model_path"], first["xvec_path"])
+        _send(stdout, {"op": "audio", "audio_pcm_b64": base64.b64encode(bytes(2)).decode("ascii"), "audio_format": "s16le",
+                       "sample_rate": SAMPLE_RATE, "n_samples": 1, "chunks": [], "complete": True, "prepared": int(vec.numel())})
+        return
     model = _load_model(stdout, msg.get("model_path"), msg.get("max_seq_len"))
     slow = float(msg.get("slow_s_per_char") or logic.SLOW_S_PER_CHAR)
     median = float(msg.get("median_s_per_char") or logic.MEDIAN_S_PER_CHAR)
     chunk_chars = int(msg.get("chunk_chars") or logic.default_chunk_chars(_STATE["max_seq"], slow))
     pad_s = max(0.0, float(msg.get("pad_s", 0.3)))
+    lead_s = None if msg.get("lead_s") is None else max(0.0, float(msg["lead_s"]))  # silence at the START of the first chunk only; None = untouched
     voice = dict(msg.get("voice") or {})
     if msg.get("speaker") and "speaker" not in voice:
         voice["speaker"] = msg["speaker"]
@@ -345,7 +385,7 @@ def _handle_synthesize(msg: dict, stdout) -> None:
     with _heartbeating(stdout, "generating"):
         for i, chunk in enumerate(chunks):
             seed = None if msg.get("seed") is None else int(msg["seed"]) + i
-            wave, rate, info = _generate_chunk(model, chunk, voice, language, seed, pad_s, slow, median, msg)
+            wave, rate, info = _generate_chunk(model, chunk, voice, language, seed, pad_s, slow, median, msg, lead_s if i == 0 else None)
             waves.append(wave)
             report.append(info)
             if info["how"] == "hit the limit":

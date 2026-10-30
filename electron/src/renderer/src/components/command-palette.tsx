@@ -195,6 +195,13 @@ export function CommandPalette() {
       run: () => navigate({ to: '/qwen-playground' }),
     },
     {
+      id: 'qwen-story',
+      label: t('qwenStory.nav'),
+      group: workspaceGroup,
+      icon: BookOpenIcon,
+      run: () => navigate({ to: '/qwen-story' }),
+    },
+    {
       id: 'fish-dataset',
       label: t('fishDataset.nav'),
       group: workspaceGroup,

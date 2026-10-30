@@ -34,6 +34,7 @@ type Destination = readonly [
     | '/fish-story'
     | '/fish-dataset'
     | '/qwen-playground'
+    | '/qwen-story'
     | '/projects'
     | '/tools'
     | '/batch'
@@ -63,6 +64,7 @@ const storyDestinations: Destination[] = [
   ['/fish-story', 'fishStory.nav', BookAudioIcon],
   ['/fish-dataset', 'fishDataset.nav', DatabaseIcon],
   ['/qwen-playground', 'qwenPlayground.nav', FlaskConicalIcon],
+  ['/qwen-story', 'qwenStory.nav', BookOpenIcon],
 ];
 const dubDestinations: Destination[] = [
   ['/dub', 'dubWorkspace.title', FilmIcon],
@@ -91,6 +93,7 @@ const iconMotion: Record<Destination[0], string> = {
   '/fish-story': 'wave',
   '/fish-dataset': 'lift',
   '/qwen-playground': 'wave',
+  '/qwen-story': 'tilt',
   '/dub': 'tilt',
   '/batch': 'lift',
   '/transcriptions': 'nudge',

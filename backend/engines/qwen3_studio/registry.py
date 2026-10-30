@@ -107,7 +107,22 @@ def read_checkpoint(folder: str) -> Optional[dict]:
         "size": cfg.get("tts_model_size"),
         "speakers": sorted((cfg.get("talker_config") or {}).get("spk_id") or {}),
         "bytes": os.path.getsize(os.path.join(folder, "model.safetensors")),
+        "has_adapter": os.path.isfile(os.path.join(folder, "adapter_model.safetensors")),
     }
+
+
+def read_adapter(folder: str) -> Optional[dict]:
+    """What a LoRA adapter folder (``adapter_config.json`` + ``adapter_model.safetensors``, no full weights) says about itself, or None.
+    An adapter is not runnable: it must be merged into its Base model first (``merge_adapter_model``)."""
+    if os.path.isfile(os.path.join(folder, "model.safetensors")):
+        return None  # a merged checkpoint (it may also carry its adapter files); it is listed as the checkpoint it is
+    from engines.fish_api import qwen3_peft
+
+    info = qwen3_peft.read_adapter_info(folder)
+    if info is None:
+        return None
+    return {"type": "adapter", "size": None, "speakers": info["speakers"], "bytes": info["bytes"], "rank": info["rank"],
+            "alpha": info["alpha"], "base_model": info["base_model"]}
 
 
 def _hf_caches() -> list[Path]:
@@ -132,10 +147,10 @@ def _hf_caches() -> list[Path]:
 
 
 def _entry(folder: str, model_id: str, label: str, source: str) -> Optional[dict]:
-    info = read_checkpoint(folder)
+    info = read_checkpoint(folder) or read_adapter(folder)
     if info is None:
         return None
-    borrowable = [] if info["type"] == "voice_design" else [n for n in STOCK_SPEAKERS if n not in info["speakers"]]
+    borrowable = [] if info["type"] in ("voice_design", "adapter") else [n for n in STOCK_SPEAKERS if n not in info["speakers"]]
     return {"id": model_id, "label": label, "path": os.path.abspath(folder), "source": source,
             "location": source, "borrowable_speakers": borrowable, **info}
 
@@ -195,6 +210,47 @@ def discover_models(settings: Optional[dict] = None) -> list[dict]:
 
 def get_model(model_id: str, settings: Optional[dict] = None) -> Optional[dict]:
     return next((m for m in discover_models(settings) if m["id"] == model_id), None)
+
+
+def resolve_adapter_base(adapter: dict, models: list[dict]) -> Optional[dict]:
+    """The Base model an adapter was trained on, found among the models the app already knows (Hugging Face cache and the folders of
+    Settings -> Storage), by the model name recorded in ``lora_meta.json``. Never searches a private location."""
+    recorded = str(adapter.get("base_model") or "").replace("\\", "/").rstrip("/")
+    name = recorded.split("/")[-1].lower()
+    bases = [m for m in models if m["type"] == "base"]
+    if name:
+        for m in bases:
+            if m["label"].split("/")[-1].lower() == name or os.path.basename(m["path"].rstrip("/\\")).lower() == name:
+                return m
+    return None
+
+
+def merge_adapter_model(model_id: str, location_id: str, name: str, lora_scale: float = 1.0, settings: Optional[dict] = None) -> dict:
+    """Merge an adapter into its Base model and write the standard custom_voice checkpoint into a folder of Settings -> Storage
+    (``location_id``). No new path is accepted: the output is ``<location>/<name>``. Refuses to overwrite. CPU only."""
+    from engines.fish_api import qwen3_peft
+
+    models = discover_models(settings)
+    adapter = next((m for m in models if m["id"] == model_id), None)
+    if adapter is None or adapter["type"] != "adapter":
+        raise ValueError("That model is not a LoRA adapter.")
+    base = resolve_adapter_base(adapter, models)
+    if base is None:
+        raise ValueError(f"The Base model this adapter was trained on ({adapter.get('base_model') or 'unknown'}) was not found. Download it or add its "
+                         "folder under Settings -> Storage -> Model locations, then try again.")
+    loc = next((r for r in model_locations.load() if r["id"] == location_id), None)
+    if loc is None:
+        raise ValueError("Choose one of the model folders listed in Settings -> Storage to write the merged model into.")
+    if not 0.0 < float(lora_scale) <= 2.0:
+        raise ValueError("The adapter scale must be above 0 and at most 2.")
+    folder = _slug(name or adapter["label"] + "-merged")
+    out = os.path.join(os.path.abspath(loc["path"]), folder)
+    if os.path.exists(out):
+        raise ValueError(f"{folder} already exists in {loc['name']}; choose another name (nothing is overwritten).")
+    os.makedirs(loc["path"], exist_ok=True)
+    report = qwen3_peft.merge_adapter(base["path"], adapter["path"], out, lora_scale=float(lora_scale))
+    return {"path": out, "location": loc["name"], "folder": folder, "base": base["label"], "speakers": report["speakers"],
+            "changed_pct": report["changed_pct"], "scale": report["scale"], "lora_scale": report["lora_scale"]}
 
 
 def first_base(settings: Optional[dict] = None) -> Optional[dict]:

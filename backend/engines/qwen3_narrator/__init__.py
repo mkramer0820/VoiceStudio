@@ -37,7 +37,7 @@ SIDECAR_SCRIPT: Path = Path(__file__).parent / "main.py"
 #: resident checkpoint, ``voice`` is {"kind": "custom_voice", "speaker", "instruct"}
 #: or {"kind": "clone", "ref_audio", "ref_text", "xvec_only", "instruct"}.
 _FORWARDED = (
-    "speaker", "language", "seed", "chunk_chars", "pad_s", "model_path", "max_seq_len", "voice",
+    "speaker", "language", "seed", "chunk_chars", "pad_s", "lead_s", "model_path", "max_seq_len", "voice",
     "temperature", "top_k", "top_p", "repetition_penalty", "slow_s_per_char", "median_s_per_char",
 )
 
@@ -130,7 +130,8 @@ class Qwen3NarratorBackend(SubprocessBackend):
         """Synthesize ``text``; long text is chunked inside the sidecar.
 
         kwargs forwarded: see ``_FORWARDED``. ``pad_s`` is the silence after each
-        chunk (default 0.3 s), ``chunk_chars`` overrides the cache-derived chunk
+        chunk (default 0.3 s), ``lead_s`` trims the start of the first chunk to exactly that much
+        silence (default None: untouched), ``chunk_chars`` overrides the cache-derived chunk
         size. After the call ``last_reply_meta`` holds the sidecar's per-chunk
         report (``chunks``, ``complete``, VRAM).
         """

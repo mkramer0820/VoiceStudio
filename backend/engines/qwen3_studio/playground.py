@@ -226,6 +226,8 @@ def resolve_voice(take: Take, model: dict, settings: dict) -> tuple[dict, dict]:
 
 
 def _check_pair(model: dict, voice: Voice) -> None:
+    if model["type"] == "adapter":
+        raise ValueError(f"{model['label']} is a LoRA adapter, not a runnable model: merge it into its Base model first (Merge adapter).")
     if voice.kind == "clone":
         want = "base"
     else:
