@@ -137,7 +137,7 @@ def test_a_merged_multi_speaker_folder_is_a_standard_custom_voice_checkpoint(tmp
     st.save_file({"amy": torch.ones(4), "bob": torch.full((4,), 2.0)}, os.path.join(adir, peft_helpers.SPEAKER_EMBEDDINGS_FILE))
     info = peft_helpers.read_adapter_info(adir)
     assert info["rank"] == 2 and info["speakers"] == ["amy", "bob"]
-    report = peft_helpers.merge_adapter(bdir, adir, odir)
+    report = peft_helpers.merge_adapter(bdir, adir, odir, lora_scale=1.0)
     assert report["scale"] == 2.0 and report["speakers"] == ["amy", "bob"] and not os.path.exists(odir + ".tmp")
     found = registry.read_checkpoint(odir)
     assert found["type"] == "custom_voice" and found["speakers"] == ["amy", "bob"]
@@ -338,7 +338,7 @@ def test_lora_adapters_are_float32_trained_alone_and_leave_the_speaker_encoder_a
 # ------------------------------------------------------------------------------------------------ phase 2: parameters and setup
 def test_lora_has_its_own_learning_rate_and_full_keeps_2e6():
     assert vs.DEFAULT_LR == 2e-6 and vs.Params().lr == 2e-6 and vs.Params().train_mode == "full"
-    assert vs.LORA_DEFAULT_LR != vs.DEFAULT_LR
+    assert vs.LORA_DEFAULT_LR == 2e-6
     assert vs.params_from({"train_mode": "lora"}, env={}).lr == vs.LORA_DEFAULT_LR
     assert vs.params_from({"train_mode": "lora", "lr": 5e-5}, env={}).lr == 5e-5  # an explicit value always wins
     assert vs.params_from({"train_mode": "full"}, env={}).lr == 2e-6
@@ -411,7 +411,7 @@ def test_the_notebook_parameters_cell_roundtrips_the_lora_fields_and_pins_peft_i
 
 
 def test_the_merge_scale_multiplies_alpha_over_r_and_the_rounding_check_runs_at_the_chosen_scale(tmp_path, lora_env, monkeypatch):
-    assert vs.LORA_DEFAULT_SCALE == 1.0 and 0.3 in vs.LORA_SCALE_CANDIDATES and vs.Params().lora_scale == 1.0
+    assert vs.LORA_DEFAULT_SCALE == 0.3 and 0.2 in vs.LORA_SCALE_SWEEP and vs.Params().lora_scale == 0.3
     base, adapter = _tiny(b_scale=1e-3)  # delta about 2e-3 x scale on weights of about 0.02
     key = "talker.model.layers.0.self_attn.q_proj.weight"
     full, _ = peft_helpers.merge_state(base, adapter, 2.0 * 1.0)
@@ -431,4 +431,32 @@ def test_the_merge_scale_multiplies_alpha_over_r_and_the_rounding_check_runs_at_
     assert vs.params_from({"train_mode": "lora", "lora_scale": 0.3}, env={}).lora_scale == 0.3
     assert vs.plan_commands(vs.params_from({"train_mode": "lora", "lora_scale": 0.3}, env={}), vs.Layout(vs.Params(drive_root="/content/drive/MyDrive/Q")), "/d", 2)["env"]["VS_LORA_SCALE"] == "0.3"
     with pytest.raises(vs.StepFailed, match="LORA_SCALE"):
-        vs.params_from({"lora_scale": 0}, env={})
+        vs.params_from({"lora_scale": 1.5}, env={})
+
+
+# ------------------------------------------------------------------------------------------------ export mode switch and manifest guard
+def test_manifest_guard_refuses_the_other_mode_in_both_directions(tmp_path):
+    (tmp_path / "manifest.json").write_text('{"training_mode": "lora"}')
+    vs.check_manifest(str(tmp_path), "lora")
+    with pytest.raises(vs.StepFailed, match="training_mode=lora"):
+        vs.check_manifest(str(tmp_path), "full")
+    (tmp_path / "manifest.json").write_text('{"training_mode": "full"}')
+    vs.check_manifest(str(tmp_path), "full")
+    with pytest.raises(vs.StepFailed, match="training_mode=full"):
+        vs.check_manifest(str(tmp_path), "lora")
+    (tmp_path / "manifest.json").write_text("{nope")
+    with pytest.raises(vs.StepFailed, match="unreadable"):
+        vs.check_manifest(str(tmp_path), "full")
+    (tmp_path / "manifest.json").unlink()
+    vs.check_manifest(str(tmp_path), "full")  # an older export has no manifest
+
+
+def test_training_mode_alias_and_merge_scale_limits():
+    from engines.fish_api import qwen3_colab
+    assert qwen3_colab.settings_from({"training_mode": "lora"}).train_mode == "lora"
+    assert qwen3_colab.settings_from({"training_mode": "lora"}).learning_rate == 2e-6
+    assert qwen3_colab.settings_from({}).train_mode == "full"
+    with pytest.raises(ValueError):
+        qwen3_colab.settings_from({"training_mode": "both"})
+    with pytest.raises(ValueError):
+        qwen3_colab.settings_from({"training_mode": "lora", "train_mode": "full"})

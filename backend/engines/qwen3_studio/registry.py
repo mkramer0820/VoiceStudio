@@ -225,9 +225,11 @@ def resolve_adapter_base(adapter: dict, models: list[dict]) -> Optional[dict]:
     return None
 
 
-def merge_adapter_model(model_id: str, location_id: str, name: str, lora_scale: float = 1.0, settings: Optional[dict] = None) -> dict:
+def merge_adapter_model(model_id: str, location_id: str, name: str, lora_scale: float = 0.3, settings: Optional[dict] = None,
+                       confirm: bool = False) -> dict:
     """Merge an adapter into its Base model and write the standard custom_voice checkpoint into a folder of Settings -> Storage
-    (``location_id``). No new path is accepted: the output is ``<location>/<name>``. Refuses to overwrite. CPU only."""
+    (``location_id``). No new path is accepted: the output is ``<location>/<name>``. Refuses to overwrite and never touches the adapter (it stays the
+    source of truth). Needs ``confirm=True``: a merge bakes the scale into the weights. CPU only."""
     from engines.fish_api import qwen3_peft
 
     models = discover_models(settings)
@@ -241,8 +243,10 @@ def merge_adapter_model(model_id: str, location_id: str, name: str, lora_scale: 
     loc = next((r for r in model_locations.load() if r["id"] == location_id), None)
     if loc is None:
         raise ValueError("Choose one of the model folders listed in Settings -> Storage to write the merged model into.")
-    if not 0.0 < float(lora_scale) <= 2.0:
-        raise ValueError("The adapter scale must be above 0 and at most 2.")
+    if not 0.0 <= float(lora_scale) <= 1.0:
+        raise ValueError("The adapter scale must be between 0.0 (the base model) and 1.0.")
+    if not confirm:
+        raise ValueError(f"Merging bakes scale {float(lora_scale):g} into a new model; confirm it explicitly. The adapter itself is kept.")
     folder = _slug(name or adapter["label"] + "-merged")
     out = os.path.join(os.path.abspath(loc["path"]), folder)
     if os.path.exists(out):
@@ -250,7 +254,8 @@ def merge_adapter_model(model_id: str, location_id: str, name: str, lora_scale: 
     os.makedirs(loc["path"], exist_ok=True)
     report = qwen3_peft.merge_adapter(base["path"], adapter["path"], out, lora_scale=float(lora_scale))
     return {"path": out, "location": loc["name"], "folder": folder, "base": base["label"], "speakers": report["speakers"],
-            "changed_pct": report["changed_pct"], "scale": report["scale"], "lora_scale": report["lora_scale"]}
+            "changed_pct": report["changed_pct"], "scale": report["scale"], "lora_scale": report["lora_scale"],
+            "warnings": ([f"Scale {float(lora_scale):g} is above 0.5; voices often get noisy or lose the base's clarity."] if float(lora_scale) > 0.5 else [])}
 
 
 def first_base(settings: Optional[dict] = None) -> Optional[dict]:

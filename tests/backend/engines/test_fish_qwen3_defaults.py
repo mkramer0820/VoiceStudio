@@ -173,7 +173,8 @@ def test_every_layer_agrees_on_the_defaults_of_each_training_mode():
     assert runner.DEFAULT_LR == params.lr == ui["learning_rate"] == qwen3_colab.TrainSettings().learning_rate == 2e-6
     assert runner.DEFAULT_TRAIN_MODE == "full" and params.train_mode == "full" and params.speakers == ""
     # lora: its own constant in the runner, the settings, the notebook cell, Params and the UI
-    assert runner.LORA_DEFAULT_LR != runner.DEFAULT_LR
+    assert runner.LORA_DEFAULT_LR == 2e-6  # owner-confirmed; its own constant even though it equals the full one today
+    assert runner.LORA_DEFAULT_SCALE == 0.3 and runner.LORA_SCALE_RANGE == (0.0, 1.0) and runner.LORA_SCALE_WARN_ABOVE == 0.5
     assert runner.params_from({"train_mode": "lora"}, env={}).lr == runner.LORA_DEFAULT_LR == ui["lora_learning_rate"]
     assert qwen3_colab.settings_from({"train_mode": "lora"}).learning_rate == runner.LORA_DEFAULT_LR
     assert (ui["lora_rank"], ui["lora_alpha"], ui["lora_dropout"]) == (runner.DEFAULT_LORA_RANK, runner.DEFAULT_LORA_ALPHA, runner.DEFAULT_LORA_DROPOUT)

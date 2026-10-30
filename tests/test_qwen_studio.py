@@ -364,17 +364,17 @@ def test_merging_writes_a_standard_multi_speaker_checkpoint_into_a_settings_stor
     _adapter_setup(studio)
     adapter = next(m for m in registry.discover_models() if m["type"] == "adapter")
     loc = model_locations.load()[0]
-    result = registry.merge_adapter_model(adapter["id"], loc["id"], "Duo merged", lora_scale=1.0)
+    result = registry.merge_adapter_model(adapter["id"], loc["id"], "Duo merged", lora_scale=1.0, confirm=True)
     assert result["speakers"] == ["amy", "bob"] and result["path"].startswith(os.path.abspath(loc["path"])) and result["scale"] == 2.0
     merged = next(m for m in registry.discover_models() if m["path"] == result["path"])
     assert merged["type"] == "custom_voice" and merged["speakers"] == ["amy", "bob"]
     with pytest.raises(ValueError, match="already exists"):
-        registry.merge_adapter_model(adapter["id"], loc["id"], "Duo merged")  # nothing is overwritten
+        registry.merge_adapter_model(adapter["id"], loc["id"], "Duo merged", confirm=True)  # nothing is overwritten
     with pytest.raises(ValueError, match="Settings -> Storage"):
-        registry.merge_adapter_model(adapter["id"], "not-a-location", "x")  # no free path: only a registered folder
+        registry.merge_adapter_model(adapter["id"], "not-a-location", "x", confirm=True)  # no free path: only a registered folder
     with pytest.raises(ValueError, match="not a LoRA adapter"):
-        registry.merge_adapter_model(merged["id"], loc["id"], "y")
-    assert registry.merge_adapter_model(adapter["id"], loc["id"], "scaled", lora_scale=0.3)["scale"] == pytest.approx(0.6)
+        registry.merge_adapter_model(merged["id"], loc["id"], "y", confirm=True)
+    assert registry.merge_adapter_model(adapter["id"], loc["id"], "scaled", lora_scale=0.3, confirm=True)["scale"] == pytest.approx(0.6)
 
 
 def test_the_merge_route_returns_422_with_the_reason_and_takes_only_a_registered_location(studio):
@@ -395,5 +395,5 @@ def test_the_merge_route_returns_422_with_the_reason_and_takes_only_a_registered
     assert client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": "../..", "name": "x"}).status_code == 422
     from core import model_locations
 
-    ok = client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": model_locations.load()[0]["id"], "name": "viaroute", "lora_scale": 1.0})
+    ok = client.post("/api/qwen/models/merge-adapter", json={"model_id": adapter["id"], "location_id": model_locations.load()[0]["id"], "name": "viaroute", "lora_scale": 1.0, "confirm": True})
     assert ok.status_code == 200 and ok.json()["speakers"] == ["amy", "bob"]

@@ -223,11 +223,11 @@ export const QWEN_NUMBERS: Record<QwenNumberKey, NumberSpec & { advanced?: boole
   batch_size: { def: 4, min: 1, max: 256, step: '1' },
 };
 /** LoRA mode: its OWN defaults, never the full fine-tune's. Mirror qwen3_colab_runner DEFAULT_LORA_* / LORA_DEFAULT_LR (kept equal by
- * tests/backend/engines/test_fish_qwen3_defaults.py). The LoRA learning rate is an UNCONFIRMED placeholder until the owner chooses. */
+ * tests/backend/engines/test_fish_qwen3_defaults.py). The LoRA learning rate default is 2e-6 (owner-confirmed). */
 export type QwenMode = 'full' | 'lora';
 export type QwenLoraKey = 'lora_rank' | 'lora_alpha' | 'lora_dropout';
 export const QWEN_LORA_NUMBERS: Record<QwenLoraKey | 'lora_learning_rate', NumberSpec> = {
-  lora_learning_rate: { def: 2e-5, min: 1e-7, max: 1e-3, step: 'any' },
+  lora_learning_rate: { def: 2e-6, min: 1e-7, max: 1e-3, step: 'any' },
   lora_rank: { def: 16, min: 1, max: 256, step: '1' },
   lora_alpha: { def: 32, min: 1, max: 1024, step: 'any' },
   lora_dropout: { def: 0.05, min: 0, max: 0.5, step: 'any' },

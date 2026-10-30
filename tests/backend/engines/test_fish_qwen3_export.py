@@ -686,3 +686,17 @@ def test_lora_settings_reach_training_settings_json_with_their_own_learning_rate
     assert cfg["train_mode"] == "lora" and cfg["learning_rate"] == runner.LORA_DEFAULT_LR and cfg["lora_rank"] == 16
     plain = json.load(open(os.path.join(_export(corpus, tmp_path, name="full")["path"], "training_settings.json"), encoding="utf-8"))
     assert plain["train_mode"] == "full" and plain["learning_rate"] == runner.DEFAULT_LR == 2e-6
+
+
+def test_manifest_names_the_mode_and_a_lora_export_never_lands_on_the_full_one(corpus, tmp_path):
+    full = _export(corpus, tmp_path, name="voice", training={"training_mode": "full"})
+    lora = _export(corpus, tmp_path, name="voice", training={"training_mode": "lora"})
+    mf = json.load(open(os.path.join(full["path"], "manifest.json"), encoding="utf-8"))
+    ml = json.load(open(os.path.join(lora["path"], "manifest.json"), encoding="utf-8"))
+    assert mf["training_mode"] == "full" and ml["training_mode"] == "lora"
+    assert full["path"] != lora["path"] and lora["path"].endswith("_lora")
+    assert ml["parameters"]["lora_rank"] == 16 and ml["parameters"]["lora_alpha"] == 32 and ml["parameters"]["learning_rate"] == 2e-6
+    assert ml["parameters"]["inference_lora_scale"] == 0.3 and "lora_rank" not in mf["parameters"]
+    assert mf["parameters"]["learning_rate"] == 2e-6
+    # the dataset itself does not depend on the mode
+    assert _jsonl(os.path.join(full["path"], "train.jsonl")) == _jsonl(os.path.join(lora["path"], "train.jsonl"))

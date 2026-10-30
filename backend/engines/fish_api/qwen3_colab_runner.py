@@ -190,15 +190,14 @@ ALIGN_PAIRS = ((ALIGN_A_OLD, ALIGN_A_NEW), (ALIGN_B_OLD, ALIGN_B_NEW), (ALIGN_C_
 TRAIN_MODES = ("full", "lora")
 DEFAULT_TRAIN_MODE = "full"
 # Full fine-tune lr is DEFAULT_LR (2e-6) above: never 1e-6 as a default, and 2e-5 (the script's own) is what makes the model never stop (issue #39).
-# LoRA has its OWN lr. UNCONFIRMED PLACEHOLDER (the owner has not chosen): 2e-5 is the low end of the planned sweep 2e-5..1e-4
-# (QWEN3_PEFT_PLAN.md; 2e-5 is what 6z6z/qwen3-tts-personalized uses). Not measured. Change it only on the owner's word.
-# NEW EVIDENCE (instavar/qwen3-tts-lora-finetuning, constant lr, no warmup, wd 0.01, bs 4 x accum 4, 10 epochs): its LoRA default is 2e-6, which
-# contradicts the 2e-5..1e-4 range above, so the sweep must also include 2e-6 and 1e-5. This value is a placeholder until the owner confirms.
-LORA_DEFAULT_LR = 2e-5
-# Merge-time multiplier on alpha/r. 1.0 until the owner confirms; 0.3 is a documented CANDIDATE (instavar applies 0.3 at inference and calls 1.0
-# "almost always wrong", sweep 0.2-0.5). Not measured here. The delta-survives-bf16 check always runs at the scale chosen.
-LORA_DEFAULT_SCALE = 1.0
-LORA_SCALE_CANDIDATES = (0.3,)
+# LoRA has its OWN lr: 2e-6, owner-confirmed 2026-10-29 (instavar's constant-lr recipe; 2e-5 gives noise and runs that never stop). Not swept with our aligned loss yet.
+LORA_DEFAULT_LR = 2e-6
+# Inference/merge multiplier on alpha/r: 0.3, owner-confirmed 2026-10-29 (range 0.0-1.0, warn above 0.5; 0.0 is the base model). 1.0 is almost always wrong.
+# Applied at generation time, not a training parameter. The delta-survives-bf16 check always runs at the scale chosen.
+LORA_DEFAULT_SCALE = 0.3
+LORA_SCALE_RANGE = (0.0, 1.0)
+LORA_SCALE_WARN_ABOVE = 0.5
+LORA_SCALE_SWEEP = (0.2, 0.3, 0.35, 0.5)
 DEFAULT_LORA_RANK, DEFAULT_LORA_ALPHA, DEFAULT_LORA_DROPOUT = 16, 32, 0.05  # both community LoRA repos; no Qwen-specific sweep exists
 PEFT_PIN = "peft==0.17.1"  # nearest to the transformers 4.57.3 era; 0.17.1 does NOT import under transformers 5 (HybridCache), checked 2026-10-28
 SPK_ROW_BASE, SPK_ROW_STEP = 3000, 20  # row of speaker idx in the codec embedding table: 3000 + 20 * idx (single-speaker upstream: 3000)
@@ -485,7 +484,7 @@ class Params:
     lora_rank: int = DEFAULT_LORA_RANK
     lora_alpha: float = DEFAULT_LORA_ALPHA
     lora_dropout: float = DEFAULT_LORA_DROPOUT
-    lora_scale: float = LORA_DEFAULT_SCALE  # multiplier on alpha/r when the adapter is merged into the saved checkpoint (1.0 = as trained; unconfirmed, see LORA_DEFAULT_SCALE)
+    lora_scale: float = LORA_DEFAULT_SCALE  # multiplier on alpha/r when the adapter is merged into the saved checkpoint (default 0.3, range 0.0-1.0)
     speakers: str = ""  # comma-separated speaker names for a multi-speaker model; empty: taken from a `speaker` field in the data, else SPEAKER_NAME alone
     val_fraction: float = 0.05  # share of the clips held out (fixed seed) to score every epoch; 0 turns validation off
     drive_skip_first: int = 3  # the first N epochs stay on /content and are not copied to Drive (the final epoch is always copied)
@@ -522,8 +521,8 @@ class Params:
             raise StepFailed("TRAIN_MODE must be 'full' or 'lora'.")
         self.lora_rank, self.lora_alpha, self.lora_dropout = int(self.lora_rank), float(self.lora_alpha), float(self.lora_dropout)
         self.lora_scale = float(self.lora_scale)
-        if not 1 <= self.lora_rank <= 256 or not 0 < self.lora_alpha <= 1024 or not 0.0 <= self.lora_dropout <= 0.5 or not 0.0 < self.lora_scale <= 2.0:
-            raise StepFailed("LORA_RANK must be 1-256, LORA_ALPHA above 0 (up to 1024), LORA_DROPOUT 0 to 0.5 and LORA_SCALE above 0 (up to 2).")
+        if not 1 <= self.lora_rank <= 256 or not 0 < self.lora_alpha <= 1024 or not 0.0 <= self.lora_dropout <= 0.5 or not LORA_SCALE_RANGE[0] <= self.lora_scale <= LORA_SCALE_RANGE[1]:
+            raise StepFailed("LORA_RANK must be 1-256, LORA_ALPHA above 0 (up to 1024), LORA_DROPOUT 0 to 0.5 and LORA_SCALE 0.0 to 1.0 (0.0 is the base model; above 0.5 is risky).")
         self.speakers = ",".join(s.strip() for s in str(self.speakers or "").split(",") if s.strip())
         if self.speakers:
             speaker_rows(self.speakers.split(","))
@@ -2928,6 +2927,20 @@ def plan_commands(p: Params, lay: Layout, dataset_dir: str, batch: int, *, patch
     }
 
 
+def check_manifest(folder: str, train_mode: str) -> None:
+    """Refuse a dataset exported for the other training mode. manifest.json (written by the Voice Studio export) names it; an older export without one is accepted."""
+    path = os.path.join(folder, "manifest.json")
+    if not os.path.isfile(path):
+        return
+    try:
+        exported = json.load(open(path, encoding="utf-8")).get("training_mode")
+    except (OSError, ValueError):
+        raise StepFailed("manifest.json in the dataset is unreadable; export the dataset again.")
+    if exported in TRAIN_MODES and exported != train_mode:
+        raise StepFailed(f"This dataset was exported for training_mode={exported} but the notebook is set to TRAIN_MODE={train_mode}. "
+                         "Export it again with the matching Training mode, or change TRAIN_MODE; nothing was started.")
+
+
 def preflight(p: Params, lay: Layout, gpu: Gpu, path: str, batch: int) -> None:
     """Free disk, bf16, attention support: stop with a clear message before any GPU time is spent."""
     base_gb = dir_size(local_model_dir(lay, p.base_model)) / 2**30 or 4.0
@@ -3009,6 +3022,7 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
         path, batch = _preflight(p, lay, gpu)
         preflight(p, lay, gpu, path, batch)
         folder, result = _data_check(p)
+        check_manifest(folder, p.train_mode)
         names = resolve_speakers(p, os.path.join(folder, "train.jsonl"))
         p.speakers = ",".join(names)
         patched = _announce_patch(path, lay, p.train_mode == "lora" or bool(names))
@@ -3024,7 +3038,7 @@ def train(p: Params, *, gpu: Optional[Gpu] = None, stream: Callable = run_stream
         if p.train_mode == "lora":
             say(f"== LoRA: rank {p.lora_rank}, alpha {p.lora_alpha:g}, dropout {p.lora_dropout:g} on the talker and code predictor layers, base frozen, adapters in float32; "
                 f"each epoch is saved as a merged standard checkpoint plus adapter_model.safetensors. UNVERIFIED on a GPU. lr {p.lr:g}"
-                + ("" if p.sources.get("lr") else " is LORA_DEFAULT_LR, an UNCONFIRMED placeholder"))
+                + ("" if p.sources.get("lr") else " is LORA_DEFAULT_LR (2e-6)"))
         if p.speakers:
             say("== Speakers: " + ", ".join(f"{n} (row {r})" for n, r in speaker_rows(p.speakers.split(",")).items()))
         say(f"== Training: {p.epochs} epochs, batch size {batch} x accumulation {p.grad_accum} = {batch * p.grad_accum} clips per update, "

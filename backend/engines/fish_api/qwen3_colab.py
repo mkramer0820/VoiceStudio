@@ -75,10 +75,15 @@ class TrainSettings:
 def settings_from(spec: Optional[dict]) -> TrainSettings:
     """Validated settings; unknown keys, bad ranges and unsafe names raise ``ValueError``."""
     data = {k: v for k, v in dict(spec or {}).items() if v is not None}
+    if "training_mode" in data:  # the API / MCP spelling of train_mode; anything but full|lora is refused below
+        alias = data.pop("training_mode")
+        if "train_mode" in data and data["train_mode"] != alias:
+            raise ValueError("training_mode and train_mode disagree; send one of them.")
+        data["train_mode"] = alias
     if data.get("train_mode", runner.DEFAULT_TRAIN_MODE) not in runner.TRAIN_MODES:
         raise ValueError("train_mode must be 'full' or 'lora'.")
     if data.get("train_mode") == "lora" and "learning_rate" not in data:
-        data["learning_rate"] = runner.LORA_DEFAULT_LR  # LoRA has its own default (an unconfirmed placeholder), never the full fine-tune one
+        data["learning_rate"] = runner.LORA_DEFAULT_LR  # LoRA has its own default, never the full fine-tune one
     unknown = sorted(set(data) - {f.name for f in dataclasses.fields(TrainSettings)})
     if unknown:
         raise ValueError("Unknown Qwen3-TTS training setting(s): " + ", ".join(unknown) + ".")
@@ -401,11 +406,11 @@ def render_notebook(*, speaker: str = DEFAULT_SPEAKER, folder_name: str = DEFAUL
         f"EPOCHS = {st.epochs}",
         f"LR = {(st.learning_rate if st.train_mode != 'lora' else runner.DEFAULT_LR):g}  # learning rate of a FULL fine-tune (TRAIN_MODE = 'full')",
         "TRAIN_MODE = " + _py(st.train_mode) + "  # 'full': train the whole model (LR). 'lora': train small adapters on a frozen model (LORA_LR); every epoch is still saved as a normal merged checkpoint, plus the adapter. LoRA is UNVERIFIED on a GPU",
-        f"LORA_LR = {(st.learning_rate if st.train_mode == 'lora' else runner.LORA_DEFAULT_LR):g}  # learning rate of a LoRA run. UNCONFIRMED placeholder default, not tuned",
+        f"LORA_LR = {(st.learning_rate if st.train_mode == 'lora' else runner.LORA_DEFAULT_LR):g}  # learning rate of a LoRA run (owner-confirmed 2e-6)",
         f"LORA_RANK = {st.lora_rank}",
         f"LORA_ALPHA = {st.lora_alpha:g}",
         f"LORA_DROPOUT = {st.lora_dropout:g}",
-        f"LORA_SCALE = {runner.LORA_DEFAULT_SCALE:g}  # multiplier on alpha/r when each epoch's adapter is merged into its checkpoint. 1.0 = as trained (unconfirmed); 0.3 is a candidate from another project, not measured here",
+        f"LORA_SCALE = {runner.LORA_DEFAULT_SCALE:g}  # multiplier on alpha/r when each epoch's adapter is merged into its checkpoint. default 0.3 (range 0.0-1.0; warn above 0.5; 0.0 = base model)",
         "SPEAKERS = ''  # several speakers in one model: comma-separated names. Empty: taken from the `speaker` of each clip in the export, else SPEAKER_NAME alone",
         f"FAST_SETUP = {bool(fast_setup)}  # True: clone the Qwen repo and download the models straight into /content and keep pip's cache there (saves minutes of slow Drive reads each session). Your data, codes, checkpoints and logs stay on Drive either way.",
         f"GRAD_ACCUM = {int(grad_accum)}  # micro-batches per update (the script fixes 4). BATCH_SIZE x GRAD_ACCUM = clips per update: 2 x 4 or 4 x 2 both make 8",

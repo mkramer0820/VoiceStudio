@@ -95,8 +95,10 @@ class _MergeBody(BaseModel):
     #: A row of Settings -> Storage -> Model locations. No free path is accepted here.
     location_id: str = Field(..., pattern=r"^[A-Za-z0-9_.-]{1,80}$")
     name: str = Field("", max_length=80)
-    #: Multiplier on alpha/r at merge time. 1.0 = as trained; 0.3 is an unconfirmed candidate.
-    lora_scale: float = Field(1.0, gt=0, le=2)
+    #: Multiplier on alpha/r at merge time. Default 0.3, range 0.0-1.0, warn above 0.5.
+    lora_scale: float = Field(0.3, ge=0.0, le=1.0)
+    #: Must be true: a merge bakes the scale into new weights (the adapter is kept).
+    confirm: bool = False
 
 
 @router.post("/models/merge-adapter")
@@ -105,7 +107,7 @@ async def merge_adapter(body: _MergeBody):
     from engines.fish_api.qwen3_colab_runner import StepFailed
 
     try:
-        return await run_in_threadpool(_reg().merge_adapter_model, body.model_id, body.location_id, body.name, body.lora_scale)
+        return await run_in_threadpool(_reg().merge_adapter_model, body.model_id, body.location_id, body.name, body.lora_scale, None, body.confirm)
     except (ValueError, StepFailed) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except OSError as exc:

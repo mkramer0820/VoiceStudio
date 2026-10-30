@@ -169,7 +169,7 @@ def merge_adapter(base_dir: str, adapter_dir: str, out_dir: str, *, rows: Option
     full fine-tune: ``model.safetensors`` without ``speaker_encoder.*``, ``config.json``, tokenizer files, ``speech_tokenizer/``).
 
     ``rows``/``embeddings`` default to the adapter folder's ``speakers.json`` and ``speaker_embeddings.safetensors``. ``scale`` defaults to
-    ``alpha / r * lora_scale`` (``lora_scale`` 1.0 = as trained; 0.3 is an unconfirmed candidate); the bf16 survival check runs at that scale. Written to a temporary folder and renamed last. Runs on CPU. Returns the merge report."""
+    ``alpha / r * lora_scale`` (``lora_scale`` default 0.3, range 0.0-1.0); the bf16 survival check runs at that scale. Written to a temporary folder and renamed last. Runs on CPU. Returns the merge report."""
     from safetensors.torch import load_file, save_file
 
     adapter_cfg = _read_json(os.path.join(adapter_dir, ADAPTER_CONFIG))

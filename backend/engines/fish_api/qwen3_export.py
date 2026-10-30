@@ -302,6 +302,24 @@ def make_zip(folder: str, archive: str) -> int:
     return count
 
 
+MANIFEST_FILE = "manifest.json"
+
+
+def _manifest(settings, report: dict, speaker: str, n: int, seconds: float, rejected: list) -> dict:
+    """What the importer checks: the training mode this dataset was exported for, the voice, the counts and the parameters."""
+    lora = settings.train_mode == "lora"
+    runner = qwen3_colab.runner
+    return {
+        "format": "voicestudio-qwen3-dataset-1", "training_mode": settings.train_mode, "voice": speaker,
+        "clips": n, "minutes": round(seconds / 60, 2), "rejected": len(rejected),
+        "rejected_by_reason": report["rejected_by_reason"], "qwen_commit": runner.QWEN_COMMIT,
+        "parameters": {"learning_rate": settings.learning_rate, "epochs": settings.epochs, "batch_size": settings.batch_size,
+                       **({"lora_rank": settings.lora_rank, "lora_alpha": settings.lora_alpha, "lora_dropout": settings.lora_dropout,
+                           "inference_lora_scale": runner.LORA_DEFAULT_SCALE, "scale_sweep": list(runner.LORA_SCALE_SWEEP)} if lora else {})},
+        "note": "One export is one voice" + (" and one adapter." if lora else " and one full fine-tune."),
+    }
+
+
 def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_db: Optional[float] = None,
            options: Optional[Options] = None, settings: Optional[qwen3_colab.TrainSettings] = None) -> dict:
     """Write the selected clips of ONE speaker under ``dest/<name>/`` in Qwen3-TTS's format."""
@@ -312,6 +330,8 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     if not raw or not os.path.isabs(raw):
         raise ValueError("Enter the full path of the folder to export into.")
     folder_name = dataset.slug(name, "fish-dataset")
+    if settings.train_mode == "lora" and not folder_name.endswith("_lora"):
+        folder_name += "_lora"  # a LoRA export never lands on (or over) the full fine-tune export of the same name
     out_dir = os.path.join(os.path.normpath(raw), folder_name)
     archive = out_dir + ".zip"
     if os.path.exists(out_dir) and os.listdir(out_dir):
@@ -589,6 +609,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
     _write_jsonl(os.path.join(out_dir, "rejected_samples.jsonl"),
                  [{k: v for k, v in r.items() if k != "key"} for r in rejected])
     _write_text(os.path.join(out_dir, "dataset_report.json"), json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    _write_text(os.path.join(out_dir, MANIFEST_FILE), json.dumps(_manifest(settings, report, speaker, n, seconds, rejected), ensure_ascii=False, indent=2) + "\n")
     zip_name = folder_name + ".zip"
     cmds = qwen3_colab.commands(settings, speaker, folder_name)
     _write_text(os.path.join(out_dir, "training_settings.json"), json.dumps({
@@ -613,7 +634,7 @@ def export(corpus, f: dict, dest: str, *, name: str = "fish-dataset", loudness_d
         "loudness": level_summary,
         "qwen3": {"accepted": n, "rejected": len(rejected), "rejected_by_reason": report["rejected_by_reason"],
                   "reference": ref_info, "warnings": [{"code": w["code"], "message": w["message"]} for w in warnings],
-                  "zip": zipped, "files": ["train.jsonl", "dataset_report.json", "rejected_samples.jsonl", "training_settings.json", *helper],
+                  "zip": zipped, "files": ["train.jsonl", MANIFEST_FILE, "dataset_report.json", "rejected_samples.jsonl", "training_settings.json", *helper],
                   "settings": dataclasses.asdict(settings), "estimate": qwen3_colab.estimate(settings, n),
                   "commands": qwen3_colab.start_commands(speaker, folder_name, zip_name, settings) | {"official": cmds}},
     }

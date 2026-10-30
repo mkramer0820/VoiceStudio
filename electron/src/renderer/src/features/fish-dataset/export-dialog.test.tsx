@@ -409,9 +409,9 @@ describe('Qwen option helpers', () => {
     expect(qwenNumber({ edits: {} }, 'learning_rate')).toBe(2e-6);
     expect(qwenNumber({ mode: 'full', edits: {} }, 'learning_rate')).toBe(QWEN_NUMBERS.learning_rate.def);
     expect(qwenNumber({ mode: 'lora', edits: {} }, 'learning_rate')).toBe(QWEN_LORA_NUMBERS.lora_learning_rate.def);
-    expect(QWEN_LORA_NUMBERS.lora_learning_rate.def).not.toBe(QWEN_NUMBERS.learning_rate.def);
+    expect(QWEN_LORA_NUMBERS.lora_learning_rate.def).toBe(2e-6); // owner-confirmed; its own constant, equal to the full default today
     expect(qwenTrainBody({ mode: 'lora', edits: {} })).toEqual({ train_mode: 'lora' });
-    expect(qwenTrainBody({ mode: 'lora', edits: { learning_rate: '2e-6', lora_rank: '32' } })).toEqual({ train_mode: 'lora', learning_rate: 2e-6, lora_rank: 32 });
+    expect(qwenTrainBody({ mode: 'lora', edits: { learning_rate: '1e-5', lora_rank: '32' } })).toEqual({ train_mode: 'lora', learning_rate: 1e-5, lora_rank: 32 });
     expect(qwenTrainBody({ mode: 'full', edits: { lora_rank: '32', learning_rate: '2e-6' } })).toEqual({}); // LoRA edits never leak into a full run
     expect(qwenTrainInvalid({ mode: 'lora', edits: { lora_rank: '0' } })).toEqual(['lora_rank']);
     expect(qwenTrainInvalid({ mode: 'full', edits: { lora_rank: '0' } })).toEqual([]);
