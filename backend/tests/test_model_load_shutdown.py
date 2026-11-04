@@ -346,6 +346,7 @@ def test_lifespan_shutdown_mid_load_is_clean_and_clears_sentinel(
         monkeypatch.setattr(live_mm, "_model_lock", asyncio.Lock())
         monkeypatch.setattr(live_mm, "_checkpoint_in_local_cache", lambda c: True)
         monkeypatch.setenv("OMNIVOICE_PRELOAD_CAPTURE_ASR", "0")
+        monkeypatch.setenv("OMNIVOICE_PRELOAD_TTS", "1")  # this test is about a preload in flight: preloading is opt-in
         # A fresh import inherits nothing from the previous lifespan, but an
         # in-place one would: arm loads explicitly so a leaked shutdown flag
         # can't make the preload bail before it starts.
@@ -389,6 +390,46 @@ def test_lifespan_shutdown_mid_load_is_clean_and_clears_sentinel(
             assert live_mm.is_shutting_down() is True
         finally:
             release.set()
+            run_sentinel._reset_for_tests()
+
+
+def test_a_default_boot_loads_no_model(monkeypatch, tmp_path):
+    """Nothing is loaded at startup: the TTS model, the dictation ASR and the watermark generator load when first used. Preloading is opt-in
+    (OMNIVOICE_PRELOAD_TTS / _CAPTURE_ASR / _WATERMARK)."""
+    from fastapi import FastAPI
+
+    with _reimported_backend_modules():
+        import main as main_mod
+        from core import run_sentinel
+        from core import device_caps
+        monkeypatch.setattr(device_caps, "detect_host_caps", lambda: types.SimpleNamespace(family="cpu"))
+        live_mm = sys.modules["services.model_manager"]
+        monkeypatch.setattr(run_sentinel, "SENTINEL_PATH", str(tmp_path / "run_sentinel.json"))
+        monkeypatch.setattr(run_sentinel, "CRASH_RECORD_PATH", str(tmp_path / "last_run_crash.json"))
+        monkeypatch.setattr(run_sentinel, "LOG_PATH", str(tmp_path / "omnivoice.log"))
+        run_sentinel._reset_for_tests()
+        for name in ("OMNIVOICE_PRELOAD_TTS", "OMNIVOICE_PRELOAD_CAPTURE_ASR", "OMNIVOICE_PRELOAD_WATERMARK"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(live_mm, "model", None)
+        loads = []
+
+        async def _fake_load():
+            loads.append(1)
+
+        monkeypatch.setattr(live_mm, "_load_model_with_timeout", _fake_load)
+
+        async def scenario():
+            app = FastAPI()
+            async with main_mod.lifespan(app):
+                await asyncio.sleep(0.3)
+                assert app.state.preload_task is None
+                assert app.state.capture_preload_task is None
+                assert getattr(app.state, "watermark_preload_task", None) is None
+
+        try:
+            asyncio.run(scenario())
+            assert loads == [] and live_mm.model is None
+        finally:
             run_sentinel._reset_for_tests()
 
 

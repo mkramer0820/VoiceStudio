@@ -1052,16 +1052,22 @@ async def _phase_b(app: FastAPI) -> None:
         await _await_profile_reconcile(app)
     app.state.idle_task = asyncio.create_task(idle_worker())
     app.state.worker_task = asyncio.create_task(task_manager.worker())
-    # Warm the TTS model in the background so first /generate is instant.
-    async def _preload_after_reconcile():
-        await _await_profile_reconcile(app)
-        await preload_model()
+    # Models load when the user asks for them (a generate, a transcription, a dictation), not at boot: a booted app holds no model in
+    # RAM/VRAM. Opt back in per model with OMNIVOICE_PRELOAD_TTS=1 / OMNIVOICE_PRELOAD_CAPTURE_ASR=1 / OMNIVOICE_PRELOAD_WATERMARK=1
+    # (first request is then instant, at the cost of the memory from launch).
+    app.state.preload_task = None
+    if _env_flag("OMNIVOICE_PRELOAD_TTS", default=False):
+        async def _preload_after_reconcile():
+            await _await_profile_reconcile(app)
+            await preload_model()
 
-    app.state.preload_task = asyncio.create_task(_preload_after_reconcile())
-    # Dictation v2: capture ASR warms in the background BY DEFAULT (~30s
-    # post-boot, skipped under 4 GB free RAM at warm time).
+        app.state.preload_task = asyncio.create_task(_preload_after_reconcile())
+    else:
+        logger.info("TTS model preload is off; the model loads on the first generation (OMNIVOICE_PRELOAD_TTS=1 to load at startup).")
+    # Dictation v2: capture ASR warms in the background only when asked for (OMNIVOICE_PRELOAD_CAPTURE_ASR=1; ~30s post-boot,
+    # skipped under 4 GB free RAM at warm time). Default: it loads on the first dictation.
     app.state.capture_preload_task = None  # only assigned when it runs (#1000 class)
-    if _env_flag("OMNIVOICE_PRELOAD_CAPTURE_ASR", default=True):
+    if _env_flag("OMNIVOICE_PRELOAD_CAPTURE_ASR", default=False):
         async def _preload_capture_asr():
             await asyncio.sleep(_capture_preload_delay_s())
             await _await_profile_reconcile(app)
@@ -1104,7 +1110,7 @@ async def _phase_b(app: FastAPI) -> None:
     # the two cold imports don't contend for the same disk, and no RAM guard
     # is needed. Runs on the watermark pool — where the model is used — not
     # the shared default executor.
-    if _env_flag("OMNIVOICE_PRELOAD_WATERMARK", default=True):
+    if _env_flag("OMNIVOICE_PRELOAD_WATERMARK", default=False):
         async def _preload_watermark():
             await asyncio.sleep(_watermark_preload_delay_s())
             loop = asyncio.get_running_loop()

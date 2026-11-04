@@ -61,3 +61,7 @@ Reference mode fails closed if local installation cannot be verified, including 
 
 When dedicated GPU capacity is unavailable, the planner still considers installed
 CPU-only candidates within the RAM budget. It does not assume GPU models fit.
+
+## Models load on first use
+
+A freshly started backend holds no model in RAM or VRAM: the TTS model, the dictation speech recogniser and the watermark generator load when you first generate, transcribe or dictate, so that first request waits a little longer. To load one at launch instead, set `OMNIVOICE_PRELOAD_TTS=1`, `OMNIVOICE_PRELOAD_CAPTURE_ASR=1` or `OMNIVOICE_PRELOAD_WATERMARK=1` (a download is only allowed for the watermark when it is set explicitly). The Qwen playground and story mode already load their model only when you press render.

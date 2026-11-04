@@ -5,7 +5,12 @@ import { DictationSetup } from './dictation-setup';
 import {
   segTimeRange,
   formatTranscriptExport,
+  formatSegmentsJson,
+  formatSrt,
+  formatTimedText,
+  formatVtt,
   preferredTranscript,
+  timedSegments,
 } from '@shared/utils/transcriptionFormat';
 import { RecordingInputs } from '@/components/recording-inputs';
 import { AgentFixButton } from '@/components/agent-fix-button';
@@ -234,6 +239,19 @@ export function TranscriptionsPage() {
       const result = await saveLocalFile(
         new Blob([text], { type: 'text/plain;charset=utf-8' }),
         `transcriptions_${new Date().toISOString().slice(0, 10)}.txt`,
+      );
+      if (!result.canceled) toast.success(t('transcriptions.exported'));
+    } catch (cause) {
+      toast.error(t('clone.download_failed', { message: describeError(cause) }));
+    }
+  };
+  const exportSegments = async (entry: TranscriptEntry, kind: 'srt' | 'vtt' | 'json' | 'txt') => {
+    try {
+      const text = { srt: formatSrt, vtt: formatVtt, json: formatSegmentsJson, txt: formatTimedText }[kind](entry);
+      const type = kind === 'json' ? 'application/json' : 'text/plain';
+      const result = await saveLocalFile(
+        new Blob([text], { type: `${type};charset=utf-8` }),
+        `transcript_${new Date(entry.timestamp).toISOString().slice(0, 10)}_${entry.id}.${kind === 'txt' ? 'timed.txt' : kind}`,
       );
       if (!result.canceled) toast.success(t('transcriptions.exported'));
     } catch (cause) {
@@ -737,6 +755,24 @@ export function TranscriptionsPage() {
                           {segment.text}
                         </p>
                       ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {timedSegments(selected).length > 0 ? (
+                        (['srt', 'vtt', 'txt', 'json'] as const).map((kind) => (
+                          <Button key={kind} variant="outline" size="sm" onClick={() => void exportSegments(selected, kind)}>
+                            <DownloadIcon />
+                            {t(`transcriptions.export_${kind}`)}
+                          </Button>
+                        ))
+                      ) : (
+                        <>
+                          <Button variant="outline" size="sm" onClick={() => void exportSegments(selected, 'json')}>
+                            <DownloadIcon />
+                            {t('transcriptions.export_json')}
+                          </Button>
+                          <p className="self-center text-xs text-muted-foreground">{t('transcriptions.no_timings')}</p>
+                        </>
+                      )}
                     </div>
                   </details>
                 )}
