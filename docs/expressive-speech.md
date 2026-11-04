@@ -67,6 +67,8 @@ for your engine below.
 
 Pronunciation dictionary matching uses Unicode case-insensitive literal matches. Each matched term uses its own respelling; distinct terms such as Straße and STRASSE can have different respellings. Longer terms win overlaps, and later equal-length case variants retain precedence.
 
+The same dictionary and inline overrides are applied to every way of speaking a line: Generate, audiobooks, Fish Story, the Qwen3-TTS playground and Qwen story mode (Settings → Pronunciation; `OMNIVOICE_PRONUNCIATION=0` turns the dictionary off, inline overrides stay). A respelling has to be spelled the way the engine reads it, so a respelling tuned for Fish may need another form for Qwen3-TTS; per-engine entries are not built, use a language scope or an inline `[[word|respelling]]` where one engine differs.
+
 ### Default engine (VoiceStudio)
 
 **Non-verbal tags.** The bundled model natively tokenizes 13 reaction tags

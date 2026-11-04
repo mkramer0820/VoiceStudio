@@ -446,6 +446,11 @@ def _speaker_key(chunk: Chunk, voice: Optional[str]) -> str:
 
 def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishConfig,
                        default: Optional[str]) -> _RenderRequest:
+    from services.pronunciation import apply_for_render
+
+    def spoken(chunk: Chunk) -> str:  # the pronunciation dictionary, as for every other way of speaking a line
+        return apply_for_render(chunk.text.strip(), draft.settings.language)
+
     voices = tuple(_voice_for(chunk, draft, default) for _, chunk in items)
     speakers = tuple(_speaker_key(chunk, voice) for (_, chunk), voice in zip(items, voices))
     identities: list[tuple[str, Optional[str]]] = []
@@ -455,7 +460,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
             identities.append(identity)
 
     if len(identities) == 1:
-        text = "\n".join(chunk.text.strip() for _, chunk in items)
+        text = "\n".join(spoken(chunk) for _, chunk in items)
         body = client.build_body(text, cfg, reference_id=voices[0], speed=draft.settings.speed)
         return _RenderRequest(tuple(items), body, "single", voices, speakers)
 
@@ -467,7 +472,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
         )
     speaker_index = {identity: i for i, identity in enumerate(identities)}
     tagged = "\n".join(
-        f"<|speaker:{speaker_index[(speaker, voice)]}|>{chunk.text.strip()}"
+        f"<|speaker:{speaker_index[(speaker, voice)]}|>{spoken(chunk)}"
         for (_, chunk), speaker, voice in zip(items, speakers, voices)
     )
     reference_ids = [voice for _, voice in identities if voice is not None]

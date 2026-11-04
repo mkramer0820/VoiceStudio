@@ -439,6 +439,30 @@ def load_entries_from_db() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def enabled() -> bool:
+    """The dictionary is on unless OMNIVOICE_PRONUNCIATION is 0/false/no/off (the same switch the /generate path reads)."""
+    import os
+
+    value = os.environ.get("OMNIVOICE_PRONUNCIATION")
+    return value is None or value.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def apply_for_render(text: str, language: Optional[str] = None) -> str:
+    """The dictionary and the inline [[...]] overrides for engines that do not go through /generate (Fish Story, the Qwen playground and
+    Qwen story mode), so one dictionary covers every way of speaking a line. The same rules as /generate: language entries beat global
+    ones, a disabled dictionary still resolves inline overrides, and an empty dictionary leaves the text byte-identical. A database
+    that cannot be read is an empty dictionary, never a failed render."""
+    if not text:
+        return text or ""
+    if enabled():
+        try:
+            rows = load_entries_from_db()
+        except Exception:  # noqa: BLE001 - table missing or database busy: no entries
+            rows = []
+        return apply_pronunciation(text, rows, language)
+    return apply_inline_overrides(text)
+
+
 def load_dict_for_request(language: Optional[str] = None) -> dict[str, str]:
     """Convenience: DB rows → ``{term: replacement}`` for a request language.
 

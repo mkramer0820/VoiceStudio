@@ -26,6 +26,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from . import registry
+from services.pronunciation import apply_for_render
 
 logger = logging.getLogger("omnivoice.qwen_studio")
 
@@ -405,7 +406,7 @@ def _run(job: dict, req: RunRequest, order: list[tuple[int, int]], models: dict,
                 if take.params.seed is not None and take.repeat > 1:
                     seed += rep - 1
                 started = time.time()
-                tensor = backend.generate(take.text, seed=seed, **common)
+                tensor = backend.generate(apply_for_render(take.text, take.params.language), seed=seed, **common)
                 took = time.time() - started
                 meta = dict(getattr(backend, "last_reply_meta", {}) or {})
                 name = take_filename(index + 1, rep, take.repeat, take.model_id, take.voice, take.label)

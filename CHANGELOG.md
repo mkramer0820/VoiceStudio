@@ -18,6 +18,7 @@ metadata and the backend fallback mirror it.
 - Qwen story: per-voice and per-line voice effects through ffmpeg presets (inner monologue, slight echo, ethereal, ghost, demon, cave, radio, muffled); the effect-free take is kept and a failed effect never loses the line — thanks @mkramer0820!
 
 - Settings -> Credentials now includes the Fish Audio API key (the same encrypted key Fish Story uses), with its source and a remove button — thanks @mkramer0820!
+- The pronunciation dictionary and [[word|respelling]] overrides now also apply in Fish Story, the Qwen3-TTS playground and Qwen story mode — thanks @mkramer0820!
 - No model loads at startup any more: the TTS model, dictation ASR and watermark generator load on first use (opt back in with OMNIVOICE_PRELOAD_TTS / _CAPTURE_ASR / _WATERMARK=1) — thanks @mkramer0820!
 - Transcriptions: export a transcript's segments as SRT, WebVTT, timed text or JSON with start and end times — thanks @mkramer0820!
 - Qwen3-TTS training can condition on --instruct (opt-in checkbox in the export dialog): the clip [tags] become an instruct field trained as the instruction block with 30% dropout, so a fine-tune keeps its voice when an instruct is used (unverified on a GPU) — thanks @mkramer0820!

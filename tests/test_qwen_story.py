@@ -571,3 +571,30 @@ def test_a_failed_effect_keeps_the_dry_take_and_says_why_and_a_working_one_keeps
     entry = {}
     story._apply_effect(job, entry, plain, "002.wav", 24000)
     assert entry == {"effect": "none", "effect_error": None}  # no effect: nothing is touched
+
+
+def test_the_pronunciation_dictionary_reaches_the_qwen_and_fish_render_paths(studio, monkeypatch):
+    from services import pronunciation
+
+    rows = [{"term": "Nyx", "replacement": "Nicks", "type": "respelling", "language": "*", "enabled": 1},
+            {"term": "Zoe", "replacement": "Zo-ee", "type": "respelling", "language": "es", "enabled": 1}]
+    monkeypatch.setattr(pronunciation, "load_entries_from_db", lambda: rows)
+    monkeypatch.delenv("OMNIVOICE_PRONUNCIATION", raising=False)
+    assert pronunciation.apply_for_render("Nyx and Zoe", "Auto") == "Nicks and Zoe"  # a Spanish entry waits for a Spanish line
+    assert pronunciation.apply_for_render("Nyx and Zoe", "Spanish") == "Nicks and Zo-ee"
+    assert pronunciation.apply_for_render("say [[Nyx|nix]]") == "say nix"  # inline override
+    monkeypatch.setenv("OMNIVOICE_PRONUNCIATION", "0")
+    assert pronunciation.apply_for_render("Nyx and [[Zoe|zo]]") == "Nyx and zo"  # off: no dictionary, inline overrides still honoured
+    monkeypatch.setenv("OMNIVOICE_PRONUNCIATION", "1")
+    monkeypatch.setattr(pronunciation, "load_entries_from_db", lambda: (_ for _ in ()).throw(RuntimeError("db locked")))
+    assert pronunciation.apply_for_render("Nyx") == "Nyx"  # an unreadable database is an empty dictionary, not a failed render
+    assert pronunciation.apply_for_render("") == ""
+
+
+def test_story_and_fish_story_render_text_goes_through_the_dictionary():
+    import inspect
+    from engines.fish_api import story_jobs
+
+    assert "apply_for_render(take.text" in inspect.getsource(pg)
+    assert "apply_for_render(chunk.text" in inspect.getsource(story)
+    assert "apply_for_render(chunk.text.strip()" in inspect.getsource(story_jobs)

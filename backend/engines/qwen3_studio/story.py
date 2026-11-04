@@ -28,6 +28,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from . import effects, emotions, playground, profiles, registry
+from services.pronunciation import apply_for_render
 from .emotions import EmotionChoice
 
 logger = logging.getLogger("omnivoice.qwen_studio.story")
@@ -439,7 +440,7 @@ def _run(job: dict, draft: Draft, items: list[dict], settings: dict) -> None:
                     warmed.add(profile["id"])
                 seed = (s.seed + it["index"]) if s.seed is not None else int(time.time() * 1000) % 2**31
                 started = time.time()
-                tensor = backend.generate(chunk.text, seed=seed, **common)
+                tensor = backend.generate(apply_for_render(chunk.text, s.language), seed=seed, **common)
                 took = time.time() - started
                 meta = dict(getattr(backend, "last_reply_meta", {}) or {})
                 version = len(entry["history"]) + 1
