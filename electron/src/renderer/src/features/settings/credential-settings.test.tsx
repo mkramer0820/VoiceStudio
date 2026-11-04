@@ -78,3 +78,27 @@ it('stores DeepL and Microsoft credentials only after an explicit save', async (
     queryKey: ['translation-engines'],
   });
 });
+
+it('shows the Fish Audio key state and stores it through the same endpoint Fish Story uses', async () => {
+  mock.api.mockImplementation((path: string, init?: { method?: string }) => {
+    if (path === '/api/settings/hf-token/state') return Promise.resolve({ active: null, sources: [] });
+    if (path === '/api/fish/key') return Promise.resolve({ has_key: true, stored: true, from_env: false });
+    return Promise.resolve({ ok: true, init });
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <CredentialSettings />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(document.body.textContent).toContain('settings.fish_key_stored'));
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="settings.fish_key_title"]')!;
+  fireEvent.change(input, { target: { value: '  fish-secret-key  ' } });
+  fireEvent.click(within(input.closest('form')!).getByRole('button', { name: 'common.save' }));
+  await waitFor(() =>
+    expect(mock.api).toHaveBeenCalledWith('/api/fish/key', {
+      method: 'PUT',
+      body: JSON.stringify({ api_key: 'fish-secret-key' }),
+    }),
+  );
+});

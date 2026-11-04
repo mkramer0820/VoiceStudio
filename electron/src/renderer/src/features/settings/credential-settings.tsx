@@ -24,6 +24,7 @@ export function CredentialSettings() {
   return (
     <>
       <HuggingFaceToken />
+      <FishAudioKey />
       <TranslationCredentials />
     </>
   );
@@ -178,6 +179,93 @@ export function HuggingFaceToken() {
       )}
       {action.saved && (
         <p role="status" className="p-4 text-sm text-muted-foreground">
+          {t('credentials.saved')}
+        </p>
+      )}
+    </SettingsSection>
+  );
+}
+interface FishKeyState {
+  has_key: boolean;
+  stored: boolean;
+  from_env: boolean;
+}
+/** The Fish Audio API key. The same encrypted secret Fish Story uses, so a key set there shows here and the other way round. */
+export function FishAudioKey() {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  const query = useQuery({
+    queryKey: ['fish-key-state'],
+    queryFn: ({ signal }) => apiJson<FishKeyState>('/api/fish/key', { signal }),
+  });
+  const action = useSettingsAction();
+  const [key, setKey] = useState('');
+  const refresh = async () => {
+    await client.invalidateQueries({ queryKey: ['fish-key-state'] });
+    await client.invalidateQueries({ queryKey: ['engines'] });
+  };
+  const save = () =>
+    action.run(async () => {
+      await apiJson('/api/fish/key', { method: 'PUT', body: JSON.stringify({ api_key: key.trim() }) });
+      setKey('');
+      await refresh();
+    });
+  const remove = () =>
+    action.run(async () => {
+      await apiJson('/api/fish/key', { method: 'DELETE' });
+      await refresh();
+    });
+  const state = query.data;
+  const status = !state
+    ? ''
+    : state.from_env
+      ? t('settings.fish_key_env')
+      : state.stored
+        ? t('settings.fish_key_stored')
+        : t('settings.fish_key_none');
+  return (
+    <SettingsSection icon={KeyRoundIcon} title={t('settings.fish_key_title')}>
+      <p className="p-4 text-sm text-muted-foreground">{t('settings.fish_key_desc')}</p>
+      {status && (
+        <p role="status" className="px-4 pb-2 text-sm">
+          {status}
+        </p>
+      )}
+      <form
+        className="flex flex-wrap gap-2 p-4 pt-0"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (key.trim().length >= 8) void save();
+        }}
+      >
+        <Input
+          type="password"
+          aria-label={t('settings.fish_key_title')}
+          autoComplete="new-password"
+          spellCheck={false}
+          value={key}
+          disabled={action.busy}
+          onChange={(event) => {
+            setKey(event.target.value);
+            action.reset();
+          }}
+        />
+        <Button type="submit" size="sm" disabled={action.busy || key.trim().length < 8}>
+          {t('common.save')}
+        </Button>
+        {state?.stored && (
+          <Button type="button" size="sm" variant="ghost" disabled={action.busy} onClick={() => void remove()}>
+            {t('settings.fish_key_remove')}
+          </Button>
+        )}
+      </form>
+      {(action.error || query.isError) && (
+        <p role="alert" className="px-4 pb-3 text-sm text-destructive">
+          {t('common.error')}
+        </p>
+      )}
+      {action.saved && (
+        <p role="status" className="px-4 pb-3 text-sm text-muted-foreground">
           {t('credentials.saved')}
         </p>
       )}
