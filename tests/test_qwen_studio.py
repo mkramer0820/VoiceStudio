@@ -409,3 +409,47 @@ def test_the_playground_merges_an_adapter_into_a_cache_at_the_chosen_scale(studi
     with pytest.raises(ValueError, match="between 0.0"):
         registry.ensure_merged(adapter, 1.5)
     assert os.path.isfile(os.path.join(adapter["path"], "adapter_model.safetensors"))  # the adapter is never touched
+
+
+# ── one-click install of the Qwen3-TTS environment ──────────────────────
+def test_qwen3_has_a_one_click_install_pinned_to_the_measured_environment():
+    from pathlib import Path
+
+    from services import sidecar_install as si
+
+    spec = si.get_spec("qwen3-narrator")
+    assert spec is not None and not spec.has_source and spec.venv_args == ("--python", "3.11")
+    frozen = Path(__file__).resolve().parents[1].joinpath("backend", "engines", "qwen3_narrator", "requirements.txt").read_text(encoding="utf-8")
+    for pin in (*spec.install_args, *(f"{p}+cu128" for p in spec.torch_pins)):
+        assert pin in frozen, f"{pin} is not in the frozen requirements the engine was measured with"
+
+
+def test_the_install_is_offered_on_a_cuda_host_only(monkeypatch):
+    from services import sidecar_install as si
+
+    spec = si.get_spec("qwen3-narrator")
+    monkeypatch.setattr(si, "_host_family", lambda: "cuda")
+    assert si.host_support(spec)[0] is True and "qwen3-narrator" in si.installable_engine_ids()
+    monkeypatch.setattr(si, "_host_family", lambda: "mps")
+    ok, why = si.host_support(spec)
+    assert ok is False and "NVIDIA" in why and "qwen3-narrator" not in si.installable_engine_ids()
+
+
+def test_the_app_installed_venv_is_used_when_no_python_is_set(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from engines import qwen3_narrator
+
+    fake = tmp_path / "python.exe"
+    fake.write_text("")
+    monkeypatch.delenv(qwen3_narrator.PYTHON_ENV, raising=False)
+    qwen3_narrator.set_python_override(None)
+    monkeypatch.setattr(qwen3_narrator, "managed_python", lambda: Path(fake))
+    assert qwen3_narrator.configured_python() == fake
+    ok, _ = qwen3_narrator.availability(ignore_checkpoint=True)
+    assert ok is True
+    monkeypatch.setenv(qwen3_narrator.PYTHON_ENV, str(tmp_path / "mine.exe"))
+    assert qwen3_narrator.configured_python() == tmp_path / "mine.exe"  # an explicit setting always wins
+    monkeypatch.delenv(qwen3_narrator.PYTHON_ENV)
+    monkeypatch.setattr(qwen3_narrator, "managed_python", lambda: None)
+    assert qwen3_narrator.configured_python() is None

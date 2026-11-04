@@ -38,7 +38,12 @@ def default_python() -> str:
     The sidecar never falls back to any other python: not PATH, not the app's venv, not a system install."""
     root = Path(__file__).resolve().parents[3]
     python = root / ".venv-qwen" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    return str(python) if python.is_file() else ""
+    if python.is_file():
+        return str(python)
+    from engines import qwen3_narrator
+
+    managed = qwen3_narrator.managed_python()  # the venv Settings -> Models -> Install made
+    return str(managed) if managed else ""
 
 
 def effective_python(settings: dict) -> Optional[str]:

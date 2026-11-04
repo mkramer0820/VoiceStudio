@@ -24,6 +24,10 @@ With the Python setting blank, the playground uses `.venv-qwen` if it exists; ot
 
 ## Install
 
+**One click (NVIDIA GPU only):** open **Settings → Models**, find *Qwen3-TTS (faster-qwen3-tts)* and press **Install**. The app makes its own Python 3.11 environment under its data folder (torch 2.8.0+cu128, transformers 5.15.1, accelerate 1.12.0, faster-qwen3-tts 0.5.4, about 8 GB) and the Qwen playground and story mode use it when the Python setting is blank and no `.venv-qwen` exists. The stock Qwen3-TTS models are not downloaded by this button: put the Hugging Face models `Qwen/Qwen3-TTS-12Hz-1.7B-Base` (clone) and `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` (nine stock voices) in the Hugging Face cache or a folder listed in **Settings → Storage → Model locations**. Adding them to the Model Catalogue would change the model-licence registry's pinned set, so it is left to the owner.
+
+**By hand (the same set, in the repo folder):**
+
 ```powershell
 uv venv .venv-qwen --python 3.11
 uv pip install --python .venv-qwen\Scripts\python.exe --index-strategy unsafe-best-match -r backend/engines/qwen3_narrator/requirements.txt

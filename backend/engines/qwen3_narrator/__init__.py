@@ -51,9 +51,20 @@ def set_python_override(path: str | None) -> None:
     _python_override = (path or "").strip() or None
 
 
+MANAGED_ENV = "OMNIVOICE_QWEN3_NARRATOR_DIR"
+
+
+def managed_python() -> Path | None:
+    """The venv the one-click installer made (Settings -> Models -> Install), if it finished."""
+    from services.sidecar_install import engine_venv_python
+
+    return engine_venv_python(MANAGED_ENV)
+
+
 def configured_python() -> Path | None:
+    """The python setting, else the environment variable, else the in-app install."""
     value = (_python_override or os.environ.get(PYTHON_ENV, "")).strip()
-    return Path(value) if value else None
+    return Path(value) if value else managed_python()
 
 
 def configured_checkpoint() -> Path | None:
@@ -66,7 +77,7 @@ def availability(ignore_checkpoint: bool = False) -> tuple[bool, str]:
     ``ignore_checkpoint`` is for callers that name the model per request."""
     python = configured_python()
     if python is None:
-        return False, f"Set {PYTHON_ENV} to the python of the engine's venv (see docs/engines/qwen3-narrator.md)."
+        return False, f"Install Qwen3-TTS from Settings -> Models, or set {PYTHON_ENV} to the python of your own venv (see docs/engines/qwen3-narrator.md)."
     if not python.is_file():
         return False, f"{PYTHON_ENV} points at {python}, which does not exist."
     ckpt = configured_checkpoint()

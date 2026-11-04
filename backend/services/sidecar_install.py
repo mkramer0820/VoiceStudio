@@ -236,6 +236,18 @@ def _dots_installed() -> bool:
     return is_dots_tts_installed()
 
 
+def _qwen3_installed() -> bool:
+    """The one-click Qwen3-TTS venv exists and finished its import probe."""
+    return engine_venv_python("OMNIVOICE_QWEN3_NARRATOR_DIR") is not None
+
+
+def _qwen3_host() -> tuple[bool, str]:
+    """faster-qwen3-tts runs CUDA graphs: an NVIDIA GPU is required (the engine's gpu_compat is cuda only)."""
+    if _host_family() == "cuda":
+        return True, ""
+    return False, "Qwen3-TTS (faster-qwen3-tts) needs an NVIDIA GPU with CUDA."
+
+
 def _host_family() -> str:
     """The accelerator family this host runs, or "cpu" when it cannot tell."""
     try:
@@ -561,6 +573,32 @@ SPECS: dict[str, SidecarSpec] = {
     # leaves torch unpinned, so the pair is pinned here; each build of it was
     # resolved with voxcpm==2.0.3 on 2026-09-10 (Windows and Linux: +cu128 and
     # +cpu; Apple Silicon: plain). Weights download on first synthesis.
+    # faster-qwen3-tts + stock Qwen3-TTS models for the Qwen playground, story mode and the fine-tuned narrator. The pins are the set the
+    # engine was measured in (backend/engines/qwen3_narrator/requirements.txt: torch 2.8.0+cu128, transformers 5.15.1, accelerate 1.12.0,
+    # faster-qwen3-tts 0.5.4 which pulls qwen-tts-hf); the app's own environment is never touched. Models are downloaded from the Model
+    # Catalogue (Qwen/Qwen3-TTS-12Hz-1.7B-Base and -CustomVoice), not here.
+    "qwen3-narrator": SidecarSpec(
+        engine_id="qwen3-narrator",
+        display_name="Qwen3-TTS (faster-qwen3-tts)",
+        repo_url="",
+        tarball_url="",
+        checkout_dirname="qwen3-narrator",
+        env_var="OMNIVOICE_QWEN3_NARRATOR_DIR",
+        probe_module="faster_qwen3_tts",
+        probe_code="import faster_qwen3_tts, qwen_tts, transformers, torch",
+        has_source=False,
+        venv_args=("--python", "3.11"),
+        install_args=("faster-qwen3-tts==0.5.4", "transformers==5.15.1", "accelerate==1.12.0"),
+        torch_pins=("torch==2.8.0", "torchaudio==2.8.0"),
+        docs_path="docs/engines/qwen3-narrator.md",
+        # CUDA torch (~5 GB unpacked) + transformers; the stock models (about 4.5 GB each) are separate catalogue downloads.
+        required_bytes=10 * _GIB,
+        dependency_bytes=8 * _GIB,
+        temporary_free_bytes=8 * _GIB,
+        disk_confidence="estimated",
+        installed_probe=_qwen3_installed,
+        host_supported=_qwen3_host,
+    ),
     "voxcpm2": SidecarSpec(
         engine_id="voxcpm2",
         display_name="VoxCPM2",

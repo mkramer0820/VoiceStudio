@@ -2903,6 +2903,31 @@
         ],
         "identified_components": []
       }
+    },
+    {
+      "id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "license": "apache-2.0",
+      "commercial_use": false,
+      "review_status": "unreviewed",
+      "credit": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "source_url": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "evidence_url": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/blob/fd4b254389122332181a7c3db7f27e918eec64e3/README.md",
+      "revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+      "engines": [
+        "qwen3-narrator"
+      ],
+      "configured_at": "backend/engines/fish_api/qwen3_colab_runner.py",
+      "notes": "Licence identifier is upstream model-card metadata, not verified permission for this distribution. Component terms and attribution text require review.",
+      "runtime_revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+      "runtime_pin_scope": "external",
+      "runtime_pin_source": "backend/engines/fish_api/qwen3_colab_runner.py",
+      "component_closure": "incomplete",
+      "commercial_inference": "unknown",
+      "commercial_outputs": "unknown",
+      "documents": [],
+      "artifacts": [],
+      "required_components": [],
+      "upstream_access": "unknown"
     }
   ],
   "dynamic_assets": [

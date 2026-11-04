@@ -17,7 +17,7 @@ import yaml
 
 _REPO_ID = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.-]+")
 # Native program downloads are audited separately; these are not model weights.
-_PROGRAM_REPOS = {"0xShug0/audio.cpp", "zackees/ffmpeg_bins"}
+_PROGRAM_REPOS = {"0xShug0/audio.cpp", "zackees/ffmpeg_bins", "mjun0812/flash-attention-prebuild-wheels"}
 # A local checkout subdirectory and an SDK alias also match org/model syntax.
 _LOCAL_MODEL_PATHS = {"pretrained_models/Fun-CosyVoice3-0.5B"}
 _MODEL_ALIASES = {
