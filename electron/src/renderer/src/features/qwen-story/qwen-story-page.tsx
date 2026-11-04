@@ -13,6 +13,7 @@ import { selectClass } from './emotion-picker';
 import { ProfileLibrary } from './profile-library';
 import { TagsDialog } from './tags-dialog';
 import {
+  applyEffect,
   applyEmotion,
   applySpeaker,
   characterRows,
@@ -247,6 +248,7 @@ export function QwenStoryPage() {
               onSelectAll={() => setSelected(new Set(s.chunks.map((c) => c.id)))}
               onClear={() => setSelected(new Set())}
               onEmotion={(emotion) => s.setChunks(applyEmotion(s.chunks, selected, emotion))}
+              onEffect={(effect) => s.setChunks(applyEffect(s.chunks, selected, effect))}
               onSpeaker={(speaker) => s.setChunks(applySpeaker(s.chunks, selected, speaker))}
               onRender={() => void s.render([...selected])}
               onRemove={() => {

@@ -16,6 +16,7 @@ import {
   type Profile,
   type ProfileForm,
   type ProfileKind,
+  EFFECT_IDS,
 } from './story-model';
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -155,6 +156,15 @@ function ProfileDialog({
           )}
           <Field label={t('qwenStory.profile_instruct')}>
             <Input value={form.default_instruct} onChange={(e) => set({ default_instruct: e.target.value })} />
+          </Field>
+          <Field label={t('qwenStory.effect_label')}>
+            <select className={`${selectClass} w-full`} value={form.effect} onChange={(e) => set({ effect: e.target.value })}>
+              {EFFECT_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {t(`qwenStory.effect_${id}`)}
+                </option>
+              ))}
+            </select>
           </Field>
           {form.kind === 'clone' && (
             <div>

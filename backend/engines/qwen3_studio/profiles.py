@@ -26,7 +26,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import emotions, playground, registry
+from . import effects, emotions, playground, registry
 
 logger = logging.getLogger("omnivoice.qwen_studio.profiles")
 CLIP_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".webm", ".aac", ".mp4"}
@@ -48,6 +48,7 @@ class ProfileBody(BaseModel):
     ref_text: Optional[str] = Field(None, max_length=5000)  # clone
     xvec_only: bool = False  # clone: speaker embedding only instead of clip + text
     default_instruct: Optional[str] = Field(None, max_length=1000)
+    effect: str = Field(effects.NONE, max_length=20)  # a story-mode voice effect preset (effects.PRESET_IDS) applied to this voice's chunks
     emotion: emotions.EmotionChoice = Field(default_factory=emotions.EmotionChoice)
     temperature: Optional[float] = Field(None, ge=0.05, le=2.0)
     top_k: Optional[int] = Field(None, ge=0, le=500)
@@ -113,6 +114,8 @@ def validate(body: ProfileBody) -> None:
         if not body.xvec_only and not (body.ref_text or "").strip():
             raise ValueError("A clone profile needs the reference text (or tick the speaker-embedding-only option).")
     emotions.instruct_for(body.emotion)  # raises on an unknown preset or strength
+    if not effects.valid(body.effect):
+        raise ValueError(f"Unknown effect {body.effect!r}. Choose one of: {', '.join(effects.PRESET_IDS)}.")
 
 
 def _view(data: dict) -> dict:

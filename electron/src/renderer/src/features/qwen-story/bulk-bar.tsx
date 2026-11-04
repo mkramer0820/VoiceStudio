@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { PlayIcon, Trash2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { EmotionPicker, selectClass } from './emotion-picker';
-import type { Emotion, EmotionCatalog } from './story-model';
+import { EFFECT_IDS, type Emotion, type EmotionCatalog } from './story-model';
 
 /** Actions on the ticked chunks: the same idea as the Fish board (select lines, then apply to all of them). */
 export function BulkBar({
@@ -15,6 +15,7 @@ export function BulkBar({
   onSelectAll,
   onClear,
   onEmotion,
+  onEffect,
   onSpeaker,
   onRender,
   onRemove,
@@ -27,6 +28,7 @@ export function BulkBar({
   onSelectAll: () => void;
   onClear: () => void;
   onEmotion: (emotion: Emotion | null) => void;
+  onEffect: (effect: string | null) => void;
   onSpeaker: (speaker: string | null) => void;
   onRender: () => void;
   onRemove: () => void;
@@ -48,6 +50,24 @@ export function BulkBar({
           {emotion ? t('qwenStory.bulk_apply_emotion') : t('qwenStory.bulk_clear_emotion')}
         </Button>
       </span>
+      <select
+        aria-label={t('qwenStory.bulk_effect')}
+        className={`${selectClass} w-40`}
+        disabled={count === 0}
+        value=""
+        onChange={(e) => {
+          if (e.target.value === '__inherit') onEffect(null);
+          else if (e.target.value) onEffect(e.target.value);
+        }}
+      >
+        <option value="">{t('qwenStory.bulk_effect')}</option>
+        <option value="__inherit">{t('qwenStory.effect_inherit')}</option>
+        {EFFECT_IDS.map((id) => (
+          <option key={id} value={id}>
+            {t(`qwenStory.effect_${id}`)}
+          </option>
+        ))}
+      </select>
       <select
         aria-label={t('qwenStory.bulk_speaker')}
         className={`${selectClass} w-36`}

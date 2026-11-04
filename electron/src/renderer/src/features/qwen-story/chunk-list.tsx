@@ -4,7 +4,7 @@ import { AlertTriangleIcon, LoaderCircleIcon, RotateCcwIcon, Trash2Icon } from '
 import { Button } from '@/components/ui/button';
 import { apiFetch, describeError } from '@/lib/api/client';
 import { EmotionPicker, selectClass } from './emotion-picker';
-import { characterRows, type ChunkResult, type EmotionCatalog, type StoryChunk, type StoryJob } from './story-model';
+import { characterRows, EFFECT_IDS, type ChunkResult, type EmotionCatalog, type StoryChunk, type StoryJob } from './story-model';
 
 // Audio routes are authenticated, so a plain <audio src> cannot reach them: fetch a blob once per file.
 const cache = new Map<string, Promise<string>>();
@@ -106,6 +106,19 @@ export function ChunkList({
                 value={chunk.emotion}
                 onChange={(emotion) => onChange(chunk.id, { emotion })}
               />
+              <select
+                aria-label={t('qwenStory.effect_of', { n: i + 1 })}
+                className={`${selectClass} w-36`}
+                value={chunk.effect ?? ''}
+                onChange={(e) => onChange(chunk.id, { effect: e.target.value || null })}
+              >
+                <option value="">{t('qwenStory.effect_inherit')}</option>
+                {EFFECT_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {t(`qwenStory.effect_${id}`)}
+                  </option>
+                ))}
+              </select>
               <span className="ml-auto flex items-center gap-1">
                 {r?.status === 'running' && <LoaderCircleIcon className="size-4 animate-spin" aria-label={t('qwenStory.rendering')} />}
                 {r?.status === 'queued' && running && <span className="text-muted-foreground">{t('qwenStory.queued')}</span>}
@@ -143,6 +156,12 @@ export function ChunkList({
               <p role="alert" className="flex items-start gap-1 text-amber-500">
                 <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
                 {t('qwenStory.incomplete')}
+              </p>
+            )}
+            {r?.effect_error && (
+              <p role="alert" className="flex items-start gap-1 text-amber-500">
+                <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+                {t('qwenStory.effect_failed', { message: r.effect_error })}
               </p>
             )}
             {(r?.warnings ?? []).map((w) => (

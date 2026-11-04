@@ -497,3 +497,77 @@ def test_a_prepared_embedding_is_keyed_to_the_clip_and_an_imported_one_is_not(st
     assert stale["has_embedding"] is False and profiles.needs_embedding(stale)
     # an imported embedding carries no key and is trusted
     assert profiles.import_embedding(p["id"], raw)["has_embedding"] is True
+
+
+# ── voice effects ────────────────────────────────────────────────────────
+def _tone_wav(path, seconds=1.0, rate=24000):
+    import numpy as np
+    import soundfile as sf
+
+    t = np.linspace(0, seconds, int(rate * seconds), endpoint=False)
+    sf.write(path, (0.3 * np.sin(2 * np.pi * 220 * t)).astype("float32"), rate)
+
+
+def test_effect_choice_is_the_chunks_own_then_the_profiles_and_unknown_names_are_refused(studio, clip):
+    from engines.qwen3_studio import effects
+
+    assert effects.resolve("demon", "ethereal") == "demon" and effects.resolve(None, "ethereal") == "ethereal"
+    assert effects.resolve("none", "ethereal") == "ethereal" and effects.resolve(None, None) == "none"
+    assert effects.valid("inner_monologue") and not effects.valid("wobble")
+    with pytest.raises(ValueError, match="Unknown effect"):
+        effects.filter_chain("wobble", 24000)
+    with pytest.raises(ValueError, match="Unknown effect"):
+        profiles.create(profiles.ProfileBody(name="X", kind="clone", model_id=_models()["base"]["id"], ref_audio=clip, xvec_only=True, effect="wobble"))
+    p = profiles.create(profiles.ProfileBody(name="Ghost", kind="clone", model_id=_models()["base"]["id"], ref_audio=clip, xvec_only=True, effect="ghost"))
+    assert profiles.get(p["id"])["effect"] == "ghost"
+    assert profiles.get(_clone(clip)["id"])["effect"] == "none"  # an old profile or a new one without a choice has no effect
+
+
+def test_every_preset_runs_through_real_ffmpeg_and_keeps_the_sample_rate(tmp_path):
+    from engines.qwen3_studio import effects
+    from services import ffmpeg_utils
+    import soundfile as sf
+
+    ffmpeg = ffmpeg_utils.find_ffmpeg()
+    if not ffmpeg:
+        pytest.skip("no ffmpeg on this machine")
+    src = str(tmp_path / "a.wav")
+    _tone_wav(src)
+    for effect in effects.PRESET_IDS[1:]:
+        out = str(tmp_path / f"{effect}.wav")
+        effects.apply(src, out, effect, 24000, ffmpeg)
+        data, rate = sf.read(out)
+        assert rate == 24000 and len(data) >= 24000 * 0.99, effect
+
+
+def test_a_failed_effect_keeps_the_dry_take_and_says_why_and_a_working_one_keeps_the_dry_copy(studio, tmp_path, monkeypatch):
+    from engines.qwen3_studio import effects
+
+    folder = tmp_path / "run"
+    folder.mkdir()
+    name = "001_narrator_X.wav"
+    _tone_wav(str(folder / name))
+    job = {"id": "j1", "folder": str(folder), "log": []}
+    chunk = story.StoryChunk(id="c1", text="hi", effect="ghost")
+    it = {"index": 1, "chunk": chunk, "profile": {"effect": "none"}}
+    entry: dict = {}
+    monkeypatch.setattr(effects, "apply", lambda src, dst, effect, rate, **k: (_ for _ in ()).throw(RuntimeError("no ffmpeg")))
+    story._apply_effect(job, entry, it, name, 24000)
+    assert entry["effect"] == "ghost" and "no ffmpeg" in entry["effect_error"]
+    assert (folder / name).is_file() and not (folder / "dry" / name).exists()  # the dry take is still the chunk
+    calls = []
+
+    def fake_apply(src, dst, effect, rate, **k):
+        calls.append((os.path.basename(src), effect))
+        import shutil
+        shutil.copyfile(src, dst)
+
+    monkeypatch.setattr(effects, "apply", fake_apply)
+    entry = {}
+    story._apply_effect(job, entry, it, name, 24000)
+    assert entry["effect_error"] is None and calls == [(name, "ghost")]
+    assert (folder / "dry" / name).is_file() and (folder / name).is_file()
+    plain = {"index": 2, "chunk": story.StoryChunk(id="c2", text="hi"), "profile": {}}
+    entry = {}
+    story._apply_effect(job, entry, plain, "002.wav", 24000)
+    assert entry == {"effect": "none", "effect_error": None}  # no effect: nothing is touched

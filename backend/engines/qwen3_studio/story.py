@@ -27,7 +27,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from . import emotions, playground, profiles, registry
+from . import effects, emotions, playground, profiles, registry
 from .emotions import EmotionChoice
 
 logger = logging.getLogger("omnivoice.qwen_studio.story")
@@ -47,6 +47,7 @@ class StoryChunk(BaseModel):
     text: str = Field(..., max_length=20000)
     speaker: Optional[str] = Field(None, max_length=64)  # None = narrator
     emotion: Optional[EmotionChoice] = None  # from an inline tag; wins over the character's emotion
+    effect: Optional[str] = Field(None, max_length=20)  # a voice effect preset for this line; wins over the voice profile's
 
 
 class StorySettings(BaseModel):
@@ -197,6 +198,8 @@ def plan(draft: Draft, models: dict, chunk_ids: Optional[list[str]] = None) -> d
         if profile is None:
             raise ValueError(f"Chunk {index}: profile {pid!r} does not exist (deleted?).")
         cache[pid] = profile
+        if not effects.valid(chunk.effect):
+            raise ValueError(f"Chunk {index}: unknown effect {chunk.effect!r}. Choose one of: {', '.join(effects.PRESET_IDS)}.")
         items.append({"index": index, "chunk": chunk, "profile": profile, "warnings": warn, "emotion": emotion_for(chunk, draft)})
     if not items:
         raise ValueError("There is nothing to render.")
@@ -442,6 +445,7 @@ def _run(job: dict, draft: Draft, items: list[dict], settings: dict) -> None:
                 version = len(entry["history"]) + 1
                 name = chunk_filename(it["index"], chunk.speaker, profile["name"], version)
                 seconds = _save_wav(os.path.join(job["folder"], name), tensor, backend.sample_rate)
+                _apply_effect(job, entry, it, name, backend.sample_rate)
                 entry["history"].append(name)
                 entry.update(status="done", file=name, seed=seed, seconds=round(seconds, 2), gen_seconds=round(took, 2),
                              complete=meta.get("complete"), chunks=meta.get("chunks"), sample_rate=backend.sample_rate)
@@ -464,6 +468,25 @@ def _run(job: dict, draft: Draft, items: list[dict], settings: dict) -> None:
             _persist(job)
         finally:
             playground._run_lock.release()
+
+
+def _apply_effect(job: dict, entry: dict, it: dict, name: str, rate: int) -> None:
+    """Run the chunk's voice effect (its own, else its profile's) over the finished render. The dry take is kept in dry/ so the effect can
+    be changed later; if the effect cannot run, the dry take stays as the chunk and the reason is logged and shown on the chunk."""
+    effect = effects.resolve(it["chunk"].effect, it["profile"].get("effect"))
+    entry["effect"], entry["effect_error"] = effect, None
+    if effect == effects.NONE:
+        return
+    dry_dir = os.path.join(job["folder"], "dry")
+    os.makedirs(dry_dir, exist_ok=True)
+    final, dry = os.path.join(job["folder"], name), os.path.join(dry_dir, name)
+    os.replace(final, dry)
+    try:
+        effects.apply(dry, final, effect, rate)
+    except Exception as exc:  # noqa: BLE001 - a missing ffmpeg or a bad filter must not lose the chunk
+        os.replace(dry, final)
+        entry["effect_error"] = str(exc)
+        _log(job, "WARN", f"Chunk {it['index']}: effect {effect} not applied: {exc}")
 
 
 def stitch(job: dict, s: StorySettings) -> Optional[str]:

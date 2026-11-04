@@ -101,6 +101,14 @@ class _MergeBody(BaseModel):
     confirm: bool = False
 
 
+@router.get("/effects", dependencies=[Depends(reject_cross_site_get)])
+def list_effects():
+    """The voice effect presets story mode can apply (ids; the page translates them)."""
+    from engines.qwen3_studio import effects
+
+    return {"effects": list(effects.PRESET_IDS)}
+
+
 @router.post("/models/merge-adapter")
 async def merge_adapter(body: _MergeBody):
     """Merge a LoRA adapter into its Base model (CPU, a minute or two) and write a normal custom_voice checkpoint."""

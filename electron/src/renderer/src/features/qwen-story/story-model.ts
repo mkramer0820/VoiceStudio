@@ -34,6 +34,7 @@ export interface Profile {
   ref_text: string | null;
   xvec_only: boolean;
   default_instruct: string | null;
+  effect?: string;
   emotion: Emotion;
   temperature: number | null;
   top_k: number | null;
@@ -57,6 +58,7 @@ export interface ProfileForm {
   ref_text: string;
   xvec_only: boolean;
   default_instruct: string;
+  effect: string;
   emotion: Emotion;
   temperature: string;
   top_k: string;
@@ -64,6 +66,9 @@ export interface ProfileForm {
   repetition_penalty: string;
   notes: string;
 }
+
+/** Mirrors backend/engines/qwen3_studio/effects.py PRESET_IDS (the page labels come from qwenStory.effect_<id>). */
+export const EFFECT_IDS = ['none', 'inner_monologue', 'slight_echo', 'ethereal', 'ghost', 'demon', 'cave', 'radio', 'muffled'] as const;
 
 export const NEUTRAL: Emotion = { preset: 'neutral', strength: 'normal' };
 
@@ -78,6 +83,7 @@ export function blankForm(models: QwenModel[]): ProfileForm {
     ref_text: '',
     xvec_only: false,
     default_instruct: '',
+    effect: 'none',
     emotion: { ...NEUTRAL },
     temperature: '',
     top_k: '',
@@ -99,6 +105,7 @@ export function formFromProfile(p: Profile): ProfileForm {
     ref_text: p.ref_text ?? '',
     xvec_only: p.xvec_only,
     default_instruct: p.default_instruct ?? '',
+    effect: p.effect ?? 'none',
     emotion: p.emotion ?? { ...NEUTRAL },
     temperature: num(p.temperature),
     top_k: num(p.top_k),
@@ -123,6 +130,7 @@ export function profileBody(f: ProfileForm) {
     ref_text: clone ? orNull(f.ref_text) : null,
     xvec_only: clone && f.xvec_only,
     default_instruct: orNull(f.default_instruct),
+    effect: f.effect || 'none',
     emotion: f.emotion,
     temperature: numOrNull(f.temperature),
     top_k: numOrNull(f.top_k),
@@ -155,6 +163,8 @@ export interface StoryChunk {
   text: string;
   speaker: string | null;
   emotion: Emotion | null;
+  /** A voice effect preset for this line; null = the voice profile's own. */
+  effect?: string | null;
 }
 
 export interface StorySettings {
@@ -279,6 +289,10 @@ export function idsOfSpeaker(chunks: StoryChunk[], speaker: string | null): stri
   return chunks.filter((c) => c.speaker === speaker).map((c) => c.id);
 }
 
+export function applyEffect(chunks: StoryChunk[], ids: ReadonlySet<string>, effect: string | null): StoryChunk[] {
+  return chunks.map((c) => (ids.has(c.id) ? { ...c, effect } : c));
+}
+
 export function applyEmotion(chunks: StoryChunk[], ids: ReadonlySet<string>, emotion: Emotion | null): StoryChunk[] {
   return chunks.map((c) => (ids.has(c.id) ? { ...c, emotion } : c));
 }
@@ -351,6 +365,9 @@ export interface ChunkResult {
   error?: string | null;
   warnings?: string[];
   complete?: boolean | null;
+  /** The effect that was applied to this render, and why it could not be (the dry take is then the chunk). */
+  effect?: string;
+  effect_error?: string | null;
 }
 
 export interface StoryJob {

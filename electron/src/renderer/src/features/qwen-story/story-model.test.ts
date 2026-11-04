@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { QwenModel } from '../qwen-playground/qwen-model';
 import {
   blankForm,
+  applyEffect,
   applyEmotion,
+  EFFECT_IDS,
   applySpeaker,
   characterRows,
   clearEmotions,
@@ -137,5 +139,23 @@ describe('bulk editing', () => {
     expect(countMatches(chunks, 'rome', true)).toEqual({ matches: 0, lines: 0 });
     expect(findReplace(chunks, 'Rome', 'Paris', true).map((c) => c.text)).toContain('Night in Paris.');
     expect(countMatches(chunks, '.*', false).matches).toBe(0);
+  });
+});
+
+describe('voice effects', () => {
+  it('applies an effect to the selected lines only and clears it with null', () => {
+    const chunks = [
+      { id: 'a', text: 'one', speaker: null, emotion: null },
+      { id: 'b', text: 'two', speaker: null, emotion: null },
+    ];
+    const set = applyEffect(chunks, new Set(['b']), 'ethereal');
+    expect(set.map((c) => c.effect)).toEqual([undefined, 'ethereal']);
+    expect(applyEffect(set, new Set(['b']), null)[1].effect).toBeNull();
+  });
+
+  it('keeps the profile effect in the form round trip and defaults to none', () => {
+    expect(blankForm([]).effect).toBe('none');
+    expect(EFFECT_IDS).toContain('demon');
+    expect(profileBody({ ...blankForm([]), name: 'X', effect: 'ghost' }).effect).toBe('ghost');
   });
 });
