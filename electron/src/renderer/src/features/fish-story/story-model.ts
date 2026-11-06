@@ -44,8 +44,15 @@ export interface StoryDraft {
   voices: Record<string, string>;
   /** speaker name -> Fish voice id */
   cast: Record<string, string>;
+  /** speaker name (NARRATOR_KEY = untagged lines) -> Fish model, so the narrator and the characters can use different models. */
+  cast_models?: Record<string, string>;
   settings: StorySettings;
 }
+
+/** The Fish models the board offers (Fish adds models without a code change: type any id in Settings -> Models). */
+export const FISH_MODELS = ['s2.1-pro', 's2.1-pro-free', 's2-pro', 'drama-3'];
+/** cast_models key for lines without a character tag; mirrors engines/fish_api/story.py NARRATOR_KEY. */
+export const NARRATOR_KEY = '__narrator__';
 
 export type SplitMode = 'lines' | 'paragraphs' | 'sentences';
 

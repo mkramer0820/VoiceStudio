@@ -67,7 +67,7 @@ export interface FishBalance {
   has_free_credit: boolean | null;
 }
 
-const EMPTY: StoryDraft = { title: '', chunks: [], voices: {}, cast: {}, settings: DEFAULT_SETTINGS };
+const EMPTY: StoryDraft = { title: '', chunks: [], voices: {}, cast: {}, cast_models: {}, settings: DEFAULT_SETTINGS };
 
 /**
  * Story-board state. Everything here is local: drafts autosave to the backend's
@@ -117,6 +117,7 @@ export function useFishStory() {
             chunks: saved.chunks ?? [],
             voices: saved.voices ?? {},
             cast: saved.cast ?? {},
+            cast_models: saved.cast_models ?? {},
             settings: { ...DEFAULT_SETTINGS, ...saved.settings },
           });
         }
@@ -210,6 +211,11 @@ export function useFishStory() {
     [edit],
   );
 
+  const setCastModels = useCallback(
+    (cast_models: Record<string, string>) => edit((d) => ({ ...d, cast_models }), false),
+    [edit],
+  );
+
   const setTitle = useCallback((title: string) => edit((d) => ({ ...d, title }), false), [edit]);
 
   const undo = useCallback(() => {
@@ -248,6 +254,7 @@ export function useFishStory() {
         chunks: run.draft.chunks ?? [],
         voices: run.draft.voices ?? {},
         cast: run.draft.cast ?? {},
+        cast_models: run.draft.cast_models ?? {},
         settings: { ...DEFAULT_SETTINGS, ...run.draft.settings },
       });
       return { title: run.draft.title ?? '', lines: run.draft.chunks?.length ?? 0 };
@@ -429,6 +436,7 @@ export function useFishStory() {
     setChunks,
     setSettings,
     setCast,
+    setCastModels,
     setTitle,
     undo,
     newStory,

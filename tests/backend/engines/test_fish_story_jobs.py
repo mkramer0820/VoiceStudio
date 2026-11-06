@@ -344,3 +344,56 @@ def test_rendering_remembers_the_voices_used_under_their_board_names(monkeypatch
     assert rows["vsh"]["alias"] == "sun_2" and rows["vsh"]["lines"] == 1 and rows["vsh"]["uses"] == 1
     assert rows["vsn"]["alias"] == "Snuggle (mine)" and rows["vnar"]["lines"] == 1
     assert all(r["last_used_at"] for r in rows.values()) and job["status"] == "done"
+
+
+# ── a different Fish model per character or line ──────────────────────────
+def _cast_draft(**settings) -> story.Draft:
+    d = _draft(**settings)
+    d.cast = {"Shadow": "vsh", "Snuggle": "vsn"}
+    d.cast_models = {story.NARRATOR_KEY: "s2.1-pro", "Shadow": "drama-3", "Snuggle": "drama-3"}
+    return d
+
+
+def test_model_for_prefers_the_line_then_the_character_then_the_story():
+    d = _cast_draft()
+    assert [story.model_for(c, d, "s2-pro") for c in d.chunks] == ["drama-3", "s2.1-pro", "drama-3"]
+    d.chunks[0].model = "s2.1-pro-free"  # a line's own model wins over its character's
+    assert story.model_for(d.chunks[0], d, "s2-pro") == "s2.1-pro-free"
+    d.cast_models = {}
+    assert story.model_for(d.chunks[1], d, "s2-pro") == "s2-pro"  # nothing mapped: the story's model
+
+
+def test_each_call_goes_out_with_its_own_model_and_a_multi_speaker_call_never_mixes_models(monkeypatch):
+    sent = []
+
+    def fake(body, *, api_key, cfg, transport=None, sleep=None, meta=None):
+        sent.append((cfg.model, body["text"]))
+        return _wav()
+
+    monkeypatch.setattr(client, "synthesize", fake)
+    started = story_jobs.start_render(_cast_draft(request_mode="multi"))
+    job = _wait(started["id"])
+    assert job["status"] == "done"
+    # a (drama-3) | b (s2.1-pro) | c (drama-3): three calls, because one call has one model
+    assert sorted(m for m, _ in sent) == ["drama-3", "drama-3", "s2.1-pro"]
+    assert {c["id"]: c["model"] for c in job["chunks"]} == {"a": "drama-3", "b": "s2.1-pro", "c": "drama-3"}
+
+
+def test_adjacent_lines_on_one_model_still_share_a_multi_speaker_call(monkeypatch):
+    d = _cast_draft(request_mode="multi")
+    d.chunks[1].model = "drama-3"  # now all three lines are drama-3
+    plan = story_jobs.preview(d)
+    assert plan["total_requests"] == 1 and plan["requests"][0]["model"] == "drama-3"
+
+
+def test_the_preview_and_plan_show_the_models_and_still_work_without_any_mapping(monkeypatch):
+    plan = story.plan(_cast_draft())
+    assert plan["models"] == {"drama-3": 2, "s2.1-pro": 1}
+    shown = story_jobs.preview(_cast_draft())
+    assert [r["model"] for r in shown["requests"]] == ["drama-3", "s2.1-pro", "drama-3"] and 'model: drama-3' in shown["curl"]
+    plain = story_jobs.preview(_draft())
+    assert {r["model"] for r in plain["requests"]} == {story.effective_config(story.StorySettings()).model}
+    bad = _draft()
+    bad.chunks[0].model = "not a model!"
+    with pytest.raises(Exception):
+        story.Draft.model_validate(bad.model_dump())

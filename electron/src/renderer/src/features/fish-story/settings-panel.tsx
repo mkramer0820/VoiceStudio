@@ -4,10 +4,10 @@ import { Button } from '@/components/ui/button';
 import { getBridge } from '@/components/bridge';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import type { StorySettings } from './story-model';
+import { FISH_MODELS, type StorySettings } from './story-model';
 import type { FishDefaults } from './use-fish-story';
 
-const MODELS = ['s2.1-pro', 's2.1-pro-free', 's2-pro', 'drama-3'];
+const MODELS = FISH_MODELS;
 const FORMATS = ['wav', 'pcm', 'mp3', 'opus'] as const;
 const SAMPLE_RATES = [24000, 32000, 44100, 48000];
 const BITRATES = [64, 128, 192] as const;

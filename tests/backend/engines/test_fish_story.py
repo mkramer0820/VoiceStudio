@@ -374,3 +374,14 @@ def test_manifest_records_the_speaker_for_each_line(monkeypatch):
     job = _wait(story_jobs.start_render(draft)["id"])
     with open(os.path.join(job["out_dir"], "manifest.json"), encoding="utf-8") as fh:
         assert json.load(fh)["chunks"][0]["speaker"] == "Shadow"
+
+
+def test_a_draft_keeps_its_per_character_models_when_saved_and_loaded(tmp_path, monkeypatch):
+    from engines.fish_api import story
+
+    monkeypatch.setattr(story, "_store_dir", lambda: str(tmp_path))
+    draft = story.Draft(title="Models", chunks=[story.Chunk(id="a", text="Hi", speaker="Shadow", model="drama-3")],
+                        cast_models={story.NARRATOR_KEY: "s2.1-pro", "Shadow": "drama-3"})
+    saved = story.save_draft(story.new_draft_id(), draft)
+    loaded = story.load_draft(saved["id"])
+    assert loaded["cast_models"] == {story.NARRATOR_KEY: "s2.1-pro", "Shadow": "drama-3"} and loaded["chunks"][0]["model"] == "drama-3"

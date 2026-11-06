@@ -189,10 +189,13 @@ export function FishStoryPage() {
         chunks={draft.chunks}
         voiceNames={draft.voices}
         cast={draft.cast}
+        castModels={draft.cast_models ?? {}}
+        defaultModel={draft.settings.model ?? story.defaults?.model ?? 's2.1-pro'}
         narrator={draft.settings.default_voice ?? null}
         inheritedNarrator={story.defaults?.reference_id ?? null}
         onChunks={(next) => setChunks(next)}
         onCast={story.setCast}
+        onCastModels={story.setCastModels}
         onNarrator={(voice) => story.setSettings({ default_voice: voice })}
       />
 

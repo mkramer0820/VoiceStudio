@@ -3621,6 +3621,8 @@
     "tags_desc": "Turn script tags like [Shadow] into voices, and rewrite delivery tags like [slow] or [pause]. Nothing is sent to Fish.",
     "narrator": "Narrator (default voice)",
     "narrator_hint": "Used for narration and for every line with no speaker tag.",
+    "narrator_model": "Mô hình người dẫn",
+    "speaker_model": "Mô hình của {{name}}",
     "speakers": "Characters",
     "speakers_hint": "Names found in [brackets] at the start of lines. Choose a voice for each, then apply.",
     "speakers_none": "No character tags found. Tags that start a line with a capital letter, like [Shadow], are treated as characters.",

@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { StoryChunk } from './story-model';
+import { FISH_MODELS, NARRATOR_KEY, type StoryChunk } from './story-model';
 import {
   applyCast,
   countMatches,
@@ -39,16 +39,34 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
+function ModelSelect({ label, value, inherit, onChange }: { label: string; value: string; inherit: string; onChange: (model: string) => void }) {
+  // A model the board does not list (set by hand or by a newer Fish) stays selectable so it is never silently dropped.
+  const options = value && !FISH_MODELS.includes(value) ? [...FISH_MODELS, value] : FISH_MODELS;
+  return (
+    <select aria-label={label} className={`${selectClass} w-40`} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{inherit}</option>
+      {options.map((m) => (
+        <option key={m} value={m}>
+          {m}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function TagsDialog({
   open,
   onOpenChange,
   chunks,
   voiceNames,
   cast,
+  castModels,
+  defaultModel,
   narrator,
   inheritedNarrator,
   onChunks,
   onCast,
+  onCastModels,
   onNarrator,
 }: {
   open: boolean;
@@ -56,15 +74,26 @@ export function TagsDialog({
   chunks: StoryChunk[];
   voiceNames: Record<string, string>;
   cast: Record<string, string>;
+  /** speaker (or NARRATOR_KEY) -> Fish model; missing = the story's model. */
+  castModels: Record<string, string>;
+  /** The story's model, shown as the "inherit" choice. */
+  defaultModel: string;
   /** The story's default voice: narration and any line without a speaker. */
   narrator: string | null;
   /** The default from Settings (shown as the "default" choice). */
   inheritedNarrator: string | null;
   onChunks: (next: StoryChunk[]) => void;
   onCast: (next: Record<string, string>) => void;
+  onCastModels: (next: Record<string, string>) => void;
   onNarrator: (voice: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const setModel = (key: string, model: string) => {
+    const next = { ...castModels };
+    if (model) next[key] = model;
+    else delete next[key];
+    onCastModels(next);
+  };
   const [kinds, setKinds] = useState<TagKinds>({});
   const [strip, setStrip] = useState(true);
   const [carry, setCarry] = useState(false);
@@ -140,6 +169,12 @@ export function TagsDialog({
                 </option>
               ))}
             </select>
+            <ModelSelect
+              label={t('fishStory.narrator_model')}
+              value={castModels[NARRATOR_KEY] ?? ''}
+              inherit={t('fishStory.inherit', { value: defaultModel })}
+              onChange={(m) => setModel(NARRATOR_KEY, m)}
+            />
           </Section>
 
           <Section title={t('fishStory.speakers')} hint={t('fishStory.speakers_hint')}>
@@ -173,6 +208,12 @@ export function TagsDialog({
                         </option>
                       ))}
                     </select>
+                    <ModelSelect
+                      label={t('fishStory.speaker_model', { name })}
+                      value={castModels[name] ?? ''}
+                      inherit={t('fishStory.inherit', { value: defaultModel })}
+                      onChange={(m) => setModel(name, m)}
+                    />
                     {info.tagged > 0 && (
                       <Button
                         size="xs"

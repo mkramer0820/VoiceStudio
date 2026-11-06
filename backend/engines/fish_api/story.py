@@ -20,6 +20,8 @@ from .config import FishConfig, load_config
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 VOICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+NARRATOR_KEY = "__narrator__"  # cast_models key for lines without a character tag
 
 
 class StorySettings(BaseModel):
@@ -65,6 +67,7 @@ class Chunk(BaseModel):
     text: str = Field(..., max_length=20000)
     voice: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
     speaker: Optional[str] = Field(None, max_length=64)  # [Name] tag this line came from
+    model: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_.-]{1,64}$")  # a Fish model for this line only (wins over the character's)
 
 
 class Draft(BaseModel):
@@ -72,6 +75,9 @@ class Draft(BaseModel):
     chunks: list[Chunk] = Field(default_factory=list, max_length=3000)
     voices: dict[str, str] = Field(default_factory=dict, max_length=300)  # voice id -> display name
     cast: dict[str, str] = Field(default_factory=dict, max_length=300)  # speaker name -> voice id
+    # speaker name (or NARRATOR_KEY for untagged lines) -> Fish model, e.g. the narrator on s2.1-pro and the characters on drama-3.
+    # Empty = every line uses the story's model (settings.model, Settings, env).
+    cast_models: dict[str, Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")]] = Field(default_factory=dict, max_length=300)
     settings: StorySettings = Field(default_factory=StorySettings)
 
 
@@ -116,6 +122,13 @@ def check_request(body: dict) -> list[str]:
     except ValidationError as exc:
         return [f"{'.'.join(str(p) for p in e['loc']) or 'body'}: {e['msg']}" for e in exc.errors()]
     return []
+
+
+def model_for(chunk: "Chunk", draft: "Draft", default_model: str) -> str:
+    """The Fish model one line is spoken with: its own, else its character's (the narrator's for an untagged line), else the story's."""
+    return (chunk.model
+            or draft.cast_models.get(chunk.speaker if chunk.speaker else NARRATOR_KEY)
+            or default_model)
 
 
 def effective_config(settings: StorySettings) -> FishConfig:
@@ -194,11 +207,14 @@ def plan(draft: Draft) -> dict:
     per_voice: dict[str, dict] = {}
     unassigned = empty = 0
     chars = nbytes = 0
+    per_model: dict[str, int] = {}
     for c in draft.chunks:
         text = c.text.strip()
         if not text:
             empty += 1
             continue
+        used = model_for(c, draft, cfg.model)
+        per_model[used] = per_model.get(used, 0) + 1
         chars += len(text)
         nbytes += len(text.encode("utf-8"))
         mapped = draft.cast.get(c.speaker) if c.speaker else None
@@ -210,7 +226,7 @@ def plan(draft: Draft) -> dict:
         slot["chunks"] += 1
         slot["chars"] += len(text)
     warnings = []
-    if draft.settings.request_mode == "multi" and cfg.model == "s1":
+    if draft.settings.request_mode == "multi" and "s1" in (per_model or {cfg.model: 1}):
         warnings.append("multi_speaker_model")
     if unassigned and not default:
         warnings.append("unassigned_no_default")
@@ -219,7 +235,7 @@ def plan(draft: Draft) -> dict:
     return {
         "chunks": len(draft.chunks) - empty, "empty": empty, "chars": chars, "bytes": nbytes,
         "unassigned": unassigned, "voices": per_voice, "warnings": warnings,
-        "model": cfg.model, "format": cfg.format, "sample_rate": cfg.sample_rate,
+        "model": cfg.model, "models": per_model, "format": cfg.format, "sample_rate": cfg.sample_rate,
         "max_concurrency": cfg.max_concurrency, "request_mode": draft.settings.request_mode,
     }
 

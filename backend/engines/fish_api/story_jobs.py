@@ -34,7 +34,7 @@ from typing import Optional
 from . import client
 from . import library as voice_library
 from .config import FishConfig, load_config, resolve_api_key, setting_source
-from .story import Chunk, Draft, effective_config
+from .story import Chunk, Draft, effective_config, model_for
 from .story import check_request as story_check
 
 logger = logging.getLogger("omnivoice.fish_api.story_jobs")
@@ -399,10 +399,10 @@ def _new_job(run_dir: str, draft: Draft, draft_id: Optional[str], cfg: FishConfi
     }
 
 
-def _chunk_entry(index: int, chunk: Chunk, default: Optional[str], names: dict) -> dict:
+def _chunk_entry(index: int, chunk: Chunk, default: Optional[str], names: dict, model: Optional[str] = None) -> dict:
     voice = chunk.voice or default
     return {"id": chunk.id, "index": index, "status": "queued", "file": None, "error": None,
-            "speaker": chunk.speaker, "voice": voice, "voice_name": names.get(voice or "", voice),
+            "speaker": chunk.speaker, "voice": voice, "voice_name": names.get(voice or "", voice), "model": model,
             "attempts": 0, "elapsed_ms": 0, "bytes": 0, "sha256": None, "duration_s": None,
             "sample_rate": None}
 
@@ -431,6 +431,7 @@ class _RenderRequest:
     mode: str
     voices: tuple[Optional[str], ...]
     speakers: tuple[str, ...]
+    model: str = ""  # the Fish model this call is made with (every line in it shares it)
 
 
 def _voice_for(chunk: Chunk, draft: Draft, default: Optional[str]) -> Optional[str]:
@@ -451,6 +452,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
     def spoken(chunk: Chunk) -> str:  # the pronunciation dictionary, as for every other way of speaking a line
         return apply_for_render(chunk.text.strip(), draft.settings.language)
 
+    model = model_for(items[0][1], draft, cfg.model)
     voices = tuple(_voice_for(chunk, draft, default) for _, chunk in items)
     speakers = tuple(_speaker_key(chunk, voice) for (_, chunk), voice in zip(items, voices))
     identities: list[tuple[str, Optional[str]]] = []
@@ -462,7 +464,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
     if len(identities) == 1:
         text = "\n".join(spoken(chunk) for _, chunk in items)
         body = client.build_body(text, cfg, reference_id=voices[0], speed=draft.settings.speed)
-        return _RenderRequest(tuple(items), body, "single", voices, speakers)
+        return _RenderRequest(tuple(items), body, "single", voices, speakers, model)
 
     missing = next((index for (index, _), voice in zip(items, voices) if not voice), None)
     if missing is not None:
@@ -477,7 +479,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
     )
     reference_ids = [voice for _, voice in identities if voice is not None]
     body = client.build_body(tagged, cfg, reference_id=reference_ids, speed=draft.settings.speed)
-    return _RenderRequest(tuple(items), body, "multi", voices, speakers)
+    return _RenderRequest(tuple(items), body, "multi", voices, speakers, model)
 
 
 def _render_requests(draft: Draft, cfg: FishConfig,
@@ -489,6 +491,10 @@ def _render_requests(draft: Draft, cfg: FishConfig,
     requests: list[_RenderRequest] = []
     pending: list[tuple[int, Chunk]] = []
     for item in items:
+        if pending and model_for(pending[0][1], draft, cfg.model) != model_for(item[1], draft, cfg.model):
+            # One call has one model: lines for another model start a new call.
+            requests.append(_request_for_group(pending, draft, cfg, default))
+            pending = []
         combined = [*pending, item]
         # Reserve enough room for one speaker tag and newline per line before
         # compiling the group. This can split slightly early, but never creates
@@ -602,7 +608,7 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
         rows.append({"extras": sorted(set(body) - MINIMAL_FIELDS),
                      "index": index, "indices": [i for i, _ in request.items],
                      "id": _request_id(request), "ids": [c.id for _, c in request.items],
-                     "mode": request.mode,
+                     "mode": request.mode, "model": request.model or cfg.model,
                      "speaker": chunk.speaker, "speakers": list(request.speakers),
                      "voice": request.voices[0] if request.mode == "single" else list(request.voices),
                      "voice_name": (draft.voices.get(request.voices[0] or "", request.voices[0])
@@ -623,7 +629,7 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
         curl = cont.join([
             f"curl -X POST {cfg.base_url}/v1/tts",
             '-H "Authorization: Bearer $FISH_API_KEY"',
-            f'-H "model: {cfg.model}"',
+            f'-H "model: {first["model"]}"',
             '-H "Content-Type: application/json"',
             "-d '" + json.dumps(first["body"], ensure_ascii=False).replace("'", "'\\''") + "'",
             "--output line.wav",
@@ -673,7 +679,7 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
     _claim_story_dir(story_dir, draft_id)
     run_dir = os.path.join(story_dir, _next_run_name(story_dir, job_id))
     os.makedirs(run_dir, exist_ok=True)
-    entries = [_chunk_entry(i, c, _voice_for(c, draft, default), draft.voices) for i, c in items]
+    entries = [_chunk_entry(i, c, _voice_for(c, draft, default), draft.voices, model_for(c, draft, cfg.model)) for i, c in items]
     by_id = {entry["id"]: entry for entry in entries}
     for request in requests:
         request_id = _request_id(request)
@@ -699,7 +705,7 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
             used[entry["voice"]] = used.get(entry["voice"], 0) + 1
     voice_library.record_use(used, draft.voices)
     _log(job, "INFO", f"Started: {len(items)} lines in {len(requests)} {draft.settings.request_mode} "
-                      f"request(s), model {cfg.model}, {cfg.format} "
+                      f"request(s), model {', '.join(sorted({e['model'] or cfg.model for e in entries}))}, {cfg.format} "
                       f"{cfg.sample_rate} Hz, {cfg.max_concurrency} at a time.")
     _persist(job)
     threading.Thread(target=_run, args=(job, requests, draft, cfg, api_key),
@@ -785,7 +791,7 @@ def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfi
             "request": body,
         }
         try:
-            raw = client.synthesize(body, api_key=api_key, cfg=cfg, meta=meta)
+            raw = client.synthesize(body, api_key=api_key, cfg=dataclasses.replace(cfg, model=request.model or cfg.model), meta=meta)
             name = _request_audio_name(request, draft, ext)
             with open(os.path.join(job["out_dir"], name), "wb") as fh:
                 fh.write(raw)
