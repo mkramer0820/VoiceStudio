@@ -16,8 +16,8 @@ import {
   type Profile,
   type ProfileForm,
   type ProfileKind,
-  EFFECT_IDS,
 } from './story-model';
+import { effectLabel, useEffects } from './effects-model';
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -44,6 +44,7 @@ function ProfileDialog({
   onTranscribe: (file: File) => Promise<string>;
 }) {
   const { t } = useTranslation();
+  const effectList = useEffects();
   const [clip, setClip] = useState<File | null>(null);
   const [clipUrl, setClipUrl] = useState('');
   const [transcribing, setTranscribing] = useState(false);
@@ -159,9 +160,9 @@ function ProfileDialog({
           </Field>
           <Field label={t('qwenStory.effect_label')}>
             <select className={`${selectClass} w-full`} value={form.effect} onChange={(e) => set({ effect: e.target.value })}>
-              {EFFECT_IDS.map((id) => (
-                <option key={id} value={id}>
-                  {t(`qwenStory.effect_${id}`)}
+              {effectList.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {effectLabel(t, e)}
                 </option>
               ))}
             </select>

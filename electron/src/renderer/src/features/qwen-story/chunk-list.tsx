@@ -4,7 +4,8 @@ import { AlertTriangleIcon, LoaderCircleIcon, RotateCcwIcon, Trash2Icon } from '
 import { Button } from '@/components/ui/button';
 import { apiFetch, describeError } from '@/lib/api/client';
 import { EmotionPicker, selectClass } from './emotion-picker';
-import { characterRows, EFFECT_IDS, type ChunkResult, type EmotionCatalog, type StoryChunk, type StoryJob } from './story-model';
+import { effectLabel, useEffects } from './effects-model';
+import { characterRows, type ChunkResult, type EmotionCatalog, type StoryChunk, type StoryJob } from './story-model';
 
 // Audio routes are authenticated, so a plain <audio src> cannot reach them: fetch a blob once per file.
 const cache = new Map<string, Promise<string>>();
@@ -69,6 +70,7 @@ export function ChunkList({
   onRerender: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const effectList = useEffects();
   const speakers = characterRows(chunks).flatMap((r) => (r.name ? [r.name] : []));
   const result = (id: string): ChunkResult | undefined => job?.chunks.find((c) => c.id === id);
   return (
@@ -113,9 +115,9 @@ export function ChunkList({
                 onChange={(e) => onChange(chunk.id, { effect: e.target.value || null })}
               >
                 <option value="">{t('qwenStory.effect_inherit')}</option>
-                {EFFECT_IDS.map((id) => (
-                  <option key={id} value={id}>
-                    {t(`qwenStory.effect_${id}`)}
+                {effectList.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {effectLabel(t, e)}
                   </option>
                 ))}
               </select>

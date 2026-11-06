@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { PlayIcon, Trash2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { EmotionPicker, selectClass } from './emotion-picker';
-import { EFFECT_IDS, type Emotion, type EmotionCatalog } from './story-model';
+import { effectLabel, useEffects } from './effects-model';
+import type { Emotion, EmotionCatalog } from './story-model';
 
 /** Actions on the ticked chunks: the same idea as the Fish board (select lines, then apply to all of them). */
 export function BulkBar({
@@ -35,6 +36,7 @@ export function BulkBar({
 }) {
   const { t } = useTranslation();
   const [emotion, setEmotion] = useState<Emotion | null>(null);
+  const effectList = useEffects();
   return (
     <div role="toolbar" aria-label={t('qwenStory.bulk_title')} className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card/30 p-2 text-xs">
       <span className="font-medium">{t('qwenStory.selected_count', { count })}</span>
@@ -62,9 +64,9 @@ export function BulkBar({
       >
         <option value="">{t('qwenStory.bulk_effect')}</option>
         <option value="__inherit">{t('qwenStory.effect_inherit')}</option>
-        {EFFECT_IDS.map((id) => (
-          <option key={id} value={id}>
-            {t(`qwenStory.effect_${id}`)}
+        {effectList.filter((e) => e.id !== 'none').map((e) => (
+          <option key={e.id} value={e.id}>
+            {effectLabel(t, e)}
           </option>
         ))}
       </select>

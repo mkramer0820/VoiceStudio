@@ -12,6 +12,7 @@ import { ChunkAudio, ChunkList } from './chunk-list';
 import { selectClass } from './emotion-picker';
 import { ProfileLibrary } from './profile-library';
 import { TagsDialog } from './tags-dialog';
+import { EffectsDialog } from './effects-dialog';
 import {
   applyEffect,
   applyEmotion,
@@ -38,6 +39,7 @@ export function QwenStoryPage() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [effectsOpen, setEffectsOpen] = useState(false);
   const speakers = characterRows(s.chunks).flatMap((r) => (r.name ? [r.name] : []));
   const select = (id: string, on: boolean, range: boolean) => {
     const ids = range && anchor ? idsBetween(s.chunks, anchor, id) : [id];
@@ -259,9 +261,13 @@ export function QwenStoryPage() {
             <Button size="sm" variant="outline" onClick={() => setTagsOpen(true)}>
               <TagsIcon /> {t('qwenStory.tags_open')}
             </Button>
+            <Button size="sm" variant="outline" onClick={() => setEffectsOpen(true)}>
+              <WandSparklesIcon /> {t('qwenStory.effects_open')}
+            </Button>
           </div>
         )}
         <TagsDialog open={tagsOpen} onOpenChange={setTagsOpen} draft={draft} onDraft={s.applyDraft} />
+        <EffectsDialog open={effectsOpen} onOpenChange={setEffectsOpen} />
         <ChunkList
           selected={selected}
           onSelect={select}

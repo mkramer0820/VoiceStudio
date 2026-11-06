@@ -515,7 +515,7 @@ def test_effect_choice_is_the_chunks_own_then_the_profiles_and_unknown_names_are
     assert effects.resolve("none", "ethereal") == "ethereal" and effects.resolve(None, None) == "none"
     assert effects.valid("inner_monologue") and not effects.valid("wobble")
     with pytest.raises(ValueError, match="Unknown effect"):
-        effects.filter_chain("wobble", 24000)
+        effects.apply("a.wav", "b.wav", "wobble", 24000)
     with pytest.raises(ValueError, match="Unknown effect"):
         profiles.create(profiles.ProfileBody(name="X", kind="clone", model_id=_models()["base"]["id"], ref_audio=clip, xvec_only=True, effect="wobble"))
     p = profiles.create(profiles.ProfileBody(name="Ghost", kind="clone", model_id=_models()["base"]["id"], ref_audio=clip, xvec_only=True, effect="ghost"))
@@ -596,5 +596,61 @@ def test_story_and_fish_story_render_text_goes_through_the_dictionary():
     from engines.fish_api import story_jobs
 
     assert "apply_for_render(take.text" in inspect.getsource(pg)
-    assert "apply_for_render(chunk.text" in inspect.getsource(story)
+    assert 'apply_for_render(it["text"]' in inspect.getsource(story)
     assert "apply_for_render(chunk.text.strip()" in inspect.getsource(story_jobs)
+
+
+def test_you_can_add_edit_and_delete_your_own_effect_and_the_checks_refuse_unsafe_graphs(studio):
+    from engines.qwen3_studio import effects
+
+    made = effects.save({"label": "Telepathy 2", "kind": "chain", "graph": "volume=-3dB,aecho=0.8:0.6:40:0.3", "aliases": ["Mind Link"]})
+    assert made["id"] == "telepathy_2" and effects.valid("telepathy_2") and not made["builtin"]
+    assert effects.extract_tags("{mind link} stay close")[:2] == ("stay close", "telepathy_2")
+    assert effects.save({"label": "Telepathy 3", "graph": "volume=-4dB"}, existing_id="telepathy_2")["graph"] == "volume=-4dB"
+    for bad in ({"label": "x", "graph": "amovie=/etc/passwd"}, {"label": "x", "graph": "volume=1", "codec": "mp3"},
+                {"label": "x", "kind": "graph", "graph": "[0:a]volume=1"}, {"label": "Echo", "graph": "volume=1", "aliases": ["echo"]},
+                {"label": "Inner monologue", "graph": "volume=1"}, {"label": "", "graph": "volume=1"}):
+        with pytest.raises(ValueError):
+            effects.save(bad)
+    with pytest.raises(KeyError):
+        effects.save({"label": "n", "graph": "volume=1"}, existing_id="inner_monologue")  # a built-in cannot be edited
+    assert effects.delete("telepathy_2") and not effects.delete("telepathy_2") and not effects.valid("telepathy_2")
+
+
+def test_the_effect_test_runs_ffmpeg_on_a_tone_and_reports_a_bad_graph(studio):
+    from engines.qwen3_studio import effects
+    from services import ffmpeg_utils
+
+    if not ffmpeg_utils.find_ffmpeg():
+        pytest.skip("no ffmpeg on this machine")
+    ok = effects.test({"label": "t", "kind": "chain", "graph": "volume=-3dB"})
+    assert ok["ok"] and ok["channels"] == 1
+    assert effects.test({"id": "inner_monologue"}) == {"ok": True, "channels": 2, "error": None}  # the built-in stereo recipe
+    bad = effects.test({"label": "t", "kind": "chain", "graph": "nosuchfilter"})
+    assert not bad["ok"] and "filter" in bad["error"].lower()
+
+
+def test_effect_tags_are_stripped_before_the_model_and_set_the_effect(studio):
+    parsed = story.parse_script("[Anna] {Internal} I should not be here.\n\n{Internal}\nWhat if they know?\nThey do.\n\nPlain narration.")
+    assert [(c["speaker"], c["text"], c["effect"]) for c in parsed] == [
+        ("Anna", "I should not be here.", "inner_monologue"),
+        (None, "What if they know?", "inner_monologue"),
+        (None, "They do.", "inner_monologue"),  # a line that is only a tag carries to the lines below until a blank line
+        (None, "Plain narration.", None)]
+    assert story.parse_script("[{Internal}] Wait.")[0]["speaker"] is None  # not a character called {Internal}
+    draft = story.Draft(chunks=[story.StoryChunk(id="a", text="{thought} typed later", speaker=None)], narrator_profile_id="p")
+    spoken, fx, _ = story.effects.extract_tags(draft.chunks[0].text)
+    assert spoken == "typed later" and fx == "inner_monologue"
+
+
+def test_a_stereo_effect_chunk_and_mono_chunks_stitch_into_one_stereo_story(tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    sf.write(str(tmp_path / "a.wav"), np.full(2400, 0.2, dtype="float32"), 24000)
+    sf.write(str(tmp_path / "b.wav"), np.full((2400, 2), 0.1, dtype="float32"), 24000)
+    job = {"folder": str(tmp_path), "chunks": [{"index": 1, "status": "done", "file": "a.wav", "speaker": None},
+                                               {"index": 2, "status": "done", "file": "b.wav", "speaker": None}]}
+    assert story.stitch(job, story.StorySettings()) == "story.wav"
+    data, rate = sf.read(str(tmp_path / "story.wav"), always_2d=True)
+    assert data.shape == (4800, 2) and abs(data[0, 0] - 0.2) < 1e-3 and abs(data[0, 1] - 0.2) < 1e-3 and rate == 24000

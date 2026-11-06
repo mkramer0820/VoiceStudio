@@ -15,7 +15,7 @@ metadata and the backend fallback mirror it.
 ### Added
 
 - Qwen story page: a multi-voice book for Qwen3-TTS with saved voice profiles (record or upload a sample and press Save voice; the speaker embedding is prepared automatically), emotion presets (unverified on the fine-tuned narrator), character-to-profile mapping, bulk edit of selected chunks, a tags dialog, per-chunk render and re-render, and a Fish-style output folder — thanks @mkramer0820!
-- Qwen story: per-voice and per-line voice effects through ffmpeg presets (inner monologue, slight echo, ethereal, ghost, demon, cave, radio, muffled); the effect-free take is kept and a failed effect never loses the line — thanks @mkramer0820!
+- Qwen story: add your own ffmpeg voice effects (chain or filter graph, stereo allowed, with a test button), tag a line with {Internal} to strip the tag before the voice and apply the effect after, and stereo-safe stitching — thanks @mkramer0820!
 
 - Settings -> Credentials now includes the Fish Audio API key (the same encrypted key Fish Story uses), with its source and a remove button — thanks @mkramer0820!
 - The pronunciation dictionary and [[word|respelling]] overrides now also apply in Fish Story, the Qwen3-TTS playground and Qwen story mode — thanks @mkramer0820!

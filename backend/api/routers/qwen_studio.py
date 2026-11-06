@@ -101,12 +101,60 @@ class _MergeBody(BaseModel):
     confirm: bool = False
 
 
+class _EffectBody(BaseModel):
+    label: str = Field(..., min_length=1, max_length=40)
+    kind: str = Field("chain", pattern=r"^(chain|graph)$")
+    graph: str = Field(..., min_length=1, max_length=4000)
+    codec: str = Field("pcm_s16le", pattern=r"^pcm_(s16le|s24le|f32le)$")
+    aliases: list[str] = Field(default_factory=list, max_length=8)
+    id: Optional[str] = Field(None, max_length=24)
+
+
 @router.get("/effects", dependencies=[Depends(reject_cross_site_get)])
 def list_effects():
-    """The voice effect presets story mode can apply (ids; the page translates them)."""
+    """Voice effects story mode can apply: the built-in ones and your own, with their ffmpeg graphs."""
     from engines.qwen3_studio import effects
 
-    return {"effects": list(effects.PRESET_IDS)}
+    return {"effects": effects.listing()}
+
+
+@router.post("/effects")
+def create_effect(body: _EffectBody):
+    from engines.qwen3_studio import effects
+
+    try:
+        return effects.save(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.put("/effects/{effect_id}")
+def update_effect(body: _EffectBody, effect_id: str = Path(..., pattern=r"^[a-z][a-z0-9_]{0,23}$")):
+    from engines.qwen3_studio import effects
+
+    try:
+        return effects.save(body.model_dump(), existing_id=effect_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="That effect does not exist (built-in effects cannot be edited).")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/effects/{effect_id}")
+def delete_effect(effect_id: str = Path(..., pattern=r"^[a-z][a-z0-9_]{0,23}$")):
+    from engines.qwen3_studio import effects
+
+    if not effects.delete(effect_id):
+        raise HTTPException(status_code=404, detail="That effect does not exist (built-in effects cannot be deleted).")
+    return {"ok": True}
+
+
+@router.post("/effects/test")
+async def test_effect(body: _EffectBody):
+    """Run a (possibly unsaved) effect on a short test tone and report ffmpeg's verdict. Never writes anything."""
+    from engines.qwen3_studio import effects
+
+    return await run_in_threadpool(effects.test, body.model_dump())
 
 
 @router.post("/models/merge-adapter")

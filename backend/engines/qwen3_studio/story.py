@@ -82,11 +82,13 @@ def parse_script(text: str, max_chars: Optional[int] = None) -> list[dict]:
     limit = max_chars or logic.default_chunk_chars(1280)
     out: list[dict] = []
     carry: Optional[str] = None
+    carry_fx: Optional[str] = None
     for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw.strip()
         if not line:
-            carry = None
+            carry, carry_fx = None, None
             continue
+        line = effects._WRAPPED_TAG.sub(lambda m: m.group(1), line)  # [{Internal}] is {Internal}, not a character called "{Internal}"
         speaker, rest = carry, line
         m = _SPEAKER_TAG.match(line)
         if m and not _is_emotion_tag(m.group(1)):
@@ -98,10 +100,15 @@ def parse_script(text: str, max_chars: Optional[int] = None) -> list[dict]:
             c = _SPEAKER_COLON.match(line)
             if c:
                 speaker, rest = c.group(1).strip(), line[c.end():]
+        rest, fx, _unknown = effects.extract_tags(rest)
+        if fx is not None and not rest.strip():  # a line that is only an effect tag: it applies to the lines below until a blank line
+            carry_fx = fx
+            continue
+        fx = fx or carry_fx
         for emotion, span in emotions.split_emotion_tags(rest):
             for piece in logic.split_chunks(span, limit):
                 out.append({"id": f"c{len(out) + 1:04d}", "text": piece, "speaker": speaker,
-                            "emotion": emotion.model_dump() if emotion else None})
+                            "emotion": emotion.model_dump() if emotion else None, "effect": fx})
     return out
 
 
@@ -192,7 +199,11 @@ def plan(draft: Draft, models: dict, chunk_ids: Optional[list[str]] = None) -> d
     for index, chunk in enumerate(draft.chunks, 1):
         if not chunk.text.strip() or (wanted is not None and chunk.id not in wanted):
             continue
+        spoken, tag_effect, unknown_tags = effects.extract_tags(chunk.text)  # {Internal} etc.: heard by nobody, applied after the model
+        if not spoken.strip():
+            continue
         pid, warn = profile_for(chunk, draft)
+        warn = list(warn) + [f"Chunk {index}: {{{t}}} is not a known effect, so it stays in the text." for t in unknown_tags]
         if not pid:
             raise ValueError(f"Chunk {index} has no voice: set a narrator profile or map {chunk.speaker or 'narration'} to a profile.")
         profile = cache.get(pid) or profiles.get(pid)
@@ -201,7 +212,8 @@ def plan(draft: Draft, models: dict, chunk_ids: Optional[list[str]] = None) -> d
         cache[pid] = profile
         if not effects.valid(chunk.effect):
             raise ValueError(f"Chunk {index}: unknown effect {chunk.effect!r}. Choose one of: {', '.join(effects.PRESET_IDS)}.")
-        items.append({"index": index, "chunk": chunk, "profile": profile, "warnings": warn, "emotion": emotion_for(chunk, draft)})
+        items.append({"index": index, "chunk": chunk, "profile": profile, "warnings": warn, "emotion": emotion_for(chunk, draft),
+                      "text": spoken, "tag_effect": tag_effect})
     if not items:
         raise ValueError("There is nothing to render.")
     for it in items:
@@ -440,7 +452,7 @@ def _run(job: dict, draft: Draft, items: list[dict], settings: dict) -> None:
                     warmed.add(profile["id"])
                 seed = (s.seed + it["index"]) if s.seed is not None else int(time.time() * 1000) % 2**31
                 started = time.time()
-                tensor = backend.generate(apply_for_render(chunk.text, s.language), seed=seed, **common)
+                tensor = backend.generate(apply_for_render(it["text"], s.language), seed=seed, **common)
                 took = time.time() - started
                 meta = dict(getattr(backend, "last_reply_meta", {}) or {})
                 version = len(entry["history"]) + 1
@@ -474,7 +486,7 @@ def _run(job: dict, draft: Draft, items: list[dict], settings: dict) -> None:
 def _apply_effect(job: dict, entry: dict, it: dict, name: str, rate: int) -> None:
     """Run the chunk's voice effect (its own, else its profile's) over the finished render. The dry take is kept in dry/ so the effect can
     be changed later; if the effect cannot run, the dry take stays as the chunk and the reason is logged and shown on the chunk."""
-    effect = effects.resolve(it["chunk"].effect, it["profile"].get("effect"))
+    effect = effects.resolve(it.get("tag_effect") or it["chunk"].effect, it["profile"].get("effect"))
     entry["effect"], entry["effect_error"] = effect, None
     if effect == effects.NONE:
         return
@@ -500,17 +512,20 @@ def stitch(job: dict, s: StorySettings) -> Optional[str]:
     for e in sorted(job["chunks"], key=lambda c: c["index"]):
         if e["status"] != "done" or not e.get("file"):
             continue
-        data, sr = sf.read(os.path.join(job["folder"], e["file"]), dtype="float32")
+        data, sr = sf.read(os.path.join(job["folder"], e["file"]), dtype="float32", always_2d=True)
         if rate is None:
             rate = sr
         if sr != rate:
-            data = np.interp(np.linspace(0, len(data) - 1, int(len(data) * rate / sr)), np.arange(len(data)), data).astype("float32")
+            data = np.stack([np.interp(np.linspace(0, len(data) - 1, int(len(data) * rate / sr)), np.arange(len(data)), data[:, c])
+                             for c in range(data.shape[1])], axis=1).astype("float32")
         if parts and s.speaker_change_pause_ms and e["speaker"] != last:
-            parts.append(np.zeros(int(rate * s.speaker_change_pause_ms / 1000), dtype="float32"))
+            parts.append(np.zeros((int(rate * s.speaker_change_pause_ms / 1000), 1), dtype="float32"))
         parts.append(data)
         last = e["speaker"]
     if not parts:
         return None
+    width = max(p.shape[1] for p in parts)  # an effect may make stereo: the mono lines are centred in it
+    parts = [p if p.shape[1] == width else np.repeat(p[:, :1], width, axis=1) for p in parts]
     sf.write(os.path.join(job["folder"], "story.wav"), np.concatenate(parts), rate)
     return "story.wav"
 
