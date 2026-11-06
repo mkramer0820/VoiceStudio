@@ -4009,7 +4009,7 @@
     "qwen_zip": "Also write a ZIP next to the folder",
     "qwen_done": "Qwen3-TTS set written: {{accepted}} clips, {{rejected}} rejected (see rejected_samples.jsonl).",
     "qwen_ref_used": "Reference clip: {{source}}",
-    "qtr_colab_only": "This prepares a Google Colab run; there is no local runner for Qwen3-TTS. The values below go into colab_setup.sh, colab_commands.txt and training_settings.json, and match the arguments of Qwen's own fine-tuning script.",
+    "qtr_colab_only": "This prepares a training run for Google Colab, or for your own NVIDIA GPU with train_local.sh (unverified). The values below go into colab_setup.sh, train_local.sh, colab_commands.txt and training_settings.json, and match the arguments of Qwen's own fine-tuning script.",
     "qtr_epochs": "Epochs",
     "qtr_learning_rate": "Learning rate",
     "qtr_batch_size": "Batch size",

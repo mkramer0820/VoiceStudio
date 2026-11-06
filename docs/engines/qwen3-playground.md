@@ -1,5 +1,7 @@
 # Qwen playground (try every Qwen3-TTS variant)
 
+How to use the pages, step by step: [Story studios guide](../story-studios-guide.md).
+
 A page in the app (**Qwen playground**, next to the Fish story board) for trying the local Qwen3-TTS models quickly: several prompts ("takes") in one run, many settings, every render saved with a manifest, and notes and a star on each take. It needs the [Qwen3-TTS engine](qwen3-narrator.md) (NVIDIA GPU, its own Python environment). Everything runs on your computer; nothing is downloaded or sent anywhere. What the models and voices are known (and not known) to do is in [qwen3-finetune-findings.md](qwen3-finetune-findings.md).
 
 ## The three recipes

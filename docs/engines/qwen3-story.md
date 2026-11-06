@@ -1,5 +1,7 @@
 # Qwen story mode: a multi-voice book
 
+How to use the pages, step by step: [Story studios guide](../story-studios-guide.md).
+
 A page (**Qwen story**, `/qwen-story`) that renders a book or script chunk by chunk with several Qwen3-TTS voices. Everything runs on this computer through the same one-at-a-time sidecar as the [playground](qwen3-playground.md). Built for the 1.7B models; not the C engine, not Colab, no training.
 
 ## Voice profiles
