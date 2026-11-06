@@ -1,5 +1,7 @@
 # VoiceStudio — Install with Docker
 
+> **Fork note:** this fork targets Windows + NVIDIA CUDA. Docker, including the ROCm image, is not used or tested here and is kept only as a later fallback; see the [handoff](../agents/HANDOFF.md).
+
 For headless servers, dedicated GPUs, or "I want one command" deployments.
 The docker image bundles the backend; the UI is served over HTTP and you open
 it in a normal browser. It is built from the same maintained renderer as the

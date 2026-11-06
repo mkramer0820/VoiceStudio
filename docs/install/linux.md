@@ -1,5 +1,7 @@
 # VoiceStudio — Install on Linux
 
+> **Fork note:** this fork targets Windows + NVIDIA CUDA. Linux, including AMD/ROCm, is not used or tested here and is kept only as a later fallback; see the [handoff](../agents/HANDOFF.md).
+
 VoiceStudio's Linux desktop app is built with Electron. The archived Tauri app
 is no longer maintained; if you still run it, follow the
 [migration guide](../electron-migration.md).

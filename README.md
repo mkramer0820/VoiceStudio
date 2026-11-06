@@ -22,6 +22,8 @@
   </p>
 </div>
 
+> **This fork (`mkramer0820/VoiceStudio`)** is a Windows + NVIDIA CUDA story studio built around **Qwen3-TTS** (your own fine-tunes and LoRAs) and **Fish Audio**, with the training-data export for the next fine-tune. The upstream workspaces it does not use (clone, design, dubbing, batch, gallery, and so on) are hidden from the menu but still in the code. **AMD/ROCm and Mac are not used or tested here** and stay only as a later fallback. Start with the [handoff](docs/agents/HANDOFF.md) and the [Story studios guide](docs/story-studios-guide.md).
+
 ![A tour of the Electron app: voice cloning, voice design, dubbing, and model management](docs/media/electron/voicestudio.gif)
 
 ## Your voice. Your workflow.
