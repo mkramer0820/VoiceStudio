@@ -7,6 +7,8 @@ export interface StoryChunk {
   voice?: string | null;
   /** Who speaks this line (from a `[Name]` tag); mapped to a voice through `cast`. */
   speaker?: string | null;
+  /** A voice effect for this line only; `{Internal}` in the text does the same (the tag is hidden from Fish). */
+  effect?: string | null;
 }
 
 export interface StorySettings {
@@ -46,6 +48,8 @@ export interface StoryDraft {
   cast: Record<string, string>;
   /** speaker name (NARRATOR_KEY = untagged lines) -> Fish model, so the narrator and the characters can use different models. */
   cast_models?: Record<string, string>;
+  /** speaker name (NARRATOR_KEY = untagged lines) -> voice effect id, applied to the audio Fish returns. */
+  cast_effects?: Record<string, string>;
   settings: StorySettings;
 }
 

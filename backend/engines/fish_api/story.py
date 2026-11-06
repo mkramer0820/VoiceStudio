@@ -68,6 +68,7 @@ class Chunk(BaseModel):
     voice: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
     speaker: Optional[str] = Field(None, max_length=64)  # [Name] tag this line came from
     model: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_.-]{1,64}$")  # a Fish model for this line only (wins over the character's)
+    effect: Optional[str] = Field(None, max_length=24)  # a voice effect (engines/qwen3_studio/effects.py) for this line only
 
 
 class Draft(BaseModel):
@@ -78,6 +79,8 @@ class Draft(BaseModel):
     # speaker name (or NARRATOR_KEY for untagged lines) -> Fish model, e.g. the narrator on s2.1-pro and the characters on drama-3.
     # Empty = every line uses the story's model (settings.model, Settings, env).
     cast_models: dict[str, Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")]] = Field(default_factory=dict, max_length=300)
+    # speaker name (or NARRATOR_KEY) -> voice effect id, applied with ffmpeg to the audio Fish returns (the narrator clean, an inner voice processed).
+    cast_effects: dict[str, str] = Field(default_factory=dict, max_length=300)
     settings: StorySettings = Field(default_factory=StorySettings)
 
 
@@ -129,6 +132,17 @@ def model_for(chunk: "Chunk", draft: "Draft", default_model: str) -> str:
     return (chunk.model
             or draft.cast_models.get(chunk.speaker if chunk.speaker else NARRATOR_KEY)
             or default_model)
+
+
+def spoken_and_effect(chunk: "Chunk", draft: "Draft") -> tuple[str, Optional[str]]:
+    """(the text Fish should speak, the effect to put on its audio). ``{Internal}``-style tags are removed from the text (Fish never sees them;
+    Fish's own ``[tags]`` are left exactly as written); the effect is the tag's, else the line's, else its character's (the narrator's for an
+    untagged line), else None."""
+    from engines.qwen3_studio import effects
+
+    clean, tag, _unknown = effects.extract_tags(chunk.text)
+    fx = tag or chunk.effect or draft.cast_effects.get(chunk.speaker if chunk.speaker else NARRATOR_KEY) or None
+    return clean, (None if fx in (None, "", "none") else fx)
 
 
 def effective_config(settings: StorySettings) -> FishConfig:
@@ -209,7 +223,7 @@ def plan(draft: Draft) -> dict:
     chars = nbytes = 0
     per_model: dict[str, int] = {}
     for c in draft.chunks:
-        text = c.text.strip()
+        text = spoken_and_effect(c, draft)[0].strip()
         if not text:
             empty += 1
             continue

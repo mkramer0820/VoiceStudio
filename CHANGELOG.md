@@ -16,7 +16,8 @@ metadata and the backend fallback mirror it.
 
 - Qwen story page: a multi-voice book for Qwen3-TTS with saved voice profiles (record or upload a sample and press Save voice; the speaker embedding is prepared automatically), emotion presets (unverified on the fine-tuned narrator), character-to-profile mapping, bulk edit of selected chunks, a tags dialog, per-chunk render and re-render, and a Fish-style output folder — thanks @mkramer0820!
 - Docs: a step-by-step Story studios guide for the Qwen playground, Qwen story (voices, tags, effects), Fish Story models, transcript exports and training-data export — thanks @mkramer0820!
-- Qwen story import: `{Internal}` effect tags now work mid-line and together with emotion tags, and Fish-style tags such as [awed] become a free-form instruction instead of being read aloud — thanks @mkramer0820!
+- Qwen story import: `{Internal}` effect tags now work mid-line and together with emotion tags — thanks @mkramer0820!
+- Fish Story voice effects: {Internal} in a line is hidden from Fish and the effect is put on the audio when it comes back (Fish tags untouched), with per-character effects and the shared effect editor — thanks @mkramer0820!
 - Fish Story: choose a Fish model for the narrator and for each character (for example s2.1-pro for the narrator and drama-3 for the voices); requests are grouped by model — thanks @mkramer0820!
 - Qwen story: add your own ffmpeg voice effects (chain or filter graph, stereo allowed, with a test button), tag a line with {Internal} to strip the tag before the voice and apply the effect after, and stereo-safe stitching — thanks @mkramer0820!
 

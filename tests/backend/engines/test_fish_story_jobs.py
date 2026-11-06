@@ -397,3 +397,75 @@ def test_the_preview_and_plan_show_the_models_and_still_work_without_any_mapping
     bad.chunks[0].model = "not a model!"
     with pytest.raises(Exception):
         story.Draft.model_validate(bad.model_dump())
+
+
+# ── voice effects: {Internal} is stripped before Fish and the effect is put on the audio that comes back ──
+def _fx_draft(**settings) -> story.Draft:
+    return story.Draft(
+        title="Effects",
+        chunks=[story.Chunk(id="a", text="Hello there."),
+                story.Chunk(id="b", text="{Internal} [whispering] I should not be here."),
+                story.Chunk(id="c", text="Run.", speaker="Shadow", voice="vsh")],
+        voices={"vsh": "sun_2", "vnar": "Narrator"}, cast={"Shadow": "vsh"},
+        settings=story.StorySettings(**{"request_mode": "single", "default_voice": "vnar", **settings}))
+
+
+def test_the_effect_tag_is_stripped_from_what_fish_hears_but_fish_tags_are_untouched(monkeypatch):
+    sent = []
+
+    def fake(body, *, api_key, cfg, transport=None, sleep=None, meta=None):
+        sent.append(body["text"])
+        return _wav()
+
+    monkeypatch.setattr(client, "synthesize", fake)
+    draft = _fx_draft()
+    started = story_jobs.start_render(draft)
+    job = _wait(started["id"])
+    assert job["status"] == "done"
+    assert sorted(sent) == ["Hello there.", "Run.", "[whispering] I should not be here."]  # no {Internal}; [whispering] exactly as written
+    assert draft.chunks[1].text.startswith("{Internal}")  # the board still shows the tag
+    by_id = {c["id"]: c for c in job["chunks"]}
+    assert by_id["b"]["effect"] == "inner_monologue" and by_id["a"]["effect"] is None
+
+
+def test_the_effect_is_applied_to_the_audio_that_comes_back_and_the_untouched_take_is_kept(monkeypatch, tmp_path):
+    from engines.qwen3_studio import effects
+
+    calls = []
+
+    def fake_apply(src, dst, effect, rate, **k):
+        calls.append((os.path.basename(src), os.path.basename(dst), effect))
+        import shutil
+        shutil.copyfile(src, dst)
+
+    _ok(monkeypatch)
+    monkeypatch.setattr(effects, "apply", fake_apply)
+    job = _wait(story_jobs.start_render(_fx_draft())["id"])
+    assert job["status"] == "done" and len(calls) == 1 and calls[0][2] == "inner_monologue"
+    effect_line = next(c for c in job["chunks"] if c["id"] == "b")
+    assert effect_line["file"].endswith(".wav") and effect_line["effect_error"] is None
+    assert os.path.isfile(os.path.join(job["out_dir"], "dry", calls[0][0]))  # the response exactly as Fish sent it
+    assert os.path.isfile(os.path.join(job["out_dir"], effect_line["file"]))
+
+
+def test_a_failed_effect_leaves_the_fish_audio_as_the_line_and_says_why(monkeypatch):
+    from engines.qwen3_studio import effects
+
+    _ok(monkeypatch)
+    monkeypatch.setattr(effects, "apply", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no rubberband")))
+    job = _wait(story_jobs.start_render(_fx_draft())["id"])
+    line = next(c for c in job["chunks"] if c["id"] == "b")
+    assert job["status"] == "done" and line["status"] == "done" and "no rubberband" in line["effect_error"]
+    assert os.path.isfile(os.path.join(job["out_dir"], line["file"]))
+
+
+def test_a_character_or_the_narrator_can_have_an_effect_and_calls_never_mix_effects(monkeypatch):
+    d = _fx_draft(request_mode="multi")
+    d.cast_effects = {"Shadow": "ghost"}
+    assert [story.spoken_and_effect(c, d)[1] for c in d.chunks] == [None, "inner_monologue", "ghost"]
+    plan = story_jobs.preview(d)
+    assert [r["effect"] for r in plan["requests"]] == [None, "inner_monologue", "ghost"]  # three calls: one effect per call
+    bad = _fx_draft()
+    bad.cast_effects = {"Shadow": "nope"}
+    with pytest.raises(ValueError, match="effect"):
+        story_jobs.start_render(bad)

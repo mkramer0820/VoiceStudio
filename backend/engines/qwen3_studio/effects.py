@@ -182,27 +182,29 @@ def _lookup() -> dict[str, str]:
     return names
 
 
+_TAG_WITH_SPACE = re.compile(r"([ \t]?)\{\s*([^{}\n]{1,40}?)\s*\}([ \t]?)")
+
+
 def extract_tags(text: str) -> tuple[str, Optional[str], list[str]]:
-    """``"{Internal} I can't."`` -> ``("I can't.", "inner_monologue", [])``. Recognised effect tags are removed (so the model never hears
-    them) and the last one wins; an unknown ``{word}`` stays in the text and is returned so the page can warn. The tag may sit anywhere
-    and may be written ``[{Internal}]``."""
+    """``"{Internal} I can't."`` -> ``("I can't.", "inner_monologue", [])``. A recognised effect tag is removed (the model never hears it) and
+    the last one wins; nothing else in the text is touched, so a Fish ``[tag]`` or any spacing stays exactly as written. An unknown
+    ``{word}`` stays in the text and is returned so the page can warn. The tag may sit anywhere and may be written ``[{Internal}]``."""
     names = _lookup()
     found: Optional[str] = None
     unknown: list[str] = []
 
     def take(m: "re.Match[str]") -> str:
         nonlocal found
-        eid = names.get(re.sub(r"[\s_-]+", " ", m.group(1).strip().lower()))
+        eid = names.get(re.sub(r"[\s_-]+", " ", m.group(2).strip().lower()))
         if eid:
             found = eid
-            return ""
-        unknown.append(m.group(1))
+            return " " if m.group(1) and m.group(3) else ""  # a tag between two spaces leaves one; at an edge it leaves nothing
+        unknown.append(m.group(2))
         return m.group(0)
 
     text = _WRAPPED_TAG.sub(lambda m: m.group(1), text or "")
-    out = _TAG.sub(take, text)
-    out = re.sub(r"[ \t]{2,}", " ", out).strip() if found else out
-    return out, found, unknown
+    out = _TAG_WITH_SPACE.sub(take, text)
+    return (out.strip() if found else out), found, unknown
 
 
 def split_effect_spans(text: str, initial: Optional[str] = None) -> tuple[list[tuple[Optional[str], str]], list[str]]:

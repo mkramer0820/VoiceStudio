@@ -41,7 +41,6 @@ A profile can also carry a default instruct, an emotion preset, sampling values 
 - `[Anna] text` or `Anna: text` marks a character; a line that is only `[Anna]` keeps her for the following lines until a blank line. Untagged text is the narrator.
 - `[sad]`, `[joy:strong]`, `[anger:very strong]` change the emotion for the rest of that line. Emotion on the fine-tuned narrator is **unverified** and may move the voice.
 - `{Internal}` marks an effect (section 3.4). It switches the effect on for the rest of that line, so `He stopped. {Internal} Run. Now.` becomes two chunks and only the second has the effect; `{Internal}` on a line of its own covers the lines below it until a blank line. It combines with emotion tags in any order (`[sad] {Internal} Please no.`).
-- A lowercase tag that is not an emotion preset, for example `[awed]` or `[slow, solemn]`, is read as a free-form instruction for the words after it and is never spoken (`{Internal} [awed] The ruins glowed.`). Capitalised tags such as `[Anna]` at the start of a line are characters; `[1]` and `[Sic]` are left in the text. An instruction on the fine-tuned narrator is **unverified** and may move the voice.
 - Press **Split into chunks**. Chunks are sized for the model; the text is otherwise kept.
 
 ### 3.3 Assign voices, edit, render
@@ -66,13 +65,14 @@ An effect is an ffmpeg recipe applied to a finished line.
   - Filters that read files or the network (`movie`, `amovie`, `sendcmd`, `zmq`, `ladspa`, ...) are refused.
 - If ffmpeg is missing or a recipe fails, the plain line is kept and the chunk shows why. `story.wav` is stereo when any line is (mono lines are centred).
 
-## 4. Fish Story (`/fish-story`): a Fish model per role
+## 4. Fish Story (`/fish-story`): a Fish model and an effect per role
 
 Fish Story sends your text to Fish Audio, so it needs the key from **Settings → Credentials**. **Tags** (the Tags and cast dialog) holds the narrator and the characters:
 
 - **Narrator (default voice)** and **Narrator model**: for example voice `Narrator` on model `s2.1-pro`.
 - Under **Characters**, each `[Name]` has a voice and a **Model** (for example `drama-3`). Empty follows the story's model (**Settings panel → Model**).
 - A line can carry its own model in the draft file; there is no per-line picker yet.
+- **Voice effects work here too.** Write `{Internal}` anywhere in a line (the board keeps showing it): the tag is removed from the text sent to Fish, and when that line's audio comes back the effect is put on it. Fish's own `[tags]` such as `[whispering]` are sent exactly as written. The narrator and each character also have an **effect** choice in **Tags**, and **Voice effects** (next to Tags) is the same effect manager as in Qwen story, so your own recipes work in both. The returned file is kept untouched in the run's `dry/` folder, the processed file is a `.wav`, and `manifest.json` records each line's text (with the tag) and its effect. One Fish call returns one file, so lines with a different effect go in separate calls. Effects need wav, mp3 or opus output (not raw pcm); if one fails the Fish audio stays as the line and the reason is in the manifest and log.
 - **One Fish call has one model.** In multi-speaker mode, lines for different models are sent as separate calls; **Preview requests** lists every call with its model (and shows the first as a `curl` command), and the render log and manifest record it. Nothing is sent until you confirm the render.
 - Fish Story and the Qwen pages share one **Pronunciation dictionary** (Settings → Pronunciation); `[[word|respelling]]` works inline in both.
 

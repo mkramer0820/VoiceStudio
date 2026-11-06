@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { FISH_MODELS, NARRATOR_KEY, type StoryChunk } from './story-model';
+import { effectLabel, useEffects } from '../qwen-story/effects-model';
 import {
   applyCast,
   countMatches,
@@ -39,6 +40,20 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
+function EffectSelect({ label, value, onChange }: { label: string; value: string; onChange: (effect: string) => void }) {
+  const { t } = useTranslation();
+  const effects = useEffects();
+  return (
+    <select aria-label={label} className={`${selectClass} w-40`} value={value} onChange={(e) => onChange(e.target.value)}>
+      {effects.map((e) => (
+        <option key={e.id} value={e.id === 'none' ? '' : e.id}>
+          {e.id === 'none' ? t('fishStory.no_effect') : effectLabel(t, e)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function ModelSelect({ label, value, inherit, onChange }: { label: string; value: string; inherit: string; onChange: (model: string) => void }) {
   // A model the board does not list (set by hand or by a newer Fish) stays selectable so it is never silently dropped.
   const options = value && !FISH_MODELS.includes(value) ? [...FISH_MODELS, value] : FISH_MODELS;
@@ -61,12 +76,14 @@ export function TagsDialog({
   voiceNames,
   cast,
   castModels,
+  castEffects,
   defaultModel,
   narrator,
   inheritedNarrator,
   onChunks,
   onCast,
   onCastModels,
+  onCastEffects,
   onNarrator,
 }: {
   open: boolean;
@@ -76,6 +93,8 @@ export function TagsDialog({
   cast: Record<string, string>;
   /** speaker (or NARRATOR_KEY) -> Fish model; missing = the story's model. */
   castModels: Record<string, string>;
+  /** speaker (or NARRATOR_KEY) -> voice effect id; missing = no effect. */
+  castEffects: Record<string, string>;
   /** The story's model, shown as the "inherit" choice. */
   defaultModel: string;
   /** The story's default voice: narration and any line without a speaker. */
@@ -85,9 +104,16 @@ export function TagsDialog({
   onChunks: (next: StoryChunk[]) => void;
   onCast: (next: Record<string, string>) => void;
   onCastModels: (next: Record<string, string>) => void;
+  onCastEffects: (next: Record<string, string>) => void;
   onNarrator: (voice: string | null) => void;
 }) {
   const { t } = useTranslation();
+  const setEffect = (key: string, effect: string) => {
+    const next = { ...castEffects };
+    if (effect && effect !== 'none') next[key] = effect;
+    else delete next[key];
+    onCastEffects(next);
+  };
   const setModel = (key: string, model: string) => {
     const next = { ...castModels };
     if (model) next[key] = model;
@@ -175,6 +201,7 @@ export function TagsDialog({
               inherit={t('fishStory.inherit', { value: defaultModel })}
               onChange={(m) => setModel(NARRATOR_KEY, m)}
             />
+            <EffectSelect label={t('fishStory.narrator_effect')} value={castEffects[NARRATOR_KEY] ?? ''} onChange={(v) => setEffect(NARRATOR_KEY, v)} />
           </Section>
 
           <Section title={t('fishStory.speakers')} hint={t('fishStory.speakers_hint')}>
@@ -214,6 +241,7 @@ export function TagsDialog({
                       inherit={t('fishStory.inherit', { value: defaultModel })}
                       onChange={(m) => setModel(name, m)}
                     />
+                    <EffectSelect label={t('fishStory.speaker_effect', { name })} value={castEffects[name] ?? ''} onChange={(v) => setEffect(name, v)} />
                     {info.tagged > 0 && (
                       <Button
                         size="xs"

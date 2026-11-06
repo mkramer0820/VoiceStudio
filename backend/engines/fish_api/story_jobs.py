@@ -34,7 +34,7 @@ from typing import Optional
 from . import client
 from . import library as voice_library
 from .config import FishConfig, load_config, resolve_api_key, setting_source
-from .story import Chunk, Draft, effective_config, model_for
+from .story import Chunk, Draft, effective_config, model_for, spoken_and_effect
 from .story import check_request as story_check
 
 logger = logging.getLogger("omnivoice.fish_api.story_jobs")
@@ -415,7 +415,7 @@ def _audio_name(index: int, speaker: Optional[str], voice_name: Optional[str], e
 def _items(draft: Draft, chunk_ids: Optional[list[str]]) -> list[tuple[int, Chunk]]:
     wanted = set(chunk_ids) if chunk_ids else None
     return [(i, c) for i, c in enumerate(draft.chunks, 1)
-            if c.text.strip() and (wanted is None or c.id in wanted)]
+            if spoken_and_effect(c, draft)[0].strip() and (wanted is None or c.id in wanted)]
 
 
 #: What a bare web-page request contains; anything else in a body is an explicit extra.
@@ -432,6 +432,7 @@ class _RenderRequest:
     voices: tuple[Optional[str], ...]
     speakers: tuple[str, ...]
     model: str = ""  # the Fish model this call is made with (every line in it shares it)
+    effect: str = ""  # the voice effect put on this call's audio ("" = none); every line in it shares it
 
 
 def _voice_for(chunk: Chunk, draft: Draft, default: Optional[str]) -> Optional[str]:
@@ -449,10 +450,11 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
                        default: Optional[str]) -> _RenderRequest:
     from services.pronunciation import apply_for_render
 
-    def spoken(chunk: Chunk) -> str:  # the pronunciation dictionary, as for every other way of speaking a line
-        return apply_for_render(chunk.text.strip(), draft.settings.language)
+    def spoken(chunk: Chunk) -> str:  # effect tags out, then the pronunciation dictionary, as for every other way of speaking a line
+        return apply_for_render(spoken_and_effect(chunk, draft)[0].strip(), draft.settings.language)
 
     model = model_for(items[0][1], draft, cfg.model)
+    effect = spoken_and_effect(items[0][1], draft)[1] or ""
     voices = tuple(_voice_for(chunk, draft, default) for _, chunk in items)
     speakers = tuple(_speaker_key(chunk, voice) for (_, chunk), voice in zip(items, voices))
     identities: list[tuple[str, Optional[str]]] = []
@@ -464,7 +466,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
     if len(identities) == 1:
         text = "\n".join(spoken(chunk) for _, chunk in items)
         body = client.build_body(text, cfg, reference_id=voices[0], speed=draft.settings.speed)
-        return _RenderRequest(tuple(items), body, "single", voices, speakers, model)
+        return _RenderRequest(tuple(items), body, "single", voices, speakers, model, effect)
 
     missing = next((index for (index, _), voice in zip(items, voices) if not voice), None)
     if missing is not None:
@@ -479,7 +481,7 @@ def _request_for_group(items: list[tuple[int, Chunk]], draft: Draft, cfg: FishCo
     )
     reference_ids = [voice for _, voice in identities if voice is not None]
     body = client.build_body(tagged, cfg, reference_id=reference_ids, speed=draft.settings.speed)
-    return _RenderRequest(tuple(items), body, "multi", voices, speakers, model)
+    return _RenderRequest(tuple(items), body, "multi", voices, speakers, model, effect)
 
 
 def _render_requests(draft: Draft, cfg: FishConfig,
@@ -491,8 +493,9 @@ def _render_requests(draft: Draft, cfg: FishConfig,
     requests: list[_RenderRequest] = []
     pending: list[tuple[int, Chunk]] = []
     for item in items:
-        if pending and model_for(pending[0][1], draft, cfg.model) != model_for(item[1], draft, cfg.model):
-            # One call has one model: lines for another model start a new call.
+        if pending and (model_for(pending[0][1], draft, cfg.model) != model_for(item[1], draft, cfg.model)
+                        or spoken_and_effect(pending[0][1], draft)[1] != spoken_and_effect(item[1], draft)[1]):
+            # One call has one model and one effect (its audio is processed as a whole): a line with another one starts a new call.
             requests.append(_request_for_group(pending, draft, cfg, default))
             pending = []
         combined = [*pending, item]
@@ -608,7 +611,7 @@ def preview(draft: Draft, *, chunk_ids: Optional[list[str]] = None, limit: int =
         rows.append({"extras": sorted(set(body) - MINIMAL_FIELDS),
                      "index": index, "indices": [i for i, _ in request.items],
                      "id": _request_id(request), "ids": [c.id for _, c in request.items],
-                     "mode": request.mode, "model": request.model or cfg.model,
+                     "mode": request.mode, "model": request.model or cfg.model, "effect": request.effect or None,
                      "speaker": chunk.speaker, "speakers": list(request.speakers),
                      "voice": request.voices[0] if request.mode == "single" else list(request.voices),
                      "voice_name": (draft.voices.get(request.voices[0] or "", request.voices[0])
@@ -667,6 +670,11 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
     items = _items(draft, chunk_ids)
     if not items:
         raise ValueError("Nothing to render: every chunk is empty or unselected.")
+    from engines.qwen3_studio import effects as _effects
+
+    for where, name in [*(("cast_effects", v) for v in draft.cast_effects.values()), *((f"line {i}", c.effect) for i, c in items)]:
+        if not _effects.valid(name):
+            raise ValueError(f"Unknown voice effect {name!r} in {where}. Add it under Voice effects or pick one from the list.")
     requests = _render_requests(draft, cfg, items, default)
     for request in requests:  # the same schema check the preview shows, before anything is sent
         bad = story_check(request.body)
@@ -680,6 +688,8 @@ def start_render(draft: Draft, *, draft_id: Optional[str] = None,
     run_dir = os.path.join(story_dir, _next_run_name(story_dir, job_id))
     os.makedirs(run_dir, exist_ok=True)
     entries = [_chunk_entry(i, c, _voice_for(c, draft, default), draft.voices, model_for(c, draft, cfg.model)) for i, c in items]
+    for entry, (_, c) in zip(entries, items):
+        entry["effect"] = spoken_and_effect(c, draft)[1]
     by_id = {entry["id"]: entry for entry in entries}
     for request in requests:
         request_id = _request_id(request)
@@ -796,10 +806,13 @@ def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfi
             with open(os.path.join(job["out_dir"], name), "wb") as fh:
                 fh.write(raw)
             audio = _audio_info(raw, cfg.format, cfg)
+            effect_error = None
+            if request.effect:
+                name, raw, audio, effect_error = _apply_effect(job, request, draft, cfg, name, raw, audio)
             digest = hashlib.sha256(raw).hexdigest()
             with job["lock"]:
                 for entry in entries:
-                    entry.update(status="done", file=name, bytes=len(raw), sha256=digest, error=None,
+                    entry.update(status="done", file=name, bytes=len(raw), sha256=digest, error=None, effect_error=effect_error,
                                  attempts=meta.get("attempts", 1), elapsed_ms=meta.get("elapsed_ms", 0),
                                  duration_s=audio["duration_s"] if audio else None,
                                  sample_rate=audio["sample_rate"] if audio else None)
@@ -870,6 +883,34 @@ def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfi
     with job["lock"]:
         job["status"], job["message"] = status, message
     _persist(job)
+
+
+def _apply_effect(job: dict, request: _RenderRequest, draft: Draft, cfg: FishConfig, name: str, raw: bytes, audio: Optional[dict]):
+    """Put the call's voice effect on the audio Fish returned. The untouched response is kept in dry/; if the effect cannot run, it stays as the
+    line (with the reason) instead of a missing file. Returns (file name, bytes, audio info, error or None)."""
+    from engines.qwen3_studio import effects
+
+    if cfg.format == "pcm":
+        return name, raw, audio, "Voice effects need wav, mp3 or opus output, not raw pcm."
+    rate = int((audio or {}).get("sample_rate") or cfg.sample_rate)
+    out_dir = job["out_dir"]
+    dry_dir = os.path.join(out_dir, "dry")
+    os.makedirs(dry_dir, exist_ok=True)
+    path, dry = os.path.join(out_dir, name), os.path.join(dry_dir, name)
+    final_name = os.path.splitext(name)[0] + ".wav"
+    final = os.path.join(out_dir, final_name)
+    os.replace(path, dry)
+    try:
+        effects.apply(dry, final, request.effect, rate)
+        with open(final, "rb") as fh:
+            processed = fh.read()
+        if final_name != name and os.path.exists(path):
+            os.remove(path)
+        return final_name, processed, _audio_info(processed, "wav", cfg), None
+    except Exception as exc:  # noqa: BLE001 - a missing ffmpeg or a bad filter must not lose the line
+        os.replace(dry, path)
+        _log(job, "WARN", f"Effect {request.effect} not applied to {name}: {exc}")
+        return name, raw, audio, str(exc)
 
 
 def _resample(data, src: int, dst: int):

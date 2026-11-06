@@ -9,6 +9,7 @@ import {
   LoaderCircleIcon,
   MousePointerClickIcon,
   TagsIcon,
+  WandSparklesIcon,
   UsersRoundIcon,
   Trash2Icon,
   Undo2Icon,
@@ -25,6 +26,7 @@ import { JobsDialog, useRunningJobs } from './jobs-dialog';
 import { RenderPanel } from './render-panel';
 import { SettingsPanel } from './settings-panel';
 import { TagsDialog } from './tags-dialog';
+import { EffectsDialog } from '../qwen-story/effects-dialog';
 import { VoicesDialog } from './voices-dialog';
 import {
   applyVoice,
@@ -63,6 +65,7 @@ export function FishStoryPage() {
   const [maxChars, setMaxChars] = useState('');
   const [showImport, setShowImport] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [effectsOpen, setEffectsOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [voicesOpen, setVoicesOpen] = useState(false);
   const [notice, setNotice] = useState('');
@@ -183,6 +186,7 @@ export function FishStoryPage() {
         onImportCollection={story.importCollection}
       />
 
+      <EffectsDialog open={effectsOpen} onOpenChange={setEffectsOpen} />
       <TagsDialog
         open={tagsOpen}
         onOpenChange={setTagsOpen}
@@ -190,12 +194,14 @@ export function FishStoryPage() {
         voiceNames={draft.voices}
         cast={draft.cast}
         castModels={draft.cast_models ?? {}}
+        castEffects={draft.cast_effects ?? {}}
         defaultModel={draft.settings.model ?? story.defaults?.model ?? 's2.1-pro'}
         narrator={draft.settings.default_voice ?? null}
         inheritedNarrator={story.defaults?.reference_id ?? null}
         onChunks={(next) => setChunks(next)}
         onCast={story.setCast}
         onCastModels={story.setCastModels}
+        onCastEffects={story.setCastEffects}
         onNarrator={(voice) => story.setSettings({ default_voice: voice })}
       />
 
@@ -240,6 +246,9 @@ export function FishStoryPage() {
                 onClick={() => setTagsOpen(true)}
               >
                 <TagsIcon /> {t('fishStory.tags_button')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setEffectsOpen(true)}>
+                <WandSparklesIcon /> {t('qwenStory.effects_open')}
               </Button>
               <Button variant="outline" size="sm" onClick={() => setVoicesOpen(true)}>
                 <UsersRoundIcon /> {t('fishStory.more_voices')}

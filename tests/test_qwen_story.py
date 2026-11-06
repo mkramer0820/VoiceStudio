@@ -597,7 +597,7 @@ def test_story_and_fish_story_render_text_goes_through_the_dictionary():
 
     assert "apply_for_render(take.text" in inspect.getsource(pg)
     assert 'apply_for_render(it["text"]' in inspect.getsource(story)
-    assert "apply_for_render(chunk.text.strip()" in inspect.getsource(story_jobs)
+    assert "apply_for_render(spoken_and_effect(chunk, draft)[0].strip()" in inspect.getsource(story_jobs)
 
 
 def test_you_can_add_edit_and_delete_your_own_effect_and_the_checks_refuse_unsafe_graphs(studio):
@@ -665,11 +665,3 @@ def test_an_effect_tag_mid_line_starts_a_new_chunk_and_carries_across_emotion_ta
         ("Run. Now.", "inner_monologue", None),
         ("Hide.", "inner_monologue", None),
         ("“Maybe,” she thought.", "inner_monologue", None)]  # an opening quote joins the words after it
-
-
-def test_fish_style_expression_tags_become_an_instruction_and_are_never_read_aloud(studio):
-    parsed = story.parse_script("{Internal} [awed] The ruins glowed.\nThen [slow, solemn] he spoke. Note [1], [Sic] and [Anna] stay.")
-    first, second, third = parsed
-    assert (first["text"], first["effect"], first["emotion"]["preset"], first["emotion"]["custom_text"]) == ("The ruins glowed.", "inner_monologue", "custom", "awed")
-    assert second["text"] == "Then" and second["emotion"] is None
-    assert third["text"] == "he spoke. Note [1], [Sic] and [Anna] stay." and third["emotion"]["custom_text"] == "slow, solemn"
