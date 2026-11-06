@@ -94,18 +94,19 @@ def _write_user(rows: dict[str, dict]) -> None:
 
 
 def all_effects() -> dict[str, dict]:
-    """id -> definition for the built-in effects and your own (a saved effect with a built-in's id cannot exist)."""
-    out = {k: {**v, "id": k, "builtin": True} for k, v in BUILTIN.items()}
+    """id -> definition for the built-in effects and your own. Editing a built-in stores your version under the same id (``modified``);
+    deleting that override puts the shipped recipe back."""
+    out = {k: {**v, "id": k, "builtin": True, "modified": False} for k, v in BUILTIN.items()}
     for k, v in _read_user().items():
-        if k not in out:
-            out[k] = {"id": k, "builtin": False, "label": v.get("label") or k, "kind": v.get("kind", "chain"), "graph": v.get("graph", ""),
-                      "aliases": list(v.get("aliases") or []), "codec": v.get("codec", "pcm_s16le")}
+        mine = {"id": k, "label": v.get("label") or k, "kind": v.get("kind", "chain"), "graph": v.get("graph", ""),
+                "aliases": list(v.get("aliases") or []), "codec": v.get("codec", "pcm_s16le")}
+        out[k] = {**mine, "builtin": k in BUILTIN, "modified": True} if k in BUILTIN else {**mine, "builtin": False, "modified": False}
     return out
 
 
 def listing() -> list[dict]:
     """What the page shows: the picker entries (none first) with their definitions."""
-    return [{"id": NONE, "label": "None", "builtin": True, "kind": "chain", "graph": "", "aliases": [], "codec": "pcm_s16le"},
+    return [{"id": NONE, "label": "None", "builtin": True, "modified": False, "kind": "chain", "graph": "", "aliases": [], "codec": "pcm_s16le"},
             *all_effects().values()]
 
 
@@ -123,8 +124,8 @@ def validate_definition(body: dict, existing_id: Optional[str] = None) -> dict:
         eid = "fx_" + eid if eid and eid[0].isdigit() else eid
     if not ID_RE.match(eid or ""):
         raise ValueError("The effect id must start with a letter and use only a-z, 0-9 and _ (24 characters at most).")
-    if eid == NONE or eid in BUILTIN:
-        raise ValueError(f"{eid!r} is a built-in effect; choose another name.")
+    if eid == NONE or (eid in BUILTIN and existing_id != eid):
+        raise ValueError(f"{eid!r} is a built-in effect; choose another name (or edit the built-in itself).")
     kind = body.get("kind", "chain")
     if kind not in ("chain", "graph"):
         raise ValueError("The effect type must be 'chain' (an -af chain) or 'graph' (a -filter_complex graph).")
@@ -154,14 +155,14 @@ def validate_definition(body: dict, existing_id: Optional[str] = None) -> dict:
 
 def save(body: dict, existing_id: Optional[str] = None) -> dict:
     rows = _read_user()
-    if existing_id is not None and existing_id not in rows:
+    if existing_id is not None and existing_id not in rows and existing_id not in BUILTIN:
         raise KeyError(existing_id)
     clean = validate_definition(body, existing_id)
     if existing_id is None and clean["id"] in rows:
         raise ValueError(f"An effect with the id {clean['id']!r} already exists.")
     rows[clean["id"]] = clean
     _write_user(rows)
-    return {**clean, "builtin": False}
+    return {**clean, "builtin": clean["id"] in BUILTIN, "modified": True}
 
 
 def delete(effect_id: str) -> bool:
@@ -276,16 +277,17 @@ def resolve(chunk_effect: Optional[str], profile_effect: Optional[str]) -> str:
 
 
 # ── running ffmpeg ───────────────────────────────────────────────────────
-def command(d: dict, src: str, dst: str, rate: int, ffmpeg: str) -> list[str]:
+def command(d: dict, src: str, dst: str, rate: int, ffmpeg: str, limit: Optional[float] = None) -> list[str]:
     graph = d["graph"].replace("{rate}", str(int(rate)))
     from services.ffmpeg_utils import local_inputs_only
 
     base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", src]
     mid = ["-filter_complex", graph, "-map", "[out]"] if d.get("kind") == "graph" else ["-af", graph]
-    return local_inputs_only(base + mid + ["-ar", str(int(rate)), "-c:a", d.get("codec") or "pcm_s16le", dst])  # inputs stay local-only
+    cut = ["-t", f"{limit:g}"] if limit else []  # a preview only needs the start of a long clip
+    return local_inputs_only(base + mid + cut + ["-ar", str(int(rate)), "-c:a", d.get("codec") or "pcm_s16le", dst])  # inputs stay local-only
 
 
-def _run(d: dict, src: str, dst: str, rate: int, ffmpeg: Optional[str], timeout: float) -> None:
+def _run(d: dict, src: str, dst: str, rate: int, ffmpeg: Optional[str], timeout: float, limit: Optional[float] = None) -> None:
     if ffmpeg is None:
         from services import ffmpeg_utils
 
@@ -293,7 +295,7 @@ def _run(d: dict, src: str, dst: str, rate: int, ffmpeg: Optional[str], timeout:
     if not ffmpeg:
         raise RuntimeError("ffmpeg was not found (Settings -> Media tools), so the effect could not be applied.")
     try:
-        done = subprocess.run(command(d, src, dst, rate, ffmpeg), capture_output=True, text=True, timeout=timeout, check=False)
+        done = subprocess.run(command(d, src, dst, rate, ffmpeg, limit), capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ffmpeg took longer than {timeout:g} s on this effect.") from exc
     if done.returncode != 0 or not os.path.isfile(dst):
@@ -311,17 +313,39 @@ def apply(src: str, dst: str, effect: str, rate: int, ffmpeg: Optional[str] = No
     _run(d, src, dst, rate, ffmpeg, timeout)
 
 
+def _definition_to_run(definition: dict) -> dict:
+    """The recipe a test or preview should run: the form's unsaved text when it has one, else the saved or shipped effect of that id."""
+    eid = definition.get("id")
+    if definition.get("graph"):
+        return validate_definition(definition, eid if (eid in _read_user() or eid in BUILTIN) else None)
+    found = all_effects().get(eid or "")
+    if found is None:
+        raise ValueError("Choose an effect to run.")
+    return found
+
+
+def preview(definition: dict, src: str, dst: str, ffmpeg: Optional[str] = None, max_seconds: float = 20.0) -> dict:
+    """Run a recipe on a real clip so it can be heard: the first `max_seconds` of `src` go through the effect into `dst` (a WAV at the clip's own
+    sample rate). Returns {"seconds", "rate", "channels"}; raises ValueError (bad recipe) or RuntimeError (ffmpeg's reason)."""
+    import soundfile as sf
+
+    clean = _definition_to_run(definition)
+    try:
+        rate = int(sf.info(src).samplerate)
+    except Exception:  # noqa: BLE001 - mp3/opus/video: ffmpeg reads it, libsndfile may not
+        rate = 24000
+    _run(clean, src, dst, rate, ffmpeg, 120.0, limit=max_seconds)
+    info = sf.info(dst)
+    return {"seconds": round(float(info.duration), 2), "rate": int(info.samplerate), "channels": int(info.channels)}
+
+
 def test(definition: dict, ffmpeg: Optional[str] = None, rate: int = 24000) -> dict:
     """Run a definition (saved or not) on two seconds of a speech-like test tone: ``{"ok", "channels", "error"}``."""
     import numpy as np
     import soundfile as sf
 
     try:
-        eid = definition.get("id")
-        if eid in BUILTIN:
-            clean = BUILTIN[eid]
-        else:
-            clean = validate_definition(definition, eid if eid in _read_user() else None)
+        clean = _definition_to_run(definition)
     except ValueError as exc:
         return {"ok": False, "channels": None, "error": str(exc)}
     with tempfile.TemporaryDirectory() as tmp:

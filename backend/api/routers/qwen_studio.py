@@ -9,7 +9,7 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, Request, UploadFile
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
@@ -145,8 +145,45 @@ def delete_effect(effect_id: str = Path(..., pattern=r"^[a-z][a-z0-9_]{0,23}$"))
     from engines.qwen3_studio import effects
 
     if not effects.delete(effect_id):
-        raise HTTPException(status_code=404, detail="That effect does not exist (built-in effects cannot be deleted).")
+        raise HTTPException(status_code=404, detail="That effect does not exist, or it is a shipped effect you have not changed (there is nothing to reset).")
     return {"ok": True}
+
+
+@router.post("/effects/preview")
+async def preview_effect(file: UploadFile = File(...), definition: str = Form(...)):
+    """Run an effect (saved, built-in or the unsaved text in the form) on an uploaded clip and return the processed WAV so it can be heard next
+    to the original. Nothing is stored; only the first 20 seconds are processed."""
+    import json
+    import tempfile
+
+    from engines.qwen3_studio import effects
+
+    try:
+        body = json.loads(definition)
+        if not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=422, detail="definition must be a JSON object.")
+    raw = await file.read(50 * 1024 * 1024 + 1)
+    if not raw or len(raw) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Choose an audio clip of at most 50 MB.")
+
+    def work() -> bytes:
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = os.path.join(tmp, "in" + (os.path.splitext(file.filename or "")[1][:8] or ".wav")), os.path.join(tmp, "out.wav")
+            with open(src, "wb") as fh:
+                fh.write(raw)
+            effects.preview(body, src, dst)
+            with open(dst, "rb") as fh:
+                return fh.read()
+
+    try:
+        audio = await run_in_threadpool(work)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    from fastapi.responses import Response
+
+    return Response(content=audio, media_type="audio/wav")
 
 
 @router.post("/effects/test")

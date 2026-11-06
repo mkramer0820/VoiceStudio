@@ -6,6 +6,8 @@ export interface EffectDef {
   id: string;
   label: string;
   builtin: boolean;
+  /** A built-in whose recipe you changed (Reset puts the shipped one back). */
+  modified?: boolean;
   kind: 'chain' | 'graph';
   graph: string;
   aliases: string[];
@@ -62,7 +64,7 @@ export function useEffects(): EffectDef[] {
 
 /** Built-in effects have a translation; yours show the name you gave them. */
 export function effectLabel(t: (key: string, options?: Record<string, unknown>) => string, effect: EffectDef): string {
-  return effect.builtin ? t(`qwenStory.effect_${effect.id}`, { defaultValue: effect.label }) : effect.label;
+  return effect.builtin && !effect.modified ? t(`qwenStory.effect_${effect.id}`, { defaultValue: effect.label }) : effect.label;
 }
 
 export function resetEffectsForTest() {

@@ -1,11 +1,11 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const mock = vi.hoisted(() => ({ api: vi.fn() }));
+const mock = vi.hoisted(() => ({ api: vi.fn(), fetch: vi.fn() }));
 
 vi.mock('@/lib/api/client', async (load) => {
   const actual = await load<typeof import('@/lib/api/client')>();
-  return { ...actual, apiJson: mock.api };
+  return { ...actual, apiJson: mock.api, apiFetch: mock.fetch };
 });
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, o?: { defaultValue?: string }) => o?.defaultValue ?? key }),
@@ -26,6 +26,9 @@ const BUILT_IN = {
 
 beforeEach(() => {
   resetEffectsForTest();
+  URL.createObjectURL = vi.fn(() => 'blob:fake');
+  URL.revokeObjectURL = vi.fn();
+  mock.fetch.mockResolvedValue({ blob: () => Promise.resolve(new Blob(['RIFFxxxx'], { type: 'audio/wav' })) });
   mock.api.mockImplementation((path: string, init?: { method?: string }) => {
     if (path === '/api/qwen/effects' && !init?.method) return Promise.resolve({ effects: [BUILT_IN] });
     if (path === '/api/qwen/effects/test') return Promise.resolve({ ok: true, channels: 2, error: null });
@@ -74,4 +77,46 @@ it('shows ffmpeg\'s reason when a recipe does not work', async () => {
   fireEvent.change(document.querySelector('textarea')!, { target: { value: 'nosuchfilter' } });
   fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_test')!);
   await waitFor(() => expect(document.body.textContent).toContain('No such filter: nosuchfilter'));
+});
+
+it('edits a built-in effect (stored under its own id) and offers a reset only once it was changed', async () => {
+  render(<EffectsDialog open onOpenChange={() => undefined} />);
+  await waitFor(() => expect(document.body.textContent).toContain('{internal}'));
+  fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_edit')!);
+  expect([...document.querySelectorAll('button')].some((b) => b.textContent === 'qwenStory.effects_reset')).toBe(false); // untouched shipped recipe
+  fireEvent.change(document.querySelector('textarea')!, { target: { value: '[0:a]volume=0.5[out]' } });
+  fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'common.save')!);
+  await waitFor(() => expect(mock.api).toHaveBeenCalledWith('/api/qwen/effects/inner_monologue', expect.objectContaining({ method: 'PUT' })));
+});
+
+it('plays the original and the processed audio side by side after Hear it', async () => {
+  render(<EffectsDialog open onOpenChange={() => undefined} />);
+  fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_new')!);
+  fireEvent.change(document.querySelector('textarea')!, { target: { value: 'volume=-6dB' } });
+  const hearButton = [...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_hear')!;
+  expect(hearButton).toBeDisabled(); // needs a clip first
+  const file = new File(['RIFFxxxx'], 'line.wav', { type: 'audio/wav' });
+  fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
+  await waitFor(() => expect(hearButton).not.toBeDisabled());
+  fireEvent.click(hearButton);
+  await waitFor(() => expect(mock.fetch).toHaveBeenCalled());
+  console.log(document.body.textContent?.slice(-300), mock.fetch.mock.calls.length);
+  await waitFor(() => expect(document.querySelectorAll('audio')).toHaveLength(2));
+  const [path, init] = mock.fetch.mock.calls[0];
+  expect(path).toBe('/api/qwen/effects/preview');
+  const sent = (init as { body: FormData }).body;
+  expect((sent.get('file') as File).name).toBe('line.wav');
+  expect(JSON.parse(sent.get('definition') as string)).toMatchObject({ graph: 'volume=-6dB', kind: 'chain' }); // the unsaved text of the form
+});
+
+it('shows Reset for a built-in that was changed', async () => {
+  mock.api.mockImplementation((path: string, init?: { method?: string }) => {
+    if (path === '/api/qwen/effects' && !init?.method) return Promise.resolve({ effects: [{ ...BUILT_IN, modified: true, label: 'My inner voice' }] });
+    return Promise.resolve({ ok: true });
+  });
+  render(<EffectsDialog open onOpenChange={() => undefined} />);
+  await waitFor(() => expect(document.body.textContent).toContain('My inner voice'));
+  fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_edit')!);
+  fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_reset')!);
+  await waitFor(() => expect(mock.api).toHaveBeenCalledWith('/api/qwen/effects/inner_monologue', { method: 'DELETE' }));
 });

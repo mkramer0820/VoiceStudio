@@ -27,6 +27,7 @@ import { RenderPanel } from './render-panel';
 import { SettingsPanel } from './settings-panel';
 import { TagsDialog } from './tags-dialog';
 import { EffectsDialog } from '../qwen-story/effects-dialog';
+import { FishLinePicker } from './fish-line-picker';
 import { VoicesDialog } from './voices-dialog';
 import {
   applyVoice,
@@ -186,7 +187,7 @@ export function FishStoryPage() {
         onImportCollection={story.importCollection}
       />
 
-      <EffectsDialog open={effectsOpen} onOpenChange={setEffectsOpen} />
+      <EffectsDialog open={effectsOpen} onOpenChange={setEffectsOpen} renderSamples={(pick) => <FishLinePicker onPick={pick} />} />
       <TagsDialog
         open={tagsOpen}
         onOpenChange={setTagsOpen}

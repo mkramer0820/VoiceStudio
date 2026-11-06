@@ -614,7 +614,7 @@ def test_you_can_add_edit_and_delete_your_own_effect_and_the_checks_refuse_unsaf
         with pytest.raises(ValueError):
             effects.save(bad)
     with pytest.raises(KeyError):
-        effects.save({"label": "n", "graph": "volume=1"}, existing_id="inner_monologue")  # a built-in cannot be edited
+        effects.save({"label": "n", "graph": "volume=1"}, existing_id="no_such_effect")
     assert effects.delete("telepathy_2") and not effects.delete("telepathy_2") and not effects.valid("telepathy_2")
 
 
@@ -666,3 +666,53 @@ def test_an_effect_tag_mid_line_starts_a_new_chunk_and_carries_across_emotion_ta
         ("Run. Now.", "inner_monologue", None),
         ("Hide.", "inner_monologue", None),
         ("“Maybe,” she thought.", "inner_monologue", None)]  # an opening quote joins the words after it
+
+
+def test_a_built_in_effect_can_be_edited_and_reset_to_the_shipped_recipe(studio):
+    from engines.qwen3_studio import effects
+
+    shipped = effects.all_effects()["ghost"]["graph"]
+    assert effects.all_effects()["ghost"]["modified"] is False
+    edited = effects.save({"label": "Ghost (mine)", "kind": "chain", "graph": "volume=-9dB", "aliases": ["spirit"]}, existing_id="ghost")
+    assert edited["builtin"] and edited["modified"] and effects.all_effects()["ghost"]["graph"] == "volume=-9dB"
+    assert effects.extract_tags("{spirit} oooh")[:2] == ("oooh", "ghost")  # the edited tag names work, and the id still does
+    assert effects.listing()[0]["id"] == "none" and next(e for e in effects.listing() if e["id"] == "ghost")["label"] == "Ghost (mine)"
+    assert effects.delete("ghost") and effects.all_effects()["ghost"]["graph"] == shipped and not effects.all_effects()["ghost"]["modified"]
+    assert not effects.delete("ghost")  # nothing left to reset
+
+
+def test_preview_runs_a_recipe_on_a_real_clip_and_the_route_returns_wav(studio, tmp_path):
+    import io
+
+    import numpy as np
+    import soundfile as sf
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.routers import qwen_studio
+    from engines.qwen3_studio import effects
+    from services import ffmpeg_utils
+
+    if not ffmpeg_utils.find_ffmpeg():
+        pytest.skip("no ffmpeg on this machine")
+    t = np.linspace(0, 30.0, 30 * 16000, endpoint=False)  # a 30 s clip at 16 kHz: only the first 20 s are processed
+    clip = tmp_path / "in.wav"
+    sf.write(str(clip), (0.2 * np.sin(2 * np.pi * 200 * t)).astype("float32"), 16000)
+    out = tmp_path / "out.wav"
+    info = effects.preview({"id": "inner_monologue"}, str(clip), str(out))
+    assert info["rate"] == 16000 and info["channels"] == 2 and 19.5 < info["seconds"] <= 20.1  # the built-in stereo recipe, at the clip's own rate
+    app = FastAPI()
+    from api.dependencies import require_admin
+    app.include_router(qwen_studio.router)
+    app.dependency_overrides[require_admin] = lambda: None
+    client = TestClient(app, headers={"Sec-Fetch-Site": "same-origin"})
+    buf = io.BytesIO(clip.read_bytes())
+    ok = client.post("/api/qwen/effects/preview", files={"file": ("in.wav", buf, "audio/wav")},
+                     data={"definition": '{"label": "t", "kind": "chain", "graph": "volume=-6dB"}'})  # the unsaved text of the form
+    assert ok.status_code == 200 and ok.headers["content-type"] == "audio/wav" and ok.content[:4] == b"RIFF"
+    bad = client.post("/api/qwen/effects/preview", files={"file": ("in.wav", io.BytesIO(clip.read_bytes()), "audio/wav")},
+                      data={"definition": '{"label": "t", "kind": "chain", "graph": "nosuchfilter"}'})
+    assert bad.status_code == 422 and "filter" in bad.json()["detail"].lower()
+    refused = client.post("/api/qwen/effects/preview", files={"file": ("in.wav", io.BytesIO(b"x"), "audio/wav")},
+                          data={"definition": '{"label": "t", "kind": "chain", "graph": "amovie=/etc/passwd"}'})
+    assert refused.status_code == 422 and "files or the network" in refused.json()["detail"]
