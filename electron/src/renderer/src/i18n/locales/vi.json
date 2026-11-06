@@ -4455,6 +4455,7 @@
     "effects_original": "Bản gốc",
     "effects_processed": "Có hiệu ứng",
     "effects_reset": "Đặt lại về công thức gốc",
+    "effects_backend_old": "Backend cũ hơn trang này nên không nhận ra yêu cầu này. Hãy thoát hẳn VoiceStudio (backend cũng phải dừng) rồi mở lại.",
     "effect_none": "Không",
     "effect_inner_monologue": "Độc thoại nội tâm",
     "effect_slight_echo": "Vang nhẹ",

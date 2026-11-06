@@ -4459,6 +4459,7 @@
     "effects_original": "Оригинал",
     "effects_processed": "С эффектом",
     "effects_reset": "Вернуть исходный рецепт",
+    "effects_backend_old": "Бэкенд старше этой страницы и не знает этот запрос. Полностью закройте VoiceStudio (бэкенд тоже должен остановиться) и запустите снова.",
     "effect_none": "Нет",
     "effect_inner_monologue": "Внутренний монолог",
     "effect_slight_echo": "Лёгкое эхо",

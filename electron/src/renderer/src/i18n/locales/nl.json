@@ -4455,6 +4455,7 @@
     "effects_original": "Origineel",
     "effects_processed": "Met effect",
     "effects_reset": "Terugzetten naar het meegeleverde recept",
+    "effects_backend_old": "De backend is ouder dan deze pagina en kent dit verzoek niet. Sluit VoiceStudio helemaal af (de backend moet ook stoppen) en start opnieuw.",
     "effect_none": "Geen",
     "effect_inner_monologue": "Innerlijke monoloog",
     "effect_slight_echo": "Lichte echo",

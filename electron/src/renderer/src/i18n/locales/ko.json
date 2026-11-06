@@ -4455,6 +4455,7 @@
     "effects_original": "원본",
     "effects_processed": "효과 적용",
     "effects_reset": "기본 레시피로 되돌리기",
+    "effects_backend_old": "백엔드가 이 화면보다 오래되어 이 요청을 알지 못합니다. VoiceStudio를 완전히 종료한 뒤(백엔드도 멈춰야 합니다) 다시 시작하세요.",
     "effect_none": "없음",
     "effect_inner_monologue": "내면의 독백",
     "effect_slight_echo": "약한 에코",

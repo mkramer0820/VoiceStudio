@@ -4457,6 +4457,7 @@
     "effects_original": "Original",
     "effects_processed": "Avec l'effet",
     "effects_reset": "Revenir à la recette d'origine",
+    "effects_backend_old": "Le backend est plus ancien que cette page et ne connaît pas cette requête. Quittez complètement VoiceStudio (le backend doit aussi s'arrêter) puis relancez-le.",
     "effect_none": "Aucun",
     "effect_inner_monologue": "Monologue intérieur",
     "effect_slight_echo": "Léger écho",

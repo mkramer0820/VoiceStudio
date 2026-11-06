@@ -4455,6 +4455,7 @@
     "effects_original": "Original",
     "effects_processed": "Med effekten",
     "effects_reset": "Återställ till det medföljande receptet",
+    "effects_backend_old": "Backend är äldre än den här sidan och känner inte till begäran. Avsluta VoiceStudio helt (backend måste också stoppas) och starta om.",
     "effect_none": "Ingen",
     "effect_inner_monologue": "Inre monolog",
     "effect_slight_echo": "Lätt eko",

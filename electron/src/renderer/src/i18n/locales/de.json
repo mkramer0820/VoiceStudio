@@ -4455,6 +4455,7 @@
     "effects_original": "Original",
     "effects_processed": "Mit Effekt",
     "effects_reset": "Auf das mitgelieferte Rezept zurücksetzen",
+    "effects_backend_old": "Das Backend ist älter als diese Seite und kennt die Anfrage nicht. Beende VoiceStudio vollständig (das Backend muss auch stoppen) und starte es neu.",
     "effect_none": "Keiner",
     "effect_inner_monologue": "Innerer Monolog",
     "effect_slight_echo": "Leichtes Echo",

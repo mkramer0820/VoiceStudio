@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { apiFetch, apiJson, describeError } from '@/lib/api/client';
+import { ApiError, apiFetch, apiJson, describeError } from '@/lib/api/client';
 import { selectClass } from './emotion-picker';
 import { effectLabel, reloadEffects, useEffects, type EffectDef } from './effects-model';
 
@@ -81,7 +81,10 @@ export function EffectsDialog({
     try {
       await action();
     } catch (cause) {
-      setMessage({ ok: false, text: describeError(cause) });
+      // "Method Not Allowed" / "Not Found" on an effects call means the page is newer than the backend it is talking to (the backend was
+      // started before the update and is still running): say what to do instead of showing a bare HTTP error.
+      const outdated = cause instanceof ApiError && (cause.status === 404 || cause.status === 405);
+      setMessage({ ok: false, text: outdated ? t('qwenStory.effects_backend_old') : describeError(cause) });
     } finally {
       setBusy(false);
     }

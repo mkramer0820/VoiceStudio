@@ -4455,6 +4455,7 @@
     "effects_original": "Asli",
     "effects_processed": "Dengan efek",
     "effects_reset": "Kembalikan ke resep bawaan",
+    "effects_backend_old": "Backend lebih lama daripada halaman ini sehingga tidak mengenali permintaan ini. Tutup VoiceStudio sepenuhnya (backend juga harus berhenti) lalu jalankan lagi.",
     "effect_none": "Tidak ada",
     "effect_inner_monologue": "Monolog batin",
     "effect_slight_echo": "Gema tipis",

@@ -4459,6 +4459,7 @@
     "effects_original": "Оригінал",
     "effects_processed": "З ефектом",
     "effects_reset": "Повернути початковий рецепт",
+    "effects_backend_old": "Бекенд старіший за цю сторінку й не знає цього запиту. Повністю закрийте VoiceStudio (бекенд теж має зупинитися) і запустіть знову.",
     "effect_none": "Немає",
     "effect_inner_monologue": "Внутрішній монолог",
     "effect_slight_echo": "Легка луна",

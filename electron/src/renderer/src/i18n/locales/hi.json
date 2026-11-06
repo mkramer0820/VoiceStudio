@@ -4455,6 +4455,7 @@
     "effects_original": "मूल",
     "effects_processed": "प्रभाव के साथ",
     "effects_reset": "मूल नुस्खे पर लौटें",
+    "effects_backend_old": "बैकएंड इस पेज से पुराना है, इसलिए वह यह अनुरोध नहीं जानता। VoiceStudio को पूरी तरह बंद करें (बैकएंड भी रुकना चाहिए) और फिर चालू करें।",
     "effect_none": "कोई नहीं",
     "effect_inner_monologue": "अंतर्मन की आवाज़",
     "effect_slight_echo": "हल्की गूंज",

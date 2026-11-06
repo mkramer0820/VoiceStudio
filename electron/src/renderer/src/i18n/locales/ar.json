@@ -4463,6 +4463,7 @@
     "effects_original": "الأصلي",
     "effects_processed": "مع المؤثر",
     "effects_reset": "إعادة إلى الوصفة الأصلية",
+    "effects_backend_old": "الخلفية أقدم من هذه الصفحة فلا تعرف هذا الطلب. أغلق VoiceStudio بالكامل (يجب أن تتوقف الخلفية أيضًا) ثم شغّله من جديد.",
     "effect_none": "بدون",
     "effect_inner_monologue": "حديث داخلي",
     "effect_slight_echo": "صدى خفيف",

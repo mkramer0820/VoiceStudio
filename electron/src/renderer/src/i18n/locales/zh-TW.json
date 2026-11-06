@@ -4455,6 +4455,7 @@
     "effects_original": "原聲",
     "effects_processed": "加效果後",
     "effects_reset": "還原為內建配方",
+    "effects_backend_old": "後端比此頁面舊，不認得這個請求。請完全結束 VoiceStudio（後端也必須停止）後重新啟動。",
     "effect_none": "無",
     "effect_inner_monologue": "內心獨白",
     "effect_slight_echo": "輕微回音",

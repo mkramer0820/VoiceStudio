@@ -4455,6 +4455,7 @@
     "effects_original": "元の音",
     "effects_processed": "エフェクトあり",
     "effects_reset": "付属のレシピに戻す",
+    "effects_backend_old": "バックエンドがこの画面より古く、このリクエストを認識できません。VoiceStudio を完全に終了し（バックエンドも停止させ）、もう一度起動してください。",
     "effect_none": "なし",
     "effect_inner_monologue": "心の声",
     "effect_slight_echo": "軽いエコー",

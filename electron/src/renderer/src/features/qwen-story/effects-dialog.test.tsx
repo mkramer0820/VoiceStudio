@@ -120,3 +120,17 @@ it('shows Reset for a built-in that was changed', async () => {
   fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_reset')!);
   await waitFor(() => expect(mock.api).toHaveBeenCalledWith('/api/qwen/effects/inner_monologue', { method: 'DELETE' }));
 });
+
+it('tells the user to restart when the backend does not know the preview request (Method Not Allowed)', async () => {
+  const { ApiError } = await import('@/lib/api/client');
+  mock.fetch.mockRejectedValue(new ApiError(405, 'Method Not Allowed'));
+  render(<EffectsDialog open onOpenChange={() => undefined} />);
+  fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_new')!);
+  fireEvent.change(document.querySelector('textarea')!, { target: { value: 'volume=-6dB' } });
+  fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['RIFFxxxx'], 'line.wav', { type: 'audio/wav' })] } });
+  const hearButton = [...document.querySelectorAll('button')].find((b) => b.textContent === 'qwenStory.effects_hear')!;
+  await waitFor(() => expect(hearButton).not.toBeDisabled());
+  fireEvent.click(hearButton);
+  await waitFor(() => expect(document.body.textContent).toContain('qwenStory.effects_backend_old'));
+  expect(document.body.textContent).not.toContain('Method Not Allowed');
+});

@@ -4455,6 +4455,7 @@
     "effects_original": "Orijinal",
     "effects_processed": "Efektli",
     "effects_reset": "Varsayılan tarife dön",
+    "effects_backend_old": "Arka uç bu sayfadan eski olduğu için bu isteği tanımıyor. VoiceStudio'yu tamamen kapatın (arka uç da durmalı) ve yeniden başlatın.",
     "effect_none": "Yok",
     "effect_inner_monologue": "İç monolog",
     "effect_slight_echo": "Hafif yankı",

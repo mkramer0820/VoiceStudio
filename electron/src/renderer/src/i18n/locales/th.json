@@ -4455,6 +4455,7 @@
     "effects_original": "ต้นฉบับ",
     "effects_processed": "เมื่อใส่เอฟเฟกต์",
     "effects_reset": "คืนค่าสูตรเดิม",
+    "effects_backend_old": "แบ็กเอนด์เก่ากว่าหน้านี้จึงไม่รู้จักคำขอนี้ ปิด VoiceStudio ให้หมด (แบ็กเอนด์ต้องหยุดด้วย) แล้วเปิดใหม่",
     "effect_none": "ไม่มี",
     "effect_inner_monologue": "เสียงในใจ",
     "effect_slight_echo": "เอคโคเบา ๆ",
