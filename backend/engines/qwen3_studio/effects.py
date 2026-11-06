@@ -278,9 +278,11 @@ def resolve(chunk_effect: Optional[str], profile_effect: Optional[str]) -> str:
 # ── running ffmpeg ───────────────────────────────────────────────────────
 def command(d: dict, src: str, dst: str, rate: int, ffmpeg: str) -> list[str]:
     graph = d["graph"].replace("{rate}", str(int(rate)))
+    from services.ffmpeg_utils import local_inputs_only
+
     base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", src]
     mid = ["-filter_complex", graph, "-map", "[out]"] if d.get("kind") == "graph" else ["-af", graph]
-    return base + mid + ["-ar", str(int(rate)), "-c:a", d.get("codec") or "pcm_s16le", dst]
+    return local_inputs_only(base + mid + ["-ar", str(int(rate)), "-c:a", d.get("codec") or "pcm_s16le", dst])  # inputs stay local-only
 
 
 def _run(d: dict, src: str, dst: str, rate: int, ffmpeg: Optional[str], timeout: float) -> None:

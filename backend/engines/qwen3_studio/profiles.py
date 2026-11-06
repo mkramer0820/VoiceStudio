@@ -306,12 +306,12 @@ def store_clip(raw: bytes, filename: str = "") -> str:
             data, rate = sf.read(tmp, dtype="float32", always_2d=True)
             sf.write(out, data.mean(axis=1) if data.shape[1] > 1 else data[:, 0], rate)
         else:
-            from services.ffmpeg_utils import find_ffmpeg
+            from services.ffmpeg_utils import find_ffmpeg, local_inputs_only
 
             ffmpeg = find_ffmpeg()
             if not ffmpeg:
                 raise ValueError("This audio format cannot be read here and ffmpeg was not found. Use a WAV file.")
-            done = subprocess.run([ffmpeg, "-y", "-v", "error", "-i", tmp, "-ac", "1", "-ar", "24000", out],
+            done = subprocess.run(local_inputs_only([ffmpeg, "-y", "-v", "error", "-i", tmp, "-ac", "1", "-ar", "24000", out]),
                                   capture_output=True, timeout=120, check=False)
             if done.returncode != 0 or not os.path.isfile(out):
                 raise ValueError("That audio file could not be read.")
