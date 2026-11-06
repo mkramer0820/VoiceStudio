@@ -40,7 +40,8 @@ A profile can also carry a default instruct, an emotion preset, sampling values 
 ### 3.2 Write or paste the script
 - `[Anna] text` or `Anna: text` marks a character; a line that is only `[Anna]` keeps her for the following lines until a blank line. Untagged text is the narrator.
 - `[sad]`, `[joy:strong]`, `[anger:very strong]` change the emotion for the rest of that line. Emotion on the fine-tuned narrator is **unverified** and may move the voice.
-- `{Internal}` marks an effect (section 3.4).
+- `{Internal}` marks an effect (section 3.4). It switches the effect on for the rest of that line, so `He stopped. {Internal} Run. Now.` becomes two chunks and only the second has the effect; `{Internal}` on a line of its own covers the lines below it until a blank line. It combines with emotion tags in any order (`[sad] {Internal} Please no.`).
+- A lowercase tag that is not an emotion preset, for example `[awed]` or `[slow, solemn]`, is read as a free-form instruction for the words after it and is never spoken (`{Internal} [awed] The ruins glowed.`). Capitalised tags such as `[Anna]` at the start of a line are characters; `[1]` and `[Sic]` are left in the text. An instruction on the fine-tuned narrator is **unverified** and may move the voice.
 - Press **Split into chunks**. Chunks are sized for the model; the text is otherwise kept.
 
 ### 3.3 Assign voices, edit, render

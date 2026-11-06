@@ -61,6 +61,9 @@ PRESETS: dict[str, dict[str, str]] = {
 _TAG = re.compile(r"\[(" + "|".join(k for k in PRESETS if k != "custom") + r")(?::(strong|very[ _-]?strong))?\]", re.I)
 
 
+#: Fish-style expression tags inside a line, e.g. ``[awed]`` or ``[slow, solemn]``: lowercase words only, so ``[Anna]`` (a character), ``[1]`` and
+#: ``[Sic]`` are left alone. They become a custom instruction for the text that follows, and are never read aloud.
+_FREE_TAG = re.compile(r"\[([a-z][a-z ,'-]{0,38})\]")
 class Steer(BaseModel):
     """Reserved for steering vectors. Accepted, ignored."""
     vector_id: Optional[str] = Field(None, max_length=120)
@@ -104,16 +107,25 @@ def catalog() -> dict:
 def split_emotion_tags(text: str) -> list[tuple[Optional[EmotionChoice], str]]:
     """Cut ``text`` at inline emotion tags. Each piece carries the preset that was switched on before it
     (None before the first tag). A tag stays active until the next tag; ``[neutral]`` switches back. Empty
-    pieces are dropped, so a tag at the end of text does nothing."""
+    pieces are dropped, so a tag at the end of text does nothing. A lowercase tag that is not a preset
+    (``[awed]``, ``[slow, solemn]``) switches to a custom instruction with those words."""
     out: list[tuple[Optional[EmotionChoice], str]] = []
     current: Optional[EmotionChoice] = None
     cursor = 0
-    for m in _TAG.finditer(text):
-        piece = text[cursor:m.start()].strip()
+    hits = sorted([(m.start(), m.end(), m, True) for m in _TAG.finditer(text)]
+                  + [(m.start(), m.end(), m, False) for m in _FREE_TAG.finditer(text)
+                     if not _TAG.fullmatch(m.group(0))], key=lambda h: h[0])
+    for start, end, m, is_preset in hits:
+        if start < cursor:
+            continue
+        piece = text[cursor:start].strip()
         if piece:
             out.append((current, piece))
-        current = EmotionChoice(preset=m.group(1).lower(), strength=normalize_strength(m.group(2)))
-        cursor = m.end()
+        if is_preset:
+            current = EmotionChoice(preset=m.group(1).lower(), strength=normalize_strength(m.group(2)))
+        else:
+            current = EmotionChoice(preset="custom", custom_text=re.sub(r"\s+", " ", m.group(1)).strip(" ,"))
+        cursor = end
     tail = text[cursor:].strip()
     if tail:
         out.append((current, tail))

@@ -100,15 +100,17 @@ def parse_script(text: str, max_chars: Optional[int] = None) -> list[dict]:
             c = _SPEAKER_COLON.match(line)
             if c:
                 speaker, rest = c.group(1).strip(), line[c.end():]
-        rest, fx, _unknown = effects.extract_tags(rest)
-        if fx is not None and not rest.strip():  # a line that is only an effect tag: it applies to the lines below until a blank line
-            carry_fx = fx
-            continue
-        fx = fx or carry_fx
-        for emotion, span in emotions.split_emotion_tags(rest):
-            for piece in logic.split_chunks(span, limit):
-                out.append({"id": f"c{len(out) + 1:04d}", "text": piece, "speaker": speaker,
-                            "emotion": emotion.model_dump() if emotion else None, "effect": fx})
+        before = len(out)
+        line_fx = carry_fx  # an effect tag switches the effect on for the rest of the line, across emotion tags
+        for emotion, piece_text in emotions.split_emotion_tags(rest):
+            fx_spans, _unknown = effects.split_effect_spans(piece_text, line_fx)
+            line_fx = effects.last_tag_effect(piece_text) or line_fx
+            for fx_span, text_span in fx_spans:  # a tag in the middle of a line starts a new chunk with that effect
+                for piece in logic.split_chunks(text_span, limit):
+                    out.append({"id": f"c{len(out) + 1:04d}", "text": piece, "speaker": speaker,
+                                "emotion": emotion.model_dump() if emotion else None, "effect": fx_span or None})
+        if len(out) == before:  # a line that is only effect tag(s): its effect covers the lines below until a blank line
+            carry_fx = line_fx
     return out
 
 

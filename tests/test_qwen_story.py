@@ -654,3 +654,22 @@ def test_a_stereo_effect_chunk_and_mono_chunks_stitch_into_one_stereo_story(tmp_
     assert story.stitch(job, story.StorySettings()) == "story.wav"
     data, rate = sf.read(str(tmp_path / "story.wav"), always_2d=True)
     assert data.shape == (4800, 2) and abs(data[0, 0] - 0.2) < 1e-3 and abs(data[0, 1] - 0.2) < 1e-3 and rate == 24000
+
+
+def test_an_effect_tag_mid_line_starts_a_new_chunk_and_carries_across_emotion_tags(studio):
+    parsed = story.parse_script(
+        "[sad] {Internal} Please no.\nHe stopped. {Internal} Run. Now. {Internal} Hide.\n“{Internal} Maybe,” she thought.")
+    assert [(c["text"], c["effect"], (c["emotion"] or {}).get("preset")) for c in parsed] == [
+        ("Please no.", "inner_monologue", "sad"),  # the emotion tag before the effect tag still applies
+        ("He stopped.", None, None),
+        ("Run. Now.", "inner_monologue", None),
+        ("Hide.", "inner_monologue", None),
+        ("“Maybe,” she thought.", "inner_monologue", None)]  # an opening quote joins the words after it
+
+
+def test_fish_style_expression_tags_become_an_instruction_and_are_never_read_aloud(studio):
+    parsed = story.parse_script("{Internal} [awed] The ruins glowed.\nThen [slow, solemn] he spoke. Note [1], [Sic] and [Anna] stay.")
+    first, second, third = parsed
+    assert (first["text"], first["effect"], first["emotion"]["preset"], first["emotion"]["custom_text"]) == ("The ruins glowed.", "inner_monologue", "custom", "awed")
+    assert second["text"] == "Then" and second["emotion"] is None
+    assert third["text"] == "he spoke. Note [1], [Sic] and [Anna] stay." and third["emotion"]["custom_text"] == "slow, solemn"

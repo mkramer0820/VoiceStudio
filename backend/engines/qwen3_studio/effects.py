@@ -205,6 +205,50 @@ def extract_tags(text: str) -> tuple[str, Optional[str], list[str]]:
     return out, found, unknown
 
 
+def split_effect_spans(text: str, initial: Optional[str] = None) -> tuple[list[tuple[Optional[str], str]], list[str]]:
+    """Cut one line at its effect tags: ``"He stopped. {Internal} Run. Now."`` -> ``[(None, "He stopped."), ("inner_monologue", "Run. Now.")]``.
+    A tag switches the effect for the rest of the line (later tags switch again); text before the first tag has no effect of its own.
+    Unknown ``{word}`` tags stay in the text and are returned. A piece with no letters or digits (an opening quote, a dash) joins the
+    text that follows it instead of becoming a line of its own."""
+    names = _lookup()
+    text = _WRAPPED_TAG.sub(lambda m: m.group(1), text or "")
+    spans: list[tuple[Optional[str], str]] = []
+    unknown: list[str] = []
+    current: Optional[str] = initial  # the effect already switched on earlier in the same line
+    last = 0
+    buf = ""
+    for m in _TAG.finditer(text):
+        eid = names.get(re.sub(r"[\s_-]+", " ", m.group(1).strip().lower()))
+        if not eid:
+            unknown.append(m.group(1))
+            continue
+        buf += text[last:m.start()]
+        spans.append((current, buf))
+        buf, current, last = "", eid, m.end()
+    spans.append((current, buf + text[last:]))
+    out: list[tuple[Optional[str], str]] = []
+    carry = ""
+    for fx, piece in spans:
+        piece = (carry + re.sub(r"[ 	]{2,}", " ", piece).lstrip()) if carry else re.sub(r"[ 	]{2,}", " ", piece)
+        carry = ""
+        if not re.search(r"\w", piece):  # only punctuation / quotes: it belongs to what comes next
+            carry = piece.strip()
+            continue
+        out.append((fx, piece.strip()))
+    if carry and out:
+        out[-1] = (out[-1][0], out[-1][1] + carry)
+    return out, unknown
+
+
+def last_tag_effect(text: str) -> Optional[str]:
+    """The effect named by the last recognised ``{tag}`` in `text`, or None."""
+    names = _lookup()
+    found = None
+    for m in _TAG.finditer(_WRAPPED_TAG.sub(lambda m: m.group(1), text or "")):
+        found = names.get(re.sub(r"[\s_-]+", " ", m.group(1).strip().lower())) or found
+    return found
+
+
 def resolve(chunk_effect: Optional[str], profile_effect: Optional[str]) -> str:
     """The effect of one chunk: its own choice, else its voice profile's, else none."""
     for value in (chunk_effect, profile_effect):
