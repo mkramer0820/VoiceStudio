@@ -55,7 +55,8 @@ it('names the feature Dubbing consistently while preserving the existing route',
   expect(en.nav.dub).toBe('Dubbing');
   expect(en.keyboard.dub).toBe('Dubbing');
   render(<HomePage />);
-  expect(screen.getByRole('link', { name: /dubWorkspace.title/ })).toHaveAttribute('href', '/dub');
+  // The fork hides the Dubbing workspace from the home page; its route and API still exist (lib/fork-profile.ts).
+  expect(screen.queryByRole('link', { name: /dubWorkspace.title/ })).toBeNull();
 });
 
 it('credits qualifying contributors and opens their GitHub profiles externally', () => {
@@ -98,21 +99,27 @@ it('opens both creator profiles from the accessible avatar card', async () => {
   expect(files.openExternal).toHaveBeenCalledWith('https://x.com/idebpalash');
 });
 
-it('separates three primary creation actions and describes all nine destinations', () => {
+it('offers the fork studios first and only the upstream workspaces the fork keeps', () => {
   render(<HomePage />);
-  const clone = screen.getByRole('link', { name: /nav.clone/ });
-  const primary = clone.parentElement!;
+  const playground = screen.getByRole('link', { name: /qwenPlayground.nav/ });
+  const primary = playground.parentElement!;
   expect(Array.from(primary.querySelectorAll('a'), (a) => a.getAttribute('href'))).toEqual([
-    '/clone',
-    '/design',
-    '/dub',
+    '/qwen-playground',
+    '/qwen-story',
+    '/fish-story',
   ]);
-  expect(primary.nextElementSibling?.querySelectorAll('a')).toHaveLength(6);
+  expect(Array.from(primary.nextElementSibling!.querySelectorAll('a'), (a) => a.getAttribute('href'))).toEqual([
+    '/fish-dataset',
+    '/transcriptions',
+  ]);
   const icons = document.querySelectorAll('svg.home-feature-svg');
-  expect(icons).toHaveLength(9);
+  expect(icons).toHaveLength(5);
   icons.forEach((icon) => expect(icon).toHaveAttribute('aria-hidden', 'true'));
-  for (const key of ['design', 'dub', 'stories', 'audiobook', 'transcribe']) {
+  for (const key of ['qwen_playground', 'qwen_story', 'fish_story', 'fish_dataset', 'transcribe']) {
     expect(screen.getByText('homeUi.' + key)).toBeVisible();
+  }
+  for (const hidden of ['/clone', '/design', '/dub', '/stories', '/audiobook', '/gallery', '/calls', '/tools']) {
+    expect(document.querySelector(`a[href="${hidden}"]`)).toBeNull();
   }
   expect(screen.queryByText('demo.dictation_lede')).not.toBeInTheDocument();
   expect(screen.queryByText('dub.supported_formats')).not.toBeInTheDocument();

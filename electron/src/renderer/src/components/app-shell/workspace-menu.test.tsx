@@ -12,6 +12,8 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/store/workspace', () => ({ setWorkspace: vi.fn() }));
+// These tests are about how the menu groups and flies out; the fork's own list of hidden pages is tested in workspace-menu-fork.test.tsx.
+vi.mock('@/lib/fork-profile', () => ({ isRouteVisible: () => true }));
 import { WorkspaceNavigation } from './workspace-menu';
 
 it('opens the current workflow, lets users collapse it, and follows route changes', () => {

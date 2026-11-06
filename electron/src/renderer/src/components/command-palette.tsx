@@ -1,3 +1,4 @@
+import { isRouteVisible } from '@/lib/fork-profile';
 import { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -55,6 +56,11 @@ interface CommandItem {
   shortcut?: string;
   run: () => void | Promise<void>;
 }
+
+// Palette entries whose workspace the fork hides (see lib/fork-profile.ts).
+const HIDDEN_PALETTE_IDS: ReadonlySet<string> = new Set(
+  ['clone', 'stories', 'dub', 'batch', 'gallery', 'calls', 'design', 'audiobook', 'projects', 'tools'].filter((id) => !isRouteVisible('/' + id)),
+);
 
 export function CommandPalette() {
   const { t } = useTranslation();
@@ -321,6 +327,7 @@ export function CommandPalette() {
       })),
   ];
   const items = source
+    .filter((item) => !HIDDEN_PALETTE_IDS.has(item.id))
     .filter((item) => item.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .slice(0, 30);
   const run = (index: number) => {

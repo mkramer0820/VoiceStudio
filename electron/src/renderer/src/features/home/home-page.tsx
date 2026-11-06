@@ -1,4 +1,5 @@
 import { HomeFeatureIcon } from './home-feature-icon';
+import { isRouteVisible } from '@/lib/fork-profile';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { getBridge } from '@/components/bridge';
 import { runRendererTask } from '@/lib/global-error-recovery';
@@ -65,6 +66,14 @@ const iconTones: Record<string, string> = {
     'bg-indigo-100 text-indigo-700 ring-indigo-300/60 dark:bg-indigo-400/15 dark:text-indigo-300 dark:ring-indigo-300/30',
   '/tools':
     'bg-slate-100 text-slate-700 ring-slate-300/60 dark:bg-slate-300/15 dark:text-slate-200 dark:ring-slate-300/30',
+  '/qwen-playground':
+    'bg-emerald-100 text-emerald-700 ring-emerald-300/60 dark:bg-emerald-400/15 dark:text-emerald-300 dark:ring-emerald-300/30',
+  '/qwen-story':
+    'bg-lime-100 text-lime-800 ring-lime-300/60 dark:bg-lime-400/15 dark:text-lime-200 dark:ring-lime-300/30',
+  '/fish-story':
+    'bg-blue-100 text-blue-700 ring-blue-300/60 dark:bg-blue-400/15 dark:text-blue-300 dark:ring-blue-300/30',
+  '/fish-dataset':
+    'bg-orange-100 text-orange-800 ring-orange-300/60 dark:bg-orange-400/15 dark:text-orange-200 dark:ring-orange-300/30',
 };
 
 export function HomePage() {
@@ -84,7 +93,7 @@ export function HomePage() {
     queryKey: ['longform-projects'],
     queryFn: projectLibrary.list,
   });
-  const destinations: Destination[] = [
+  const upstream: Destination[] = [
     {
       to: '/clone',
       label: t('nav.clone'),
@@ -130,7 +139,14 @@ export function HomePage() {
       label: t('tools.title'),
       description: t('tools.desc'),
     },
+  ].filter((d) => isRouteVisible(d.to));
+  const studios: Destination[] = [
+    { to: '/qwen-playground', label: t('qwenPlayground.nav'), description: t('homeUi.qwen_playground') },
+    { to: '/qwen-story', label: t('qwenStory.nav'), description: t('homeUi.qwen_story') },
+    { to: '/fish-story', label: t('fishStory.nav'), description: t('homeUi.fish_story') },
+    { to: '/fish-dataset', label: t('fishDataset.nav'), description: t('homeUi.fish_dataset') },
   ];
+  const destinations: Destination[] = [...studios, ...upstream];
   const recentProjects = [
     ...dubProjects.map((project) => ({
       kind: 'dub' as const,
@@ -187,13 +203,15 @@ export function HomePage() {
     <div className="flex h-full min-h-0 flex-col">
       <WorkspaceHeader>
         <h1 className="text-sm font-medium">{t('nav.home')}</h1>
-        <Link
-          to="/projects"
-          className="ml-auto inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <FolderOpenIcon className="size-4" />
-          {t('projects.title')}
-        </Link>
+        {isRouteVisible('/projects') && (
+          <Link
+            to="/projects"
+            className="ml-auto inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <FolderOpenIcon className="size-4" />
+            {t('projects.title')}
+          </Link>
+        )}
       </WorkspaceHeader>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="home-content mx-auto w-full max-w-6xl">
