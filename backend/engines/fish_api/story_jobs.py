@@ -886,7 +886,7 @@ def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfi
 
 
 def _apply_effect(job: dict, request: _RenderRequest, draft: Draft, cfg: FishConfig, name: str, raw: bytes, audio: Optional[dict]):
-    """Put the call's voice effect on the audio Fish returned. The untouched response is kept in dry/; if the effect cannot run, it stays as the
+    """Put the call's voice effect on the audio Fish returned. The untouched response is kept in <story folder>/dry/<run>/, outside the run folder; if the effect cannot run, it stays as the
     line (with the reason) instead of a missing file. Returns (file name, bytes, audio info, error or None)."""
     from engines.qwen3_studio import effects
 
@@ -894,7 +894,7 @@ def _apply_effect(job: dict, request: _RenderRequest, draft: Draft, cfg: FishCon
         return name, raw, audio, "Voice effects need wav, mp3 or opus output, not raw pcm."
     rate = int((audio or {}).get("sample_rate") or cfg.sample_rate)
     out_dir = job["out_dir"]
-    dry_dir = os.path.join(out_dir, "dry")
+    dry_dir = effects.dry_folder(out_dir)
     os.makedirs(dry_dir, exist_ok=True)
     path, dry = os.path.join(out_dir, name), os.path.join(dry_dir, name)
     final_name = os.path.splitext(name)[0] + ".wav"
@@ -909,6 +909,7 @@ def _apply_effect(job: dict, request: _RenderRequest, draft: Draft, cfg: FishCon
         return final_name, processed, _audio_info(processed, "wav", cfg), None
     except Exception as exc:  # noqa: BLE001 - a missing ffmpeg or a bad filter must not lose the line
         os.replace(dry, path)
+        effects.drop_empty_dry_folder(out_dir)
         _log(job, "WARN", f"Effect {request.effect} not applied to {name}: {exc}")
         return name, raw, audio, str(exc)
 

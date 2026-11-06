@@ -554,7 +554,7 @@ def test_a_failed_effect_keeps_the_dry_take_and_says_why_and_a_working_one_keeps
     monkeypatch.setattr(effects, "apply", lambda src, dst, effect, rate, **k: (_ for _ in ()).throw(RuntimeError("no ffmpeg")))
     story._apply_effect(job, entry, it, name, 24000)
     assert entry["effect"] == "ghost" and "no ffmpeg" in entry["effect_error"]
-    assert (folder / name).is_file() and not (folder / "dry" / name).exists()  # the dry take is still the chunk
+    assert (folder / name).is_file() and not os.path.exists(effects.dry_folder(str(folder)))  # the dry take is still the chunk; no empty dry folder is left
     calls = []
 
     def fake_apply(src, dst, effect, rate, **k):
@@ -566,7 +566,8 @@ def test_a_failed_effect_keeps_the_dry_take_and_says_why_and_a_working_one_keeps
     entry = {}
     story._apply_effect(job, entry, it, name, 24000)
     assert entry["effect_error"] is None and calls == [(name, "ghost")]
-    assert (folder / "dry" / name).is_file() and (folder / name).is_file()
+    assert os.path.isfile(os.path.join(effects.dry_folder(str(folder)), name)) and (folder / name).is_file()
+    assert not (folder / "dry").exists()  # the run folder holds only finished files
     plain = {"index": 2, "chunk": story.StoryChunk(id="c2", text="hi"), "profile": {}}
     entry = {}
     story._apply_effect(job, entry, plain, "002.wav", 24000)

@@ -8,7 +8,7 @@ An effect is a name plus an ffmpeg graph:
 ``{rate}`` in a graph is replaced by the chunk's sample rate (for pitch shifts without the rubberband filter). Built-in effects ship with
 the app; your own live in ``effects.json`` in the studio data folder and are managed from the story page (add, edit, test, delete), so a
 new effect never needs a code change. In the text, ``{Internal}`` (an effect's id, label or alias in braces) marks a line: the tag is
-stripped before the text reaches the model and the effect is applied to the finished audio. The effect-free take is kept in ``dry/``, and a
+stripped before the text reaches the model and the effect is applied to the finished audio. The effect-free take is kept in ``<story folder>/dry/<run>/`` (outside the run folder), and a
 failed effect leaves the dry take as the chunk (never a missing line).
 """
 from __future__ import annotations
@@ -249,6 +249,22 @@ def last_tag_effect(text: str) -> Optional[str]:
     for m in _TAG.finditer(_WRAPPED_TAG.sub(lambda m: m.group(1), text or "")):
         found = names.get(re.sub(r"[\s_-]+", " ", m.group(1).strip().lower())) or found
     return found
+
+
+def dry_folder(run_dir: str) -> str:
+    """Where the effect-free takes of a run are kept: ``<story folder>/dry/<run folder name>/``, next to the run folder and never inside it, so
+    anything that reads a run folder (a stitching tool, a player) sees only the finished files."""
+    run_dir = os.path.abspath(run_dir)
+    return os.path.join(os.path.dirname(run_dir), "dry", os.path.basename(run_dir))
+
+
+def drop_empty_dry_folder(run_dir: str) -> None:
+    """Remove the run's dry folder when nothing was kept in it (an effect that failed moved its take back)."""
+    try:
+        os.rmdir(dry_folder(run_dir))
+        os.rmdir(os.path.dirname(dry_folder(run_dir)))  # the story's dry/ too, if this was the only run in it
+    except OSError:
+        pass
 
 
 def resolve(chunk_effect: Optional[str], profile_effect: Optional[str]) -> str:

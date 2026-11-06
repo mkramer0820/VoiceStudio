@@ -486,13 +486,13 @@ def _run(job: dict, draft: Draft, items: list[dict], settings: dict) -> None:
 
 
 def _apply_effect(job: dict, entry: dict, it: dict, name: str, rate: int) -> None:
-    """Run the chunk's voice effect (its own, else its profile's) over the finished render. The dry take is kept in dry/ so the effect can
+    """Run the chunk's voice effect (its own, else its profile's) over the finished render. The dry take is kept in dry/<run>/ next to the run folder so the effect can
     be changed later; if the effect cannot run, the dry take stays as the chunk and the reason is logged and shown on the chunk."""
     effect = effects.resolve(it.get("tag_effect") or it["chunk"].effect, it["profile"].get("effect"))
     entry["effect"], entry["effect_error"] = effect, None
     if effect == effects.NONE:
         return
-    dry_dir = os.path.join(job["folder"], "dry")
+    dry_dir = effects.dry_folder(job["folder"])
     os.makedirs(dry_dir, exist_ok=True)
     final, dry = os.path.join(job["folder"], name), os.path.join(dry_dir, name)
     os.replace(final, dry)
@@ -500,6 +500,7 @@ def _apply_effect(job: dict, entry: dict, it: dict, name: str, rate: int) -> Non
         effects.apply(dry, final, effect, rate)
     except Exception as exc:  # noqa: BLE001 - a missing ffmpeg or a bad filter must not lose the chunk
         os.replace(dry, final)
+        effects.drop_empty_dry_folder(job["folder"])
         entry["effect_error"] = str(exc)
         _log(job, "WARN", f"Chunk {it['index']}: effect {effect} not applied: {exc}")
 

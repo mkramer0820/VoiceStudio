@@ -444,7 +444,9 @@ def test_the_effect_is_applied_to_the_audio_that_comes_back_and_the_untouched_ta
     assert job["status"] == "done" and len(calls) == 1 and calls[0][2] == "inner_monologue"
     effect_line = next(c for c in job["chunks"] if c["id"] == "b")
     assert effect_line["file"].endswith(".wav") and effect_line["effect_error"] is None
-    assert os.path.isfile(os.path.join(job["out_dir"], "dry", calls[0][0]))  # the response exactly as Fish sent it
+    from engines.qwen3_studio import effects as _fx
+    assert os.path.isfile(os.path.join(_fx.dry_folder(job["out_dir"]), calls[0][0]))  # the response exactly as Fish sent it
+    assert not os.path.exists(os.path.join(job["out_dir"], "dry"))  # nothing but finished files inside the run folder
     assert os.path.isfile(os.path.join(job["out_dir"], effect_line["file"]))
 
 
