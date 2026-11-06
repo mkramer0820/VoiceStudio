@@ -1,6 +1,6 @@
 # Agent docs: start here
 
-**Start with [HANDOFF.md](HANDOFF.md)**: what the fork is, where each studio lives, what is hidden, how to run the scoped tests, and what is not built yet.
+**Next phase: [STORY_MIX_BRIEF.md](STORY_MIX_BRIEF.md)** (the Stitch & mix tab). **Start with [HANDOFF.md](HANDOFF.md)**: what the fork is, where each studio lives, what is hidden, how to run the scoped tests, and what is not built yet.
 
 Works for any coding agent or human. Read in this order and stop when you have what you need.
 

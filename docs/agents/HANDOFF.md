@@ -79,6 +79,7 @@ The whole Qwen playground and story pages in the real app; LoRA training and the
 
 ## 8. Open items, roughly in order
 
+0. **Stitch & mix tab** (the owner's stitcher in `D:\fish_tts` brought into the app, with per-role loudness/EQ, background music and a portable project): the full brief is [STORY_MIX_BRIEF.md](STORY_MIX_BRIEF.md). This is the next phase.
 1. Audio → transcript → clips → training set (section 4.4).
 2. A per-line Fish model picker and "re-apply an effect to a finished run" (both backends already record what is needed in `manifest.json`).
 3. More debloat only if asked: the non-CUDA/Mac/AMD code paths, unused engines, upstream tests.
