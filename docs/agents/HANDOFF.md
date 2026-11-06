@@ -4,7 +4,7 @@ Read this first. It is for the next person or agent who picks the fork up. How t
 
 ## 1. What the fork is for
 
-A **Windows + NVIDIA CUDA** studio for building and using multi-voice stories with **Qwen3-TTS** (your own fine-tunes and LoRAs) and **Fish Audio** (cloud API), plus the tools that make training data for the next Qwen fine-tune. It started as a fork of `debpalash/VoiceStudio` (an open-source voice cloning, dubbing and dictation app). Much of upstream is still in the repo and is **not part of this pipeline**; see section 5.
+A **Windows + NVIDIA CUDA** studio for building and using multi-voice stories with **Fish Audio** (cloud API; **the go-to studio right now: put Fish first when choosing what to work on**) and **Qwen3-TTS** (your own fine-tunes and LoRAs, the test bench and the next voice), plus the tools that make training data for the next Qwen fine-tune. It started as a fork of `debpalash/VoiceStudio` (an open-source voice cloning, dubbing and dictation app). Much of upstream is still in the repo and is **not part of this pipeline**; see section 5.
 
 Owner preferences that shape every decision:
 

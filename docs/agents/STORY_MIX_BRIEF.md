@@ -10,7 +10,7 @@ The owner's words to keep in mind: "transferable and easy to find the folder loc
 
 ## 2. What the studios already write (the input)
 
-Both studios write one folder per render. Use these facts, do not guess.
+Both studios write one folder per render. **Fish Story is the owner's main studio today: design, test and acceptance-check against Fish runs first; Qwen runs must work, but Fish decides priorities.** Use these facts, do not guess.
 
 - **Fish Story**: `<fish output root>/<story folder>/run-NNN_<yyyymmdd-hhmmss>_<job id>/`. Default root `…\OmniVoice\fish_stories\renders` (`story_jobs.default_output_root()`; the Fish settings `output_dir` overrides it). A `.story-id` marker sits in the story folder. Files: `NNN_<speaker or narration>_<voice name>.<wav|mp3|opus|…>` per call, `story.wav` (a plain join, only for wav), `manifest.json`, `story.json` (the draft), `requests.jsonl`, `run.log`. One call can cover several lines (multi-speaker mode): then one file maps to several chunks; the manifest's chunk entries say which (`request_id`, `request_indices`).
 - **Qwen story**: `<qwen story root>/<story>/run-NNN_<time>_<id>/` (`story.default_story_root()` = `…\qwen_studio\story`, or the playground output setting). Files: `NNN_<speaker>_<profile>.wav` per chunk, `…_r2.wav` for re-renders (the manifest's `file` is the current one; older ones are in `history`), `story.wav`, `manifest.json`, `story.json`.

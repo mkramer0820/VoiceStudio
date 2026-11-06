@@ -101,15 +101,16 @@ it('opens both creator profiles from the accessible avatar card', async () => {
 
 it('offers the fork studios first and only the upstream workspaces the fork keeps', () => {
   render(<HomePage />);
-  const playground = screen.getByRole('link', { name: /qwenPlayground.nav/ });
-  const primary = playground.parentElement!;
+  const fish = screen.getByRole('link', { name: /fishStory.nav/ });
+  const primary = fish.parentElement!;
+  // Fish Story is the go-to studio, so it leads; the Qwen playground is the test bench and sits in the second row.
   expect(Array.from(primary.querySelectorAll('a'), (a) => a.getAttribute('href'))).toEqual([
-    '/qwen-playground',
-    '/qwen-story',
     '/fish-story',
+    '/fish-dataset',
+    '/qwen-story',
   ]);
   expect(Array.from(primary.nextElementSibling!.querySelectorAll('a'), (a) => a.getAttribute('href'))).toEqual([
-    '/fish-dataset',
+    '/qwen-playground',
     '/transcriptions',
   ]);
   const icons = document.querySelectorAll('svg.home-feature-svg');

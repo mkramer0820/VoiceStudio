@@ -141,10 +141,10 @@ export function HomePage() {
     },
   ].filter((d) => isRouteVisible(d.to));
   const studios: Destination[] = [
-    { to: '/qwen-playground', label: t('qwenPlayground.nav'), description: t('homeUi.qwen_playground') },
-    { to: '/qwen-story', label: t('qwenStory.nav'), description: t('homeUi.qwen_story') },
     { to: '/fish-story', label: t('fishStory.nav'), description: t('homeUi.fish_story') },
     { to: '/fish-dataset', label: t('fishDataset.nav'), description: t('homeUi.fish_dataset') },
+    { to: '/qwen-story', label: t('qwenStory.nav'), description: t('homeUi.qwen_story') },
+    { to: '/qwen-playground', label: t('qwenPlayground.nav'), description: t('homeUi.qwen_playground') },
   ];
   const destinations: Destination[] = [...studios, ...upstream];
   const recentProjects = [
