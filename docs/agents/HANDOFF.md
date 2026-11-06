@@ -19,9 +19,11 @@ Owner preferences that shape every decision:
 
 | Branch | What it is |
 |---|---|
-| `ext/qwen3-story` | The working branch (everything in this document). Pushed to `origin` = `mkramer0820/VoiceStudio`. |
-| `archive/upstream-full-before-debloat` | A snapshot taken before the UI was slimmed down: every upstream page still offered. Restore from here if a trimmed feature is wanted back. |
-| `ext/fish-api` | Where `ext/qwen3-story` merges into (a dry-run merge was clean on 2026-11-05). |
+| `main` | The fork's main line (everything in this document). `origin` = `mkramer0820/VoiceStudio`. |
+| `v1` | The old `main` (commit `f47221a1`, upstream's state when the fork started), kept as-is. |
+| `ext/qwen3-story` | The branch `main` was fast-forwarded from; same commits as `main`, kept for now. |
+| `archive/upstream-full-before-debloat` | A snapshot taken before the UI was slimmed down: every upstream page still offered. |
+| `ext/fish-api` | An older fork branch that `ext/qwen3-story` was built on. |
 
 Commit identity: the owner's git identity only; **no Co-Authored-By or "Generated with" lines** (CLAUDE.md, enforced by `scripts/check_commit_identities.py`). Do not push or open PRs unless asked.
 
