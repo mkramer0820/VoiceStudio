@@ -15,6 +15,7 @@ metadata and the backend fallback mirror it.
 ### Added
 
 - Qwen story page: a multi-voice book for Qwen3-TTS with saved voice profiles (record or upload a sample and press Save voice; the speaker embedding is prepared automatically), emotion presets (unverified on the fine-tuned narrator), character-to-profile mapping, bulk edit of selected chunks, a tags dialog, per-chunk render and re-render, and a Fish-style output folder — thanks @mkramer0820!
+- Fish Story: replace chosen lines inside a finished run (new render with the board's voice, text or effect written into the same run folder with manifest, job, story, request log and joined file updated, the old audio kept in a replaced folder), and change a line's effect from its untouched response without calling Fish — thanks @mkramer0820!
 - Voice effects: edit the built-in presets (with a reset to the shipped recipe) and listen to any recipe, saved or not, on a clip or a rendered Fish line with the original and processed audio side by side — thanks @mkramer0820!
 - Fork focus: the menu, command palette and home page now offer the Qwen and Fish studios, transcripts and saved voices, and hide the upstream workspaces this pipeline does not use (list in lib/fork-profile.ts); the handoff doc maps the project — thanks @mkramer0820!
 - Docs: a step-by-step Story studios guide for the Qwen playground, Qwen story (voices, tags, effects), Fish Story models, transcript exports and training-data export — thanks @mkramer0820!

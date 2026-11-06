@@ -77,6 +77,17 @@ Fish Story sends your text to Fish Audio, so it needs the key from **Settings â†
 - **One Fish call has one model.** In multi-speaker mode, lines for different models are sent as separate calls; **Preview requests** lists every call with its model (and shows the first as a `curl` command), and the render log and manifest record it. Nothing is sent until you confirm the render.
 - Fish Story and the Qwen pages share one **Pronunciation dictionary** (Settings â†’ Pronunciation); `[[word|respelling]]` works inline in both.
 
+### Fixing one line of a finished run (replace in place)
+
+You do not need a new run folder to fix a line. In **Jobs**, open the run's lines and tick the ones to change:
+
+1. If the board does not hold this story, press **Load** on the run first (that puts the run's story on the board). Change what was wrong *on the board*: the line's text, its voice, the character's voice in **Tags**, its model or its effect.
+2. Tick the line in the run's list, then **Replace N line(s) with the board's version**, and confirm. The chosen lines are sent to Fish again (one call each, credits are used) and the new audio goes **into the same run folder**.
+3. What is updated: the audio file (named for the new voice, for example `031_Shadow_right_voice.wav`), `manifest.json`, `job.json`, `story.json` (so it still describes the audio that is there), `requests.jsonl` (a new record marked `replacement`), `run.log`, and the joined `story.wav`. Other lines are not touched.
+4. **Nothing is lost:** the audio that was replaced is copied to `<story folder>/replaced/<run folder name>/` (outside the run folder, like `dry/`). If a replacement fails, the line keeps its old audio and shows why.
+
+For an **effect** only (add one, change it, or take it off), tick the lines and press **Re-apply effects (no Fish call)**: it starts from the untouched Fish response in `dry/`, so nothing is sent to Fish and nothing is paid. Put `{Internal}` in the line on the board (or change the character's effect) first. Lines that came back in one shared multi-speaker response must end up with the same effect.
+
 ## 5. Transcriptions: export with timestamps
 
 On **Transcriptions**, open a transcript. Under **Segments**, **Export SRT**, **Export VTT**, **Export timed text** (`[hh:mm:ss]` per segment) and **Export JSON** (every segment with its start and end). If the speech engine returned no timings, only JSON is offered and the page says why; nothing is invented. The top-level export still writes plain text.

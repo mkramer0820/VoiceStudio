@@ -159,6 +159,7 @@ export function FishStoryPage() {
         onOpenChange={setJobsOpen}
         onError={story.setError}
         hasBoard={draft.chunks.length > 0}
+        getDraft={() => draft}
         onLoad={async (jobId) => {
           const loaded = await story.loadRun(jobId);
           if (!loaded) return;

@@ -471,3 +471,156 @@ def test_a_character_or_the_narrator_can_have_an_effect_and_calls_never_mix_effe
     bad.cast_effects = {"Shadow": "nope"}
     with pytest.raises(ValueError, match="effect"):
         story_jobs.start_render(bad)
+
+
+# ── replace lines inside a finished run / change an effect without a new Fish call ──
+def _voiced_draft(**settings) -> story.Draft:
+    return story.Draft(
+        title="Replace",
+        chunks=[story.Chunk(id="a", text="Hello there."),
+                story.Chunk(id="b", text="He looked around.", speaker="Shadow"),
+                story.Chunk(id="c", text="Run.")],
+        voices={"vnar": "Narrator", "vsh": "sun_2", "vok": "right_voice"},
+        cast={"Shadow": "vsh"},
+        settings=story.StorySettings(**{"request_mode": "single", "default_voice": "vnar", **settings}))
+
+
+def _finished_run(monkeypatch, draft=None):
+    _ok(monkeypatch)
+    started = story_jobs.start_render(draft or _voiced_draft())
+    job = _wait(started["id"])
+    assert job["status"] == "done"
+    return job
+
+
+def _read(run_dir, name):
+    return json.load(open(os.path.join(run_dir, name), encoding="utf-8"))
+
+
+def test_a_line_with_the_wrong_voice_is_replaced_in_the_same_run_and_every_record_follows(monkeypatch):
+    job = _finished_run(monkeypatch)
+    run_dir = job["out_dir"]
+    old_b = next(c for c in job["chunks"] if c["id"] == "b")
+    assert old_b["voice_name"] == "sun_2" and os.path.isfile(os.path.join(run_dir, old_b["file"]))
+    other_hash = {c["id"]: c["sha256"] for c in job["chunks"] if c["id"] != "b"}
+    sent = []
+
+    def fake(body, *, api_key, cfg, transport=None, sleep=None, meta=None):
+        sent.append((body["reference_id"], body["text"]))
+        if meta is not None:
+            meta.update(attempts=1, elapsed_ms=5, status=200, content_type="audio/wav")
+        return _wav(seconds=0.5)
+
+    monkeypatch.setattr(client, "synthesize", fake)
+    board = _voiced_draft()
+    board.cast = {"Shadow": "vok"}  # the fix: map the character to the right voice
+    story_jobs.replace_lines(job["id"], board, ["b"])
+    done = _wait(job["id"])
+    assert done["status"] == "done" and sent == [("vok", "He looked around.")]  # only that line went to Fish, as one call
+    chunks = {c["id"]: c for c in done["chunks"]}
+    assert chunks["b"]["voice_name"] == "right_voice" and chunks["b"]["file"] == "002_Shadow_right_voice.wav"
+    assert chunks["b"]["sha256"] != old_b["sha256"] and chunks["b"]["replaced_at"]
+    assert {i: chunks[i]["sha256"] for i in other_hash} == other_hash  # the other lines are untouched
+    folder = os.listdir(run_dir)
+    assert "002_Shadow_right_voice.wav" in folder and old_b["file"] not in folder  # one run folder, the old name is gone from it
+    kept = os.listdir(story_jobs.replaced_folder(run_dir))
+    assert len(kept) == 1 and kept[0].startswith("002_Shadow_sun_2.") and kept[0].endswith(".wav")  # the old audio is still on disk, outside
+    # the records
+    assert _read(run_dir, "manifest.json")["chunks"][1]["voice_name"] == "right_voice"
+    assert _read(run_dir, "job.json")["chunks"][1]["file"] == "002_Shadow_right_voice.wav"
+    assert _read(run_dir, "story.json")["draft"]["cast"] == {"Shadow": "vok"}
+    log = [json.loads(l) for l in open(os.path.join(run_dir, "requests.jsonl"), encoding="utf-8") if l.strip()]
+    assert log[-1]["replacement"] is True and log[-1]["request"]["reference_id"] == "vok" and len(log) == 4
+    assert "Replacing 1 line" in open(os.path.join(run_dir, "run.log"), encoding="utf-8").read()
+    assert done["joined"] and os.path.isfile(os.path.join(run_dir, done["joined"]))  # story.wav is rebuilt from the new set
+
+
+def test_a_text_fix_with_the_same_voice_overwrites_the_same_file_and_keeps_a_copy(monkeypatch):
+    job = _finished_run(monkeypatch)
+    run_dir = job["out_dir"]
+    old = next(c for c in job["chunks"] if c["id"] == "c")
+    board = _voiced_draft()
+    board.chunks[2].text = "Run now!"
+    _ok(monkeypatch, rate=44100)
+    story_jobs.replace_lines(job["id"], board, ["c"])
+    done = _wait(job["id"])
+    new = next(c for c in done["chunks"] if c["id"] == "c")
+    assert new["file"] == old["file"] and len(os.listdir(story_jobs.replaced_folder(run_dir))) == 1
+    assert _read(run_dir, "story.json")["draft"]["chunks"][2]["text"] == "Run now!"
+
+
+def test_a_failed_replacement_keeps_the_old_audio_and_says_why(monkeypatch):
+    job = _finished_run(monkeypatch)
+    run_dir = job["out_dir"]
+    old = next(c for c in job["chunks"] if c["id"] == "b")
+
+    def boom(body, *, api_key, cfg, transport=None, sleep=None, meta=None):
+        raise client.FishAPIError(400, "bad request")
+
+    monkeypatch.setattr(client, "synthesize", boom)
+    board = _voiced_draft()
+    board.cast = {"Shadow": "vok"}
+    story_jobs.replace_lines(job["id"], board, ["b"])
+    done = _wait(job["id"])
+    line = next(c for c in done["chunks"] if c["id"] == "b")
+    assert line["status"] == "done" and line["file"] == old["file"] and line["sha256"] == old["sha256"] and "bad request" in line["replace_error"]
+    assert os.path.isfile(os.path.join(run_dir, old["file"]))
+    assert _read(run_dir, "story.json")["draft"]["cast"] == {"Shadow": "vsh"}  # the record still describes the audio that is there
+    assert done["status"] == "done" and "keep their old audio" in done["message"]  # every line still has audio, so the run is not "partial"
+
+
+def test_replace_refuses_unknown_lines_a_missing_confirm_and_a_running_render(monkeypatch):
+    job = _finished_run(monkeypatch)
+    with pytest.raises(ValueError, match="not part of that run"):
+        story_jobs.replace_lines(job["id"], _voiced_draft(), ["nope"])
+    with pytest.raises(ValueError, match="at least one line"):
+        story_jobs.replace_lines(job["id"], _voiced_draft(), [])
+    board = _voiced_draft()
+    board.chunks = board.chunks[:1]
+    with pytest.raises(ValueError, match="not on the board"):
+        story_jobs.replace_lines(job["id"], board, ["b"])
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from api.dependencies import require_admin
+    from api.routers import fish_story as router
+
+    app = FastAPI()
+    app.include_router(router.router)
+    app.dependency_overrides[require_admin] = lambda: None
+    c = TestClient(app, headers={"Sec-Fetch-Site": "same-origin"})
+    r = c.post(f"/api/fish/story/jobs/{job['id']}/replace", json={"confirm": False, "draft": _voiced_draft().model_dump(), "chunk_ids": ["b"]})
+    assert r.status_code == 422
+
+
+def test_the_effect_of_a_finished_line_can_be_added_changed_and_removed_without_asking_fish_again(monkeypatch):
+    import shutil
+    from engines.qwen3_studio import effects
+
+    job = _finished_run(monkeypatch)
+    run_dir = job["out_dir"]
+    original = next(c for c in job["chunks"] if c["id"] == "c")
+    monkeypatch.setattr(client, "synthesize", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Fish must not be called")))
+    applied = []
+
+    def fake_apply(src, dst, effect, rate, **k):
+        applied.append((effect, os.path.dirname(src)))
+        shutil.copyfile(src, dst)
+
+    monkeypatch.setattr(effects, "apply", fake_apply)
+    board = _voiced_draft()
+    board.chunks[2].text = "{Internal} Run."  # add the effect afterwards, as a tag
+    done = story_jobs.reapply_effects(job["id"], board, ["c"])
+    line = next(c for c in done["chunks"] if c["id"] == "c")
+    assert line["effect"] == "inner_monologue" and line["dry_file"] == original["file"] and applied == [("inner_monologue", effects.dry_folder(run_dir))]
+    assert os.path.isfile(os.path.join(effects.dry_folder(run_dir), original["file"]))  # the untouched response is kept outside the run folder
+    assert _read(run_dir, "manifest.json")["chunks"][2]["effect"] == "inner_monologue"
+    assert _read(run_dir, "story.json")["draft"]["chunks"][2]["text"] == "{Internal} Run."
+    # change it to another effect: taken from the untouched response again
+    board.chunks[2].text = "{ghost} Run."
+    story_jobs.reapply_effects(job["id"], board, ["c"])
+    assert applied[-1] == ("ghost", effects.dry_folder(run_dir))
+    # remove it: the untouched response is the line again
+    board.chunks[2].text = "Run."
+    back = story_jobs.reapply_effects(job["id"], board, ["c"])
+    line = next(c for c in back["chunks"] if c["id"] == "c")
+    assert line["effect"] is None and line["sha256"] == original["sha256"] and line["file"] == original["file"]

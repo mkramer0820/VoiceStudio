@@ -346,7 +346,8 @@ def load_run(job_id: str) -> Optional[dict]:
     data = _read_json(os.path.join(run_dir, JOB_FILE)) or {}
     lines = [{"id": c.get("id"), "index": c.get("index"), "status": c.get("status"),
               "file": c.get("file") if c.get("file") and os.path.isfile(os.path.join(run_dir, c["file"])) else None,
-              "voice_name": c.get("voice_name"), "duration_s": c.get("duration_s")}
+              "voice_name": c.get("voice_name"), "duration_s": c.get("duration_s"), "effect": c.get("effect"),
+              "model": c.get("model"), "replace_error": c.get("replace_error")}
              for c in data.get("chunks", [])]
     return {"draft": draft.model_dump(), "title": data.get("title"), "lines": lines,
             "joined": data.get("joined")}
@@ -767,6 +768,280 @@ def resume_render(job_id: str) -> dict:
     return _view(job)
 
 
+# ── replace lines inside a finished run, or change their effect, without making a new run ──
+def replaced_folder(run_dir: str) -> str:
+    """Where the audio a replacement overwrote is kept: ``<story folder>/replaced/<run folder name>/``, next to the run folder, never inside it."""
+    run_dir = os.path.abspath(run_dir)
+    return os.path.join(os.path.dirname(run_dir), "replaced", os.path.basename(run_dir))
+
+
+def _merged_draft(old: Draft, board: Draft, ids: set) -> Draft:
+    """The run's own draft with the board's version of the chosen lines, and the board's voice, character, model and effect maps on top
+    (a wrong voice is usually fixed by changing a map, not the line)."""
+    board_by_id = {c.id: c for c in board.chunks}
+    merged = old.model_copy(deep=True)
+    merged.chunks = [board_by_id[c.id].model_copy(deep=True) if c.id in ids and c.id in board_by_id else c for c in old.chunks]
+    merged.voices = {**old.voices, **board.voices}
+    merged.cast = {**old.cast, **board.cast}
+    merged.cast_models = {**old.cast_models, **board.cast_models}
+    merged.cast_effects = {**old.cast_effects, **board.cast_effects}
+    return merged
+
+
+def _load_run_for_edit(job_id: str):
+    with _jobs_lock:
+        live = _jobs.get(job_id)
+    if live and live["status"] == "running":
+        raise ValueError("That render is still running.")
+    run_dir = _find_run_dir(job_id)
+    data = _read_json(os.path.join(run_dir, JOB_FILE)) if run_dir else None
+    snapshot = _read_json(os.path.join(run_dir, STORY_FILE)) if run_dir else None
+    if not data or not snapshot:
+        raise ValueError("That render's record is missing, so its lines cannot be changed.")
+    return run_dir, data, snapshot
+
+
+def _check_ids(ids, entries: dict, board: Draft) -> list:
+    ids = list(dict.fromkeys(ids or []))
+    if not ids:
+        raise ValueError("Choose at least one line.")
+    unknown = [i for i in ids if i not in entries]
+    if unknown:
+        raise ValueError("These lines are not part of that run: " + ", ".join(unknown[:5]))
+    on_board = {c.id for c in board.chunks}
+    gone = [i for i in ids if i not in on_board]
+    if gone:
+        raise ValueError("These lines are not on the board (load the run's story first): " + ", ".join(gone[:5]))
+    return ids
+
+
+def replace_lines(job_id: str, board: Draft, chunk_ids: list) -> dict:
+    """Render the chosen lines again, with the board's text, voices and effects, and **put the new audio into the same run folder**: the old
+    file is copied to ``<story>/replaced/<run>/`` first, then ``manifest.json``, ``job.json``, ``story.json``, ``requests.jsonl``, ``run.log``
+    and the joined file are updated. Lines are sent one call each (a line inside a shared multi-speaker response cannot be cut out). A line
+    whose new render fails keeps its old audio. Contacts Fish."""
+    import shutil
+
+    api_key = resolve_api_key()
+    if not api_key:
+        raise RuntimeError("No Fish Audio API key. Add one in Settings → Models → TTS.")
+    run_dir, data, snapshot = _load_run_for_edit(job_id)
+    old = Draft.model_validate(snapshot["draft"])
+    entries = {c["id"]: c for c in data["chunks"]}
+    ids = _check_ids(chunk_ids, entries, board)
+    merged = _merged_draft(old, board, set(ids))
+    cfg = effective_config(merged.settings)
+    default = merged.settings.default_voice or cfg.reference_id
+    by_id = {c.id: c for c in merged.chunks}
+    from engines.qwen3_studio import effects as _effects
+
+    for i in ids:
+        chunk = by_id[i]
+        if not spoken_and_effect(chunk, merged)[0].strip():
+            raise ValueError(f"Line {entries[i]['index']} has no text to speak.")
+        if not _effects.valid(chunk.effect) or not all(_effects.valid(v) for v in merged.cast_effects.values()):
+            raise ValueError("Unknown voice effect on the board. Add it under Voice effects or pick one from the list.")
+    items = [(entries[i]["index"], by_id[i]) for i in ids]
+    single = merged.model_copy(deep=True)
+    single.settings.request_mode = "single"
+    requests = _render_requests(single, cfg, items, default)
+    for request in requests:
+        bad = story_check(request.body)
+        if bad:
+            raise ValueError(f"Line {request.items[0][0]} would be rejected: {bad[0]}")
+    # Keep what is about to be overwritten.
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = replaced_folder(run_dir)
+    for i in ids:
+        old_file = entries[i].get("file")
+        if old_file and os.path.isfile(os.path.join(run_dir, old_file)):
+            os.makedirs(backup, exist_ok=True)
+            stem, ext = os.path.splitext(old_file)
+            shutil.copyfile(os.path.join(run_dir, old_file), os.path.join(backup, f"{stem}.{stamp}{ext}"))
+    import copy
+
+    before = {i: copy.deepcopy(entries[i]) for i in ids}
+    freed = {before[i].get("file"): float(before[i].get("duration_s") or 0.0) for i in ids}
+    for i in ids:
+        fresh = _chunk_entry(entries[i]["index"], by_id[i], _voice_for(by_id[i], merged, default), merged.voices, model_for(by_id[i], merged, cfg.model))
+        entries[i].update(status="queued", error=None, replace_error=None, replaced_at=stamp,
+                          **{k: fresh[k] for k in ("speaker", "voice", "voice_name", "model")},
+                          effect=spoken_and_effect(by_id[i], merged)[1])
+    job = _new_job(run_dir, merged, snapshot.get("draft_id"), cfg, data["chunks"], job_id, data.get("started_at") or time.time())
+    job["warnings"] = list(data.get("warnings") or [])
+    job["audio_seconds"] = max(0.0, float(data.get("audio_seconds") or 0.0) - sum(freed.values()))
+    job["joined"] = data.get("joined")
+    job["replacing"] = True
+    _register(job)
+    for request in requests:
+        request_id = _request_id(request)
+        indices = [index for index, _ in request.items]
+        for _, chunk in request.items:
+            entries[chunk.id].update(request_id=request_id, request_mode=request.mode, request_indices=indices)
+    _log(job, "INFO", f"Replacing {len(ids)} line(s) in this run ({', '.join(str(entries[i]['index']) for i in ids[:12])}); "
+                      f"the old audio is kept in {backup}.")
+    _persist(job)
+    threading.Thread(target=_run_replace, args=(job, requests, merged, cfg, api_key, before, old, board, ids, run_dir),
+                     name=f"fish-story-replace-{job_id}", daemon=True).start()
+    return _view(job)
+
+
+def _run_replace(job, requests, merged, cfg, api_key, before, old, board, ids, run_dir) -> None:
+    try:
+        _run(job, requests, merged, cfg, api_key)
+    except Exception:  # noqa: BLE001 - _run records its own failures; whatever it left behind is fixed up below
+        logger.exception("Fish story replacement crashed")
+    ok = set()
+    with job["lock"]:
+        for entry in job["chunks"]:
+            if entry["id"] not in before:
+                continue
+            if entry.get("status") == "done" and entry.get("file"):
+                ok.add(entry["id"])
+                continue
+            message = entry.get("error") or "not replaced"
+            line_id = entry["id"]
+            entry.clear()
+            entry.update(before[line_id])  # the old audio stays the line
+            entry["replace_error"] = message
+        referenced = {e.get("file") for e in job["chunks"]} | {job.get("joined")}
+        job["failed"] = sum(e.get("status") == "failed" for e in job["chunks"])
+        job["done"] = sum(e.get("status") == "done" for e in job["chunks"])
+    for i in ok:  # an old file under a name nothing uses any more (the voice name changed) is removed; a copy is in replaced/
+        stale = before[i].get("file")
+        if stale and stale not in referenced and os.path.isfile(os.path.join(run_dir, stale)):
+            try:
+                os.remove(os.path.join(run_dir, stale))
+            except OSError:
+                pass
+    final = _merged_draft(old, board, ok) if ok else old
+    try:
+        _write_json(os.path.join(run_dir, STORY_FILE), {"draft_id": job.get("draft_id"), "draft": final.model_dump()})
+    except OSError:
+        pass
+    status = "done" if all(e.get("status") == "done" for e in job["chunks"]) else "partial"
+    failed = [i for i in before if i not in ok]
+    message = f"{len(failed)} line(s) could not be replaced and keep their old audio." if failed else ""
+    with job["lock"]:
+        job["status"], job["message"] = status, message
+        job["finished_at"] = time.time()
+        job.pop("replacing", None)
+    _manifest(job, final, cfg, status, message)
+    _log(job, "INFO", f"Replacement finished: {len(ok)} replaced, {len(failed)} kept as before.")
+    _persist(job)
+
+
+def _dry_source(run_dir: str, entry: dict) -> Optional[str]:
+    """The untouched Fish response of a line whose audio carries an effect (kept in <story>/dry/<run>/), or None."""
+    from engines.qwen3_studio import effects
+
+    folder = effects.dry_folder(run_dir)
+    names = [entry.get("dry_file"), entry.get("file")]
+    stem = os.path.splitext(entry.get("file") or "")[0]
+    names += [stem + ext for ext in (".wav", ".mp3", ".opus", ".ogg", ".flac")]
+    for name in names:
+        if name and os.path.isfile(os.path.join(folder, name)):
+            return os.path.join(folder, name)
+    return None
+
+
+def reapply_effects(job_id: str, board: Draft, chunk_ids: list) -> dict:
+    """Change the voice effect of lines in a finished run **without asking Fish again**: the untouched response is taken from
+    ``<story>/dry/<run>/`` (or the current file when no effect was applied yet), the effect the board now gives that line (a ``{Internal}``
+    tag, the line's setting or its character's) is put on it, and the run's files are updated in place. A line with no effect gets its
+    untouched response back. Lines that share one Fish response must end up with the same effect."""
+    import shutil
+
+    run_dir, data, snapshot = _load_run_for_edit(job_id)
+    old = Draft.model_validate(snapshot["draft"])
+    entries = {c["id"]: c for c in data["chunks"]}
+    ids = _check_ids(chunk_ids, entries, board)
+    merged = _merged_draft(old, board, set(ids))
+    cfg = effective_config(merged.settings)
+    by_id = {c.id: c for c in merged.chunks}
+    from engines.qwen3_studio import effects
+
+    if cfg.format == "pcm":
+        raise ValueError("Voice effects need wav, mp3 or opus output, not raw pcm.")
+    if not all(effects.valid(by_id[i].effect) for i in ids) or not all(effects.valid(v) for v in merged.cast_effects.values()):
+        raise ValueError("Unknown voice effect on the board. Add it under Voice effects or pick one from the list.")
+    files = []
+    for i in ids:
+        e = entries[i]
+        if e.get("status") != "done" or not e.get("file"):
+            raise ValueError(f"Line {e.get('index')} has no finished audio to change.")
+        if e["file"] not in files:
+            files.append(e["file"])
+    changed = []
+    for f in files:
+        group = [e for e in data["chunks"] if e.get("file") == f]
+        wants = {spoken_and_effect(by_id[e["id"]], merged)[1] for e in group if e["id"] in by_id}
+        if len(wants) != 1:
+            raise ValueError("Lines " + ", ".join(str(e["index"]) for e in group) + f" share one Fish response ({f}) but would get different effects; "
+                             "give them the same effect, or replace them one by one.")
+        want = wants.pop()
+        current = group[0].get("effect") or None
+        if want == current:
+            continue
+        raw_name = group[0].get("dry_file") or f
+        src_dry = _dry_source(run_dir, group[0]) if current else None
+        dry_dir = effects.dry_folder(run_dir)
+        if current and not src_dry:
+            raise ValueError(f"The untouched Fish response of {f} is missing from {dry_dir}, so its effect cannot be changed.")
+        if want is None:  # back to what Fish returned
+            shutil.copyfile(src_dry, os.path.join(run_dir, os.path.basename(src_dry)))
+            new_name = os.path.basename(src_dry)
+            if new_name != f and os.path.isfile(os.path.join(run_dir, f)):
+                os.remove(os.path.join(run_dir, f))
+        else:
+            first_time = src_dry is None
+            if first_time:  # keep the untouched response before the first effect goes on it
+                os.makedirs(dry_dir, exist_ok=True)
+                src_dry = os.path.join(dry_dir, f)
+                shutil.copyfile(os.path.join(run_dir, f), src_dry)
+                raw_name = f
+            try:
+                import soundfile as sf
+
+                rate = int(sf.info(src_dry).samplerate)
+            except Exception:  # noqa: BLE001 - mp3/opus: ffmpeg reads it, libsndfile may not
+                rate = int(cfg.sample_rate)
+            new_name = os.path.splitext(raw_name)[0] + ".wav"
+            try:
+                effects.apply(src_dry, os.path.join(run_dir, new_name), want, rate)
+            except Exception as exc:  # noqa: BLE001
+                if first_time:
+                    try:
+                        os.remove(src_dry)
+                    except OSError:
+                        pass
+                    effects.drop_empty_dry_folder(run_dir)
+                raise ValueError(f"The effect could not be applied to {f}: {exc}") from exc
+            if first_time and new_name != f and os.path.isfile(os.path.join(run_dir, f)):
+                os.remove(os.path.join(run_dir, f))
+        with open(os.path.join(run_dir, new_name), "rb") as fh:
+            raw = fh.read()
+        audio = _audio_info(raw, "wav" if want else os.path.splitext(new_name)[1].lstrip(".") or cfg.format, cfg)
+        for e in group:
+            e.update(file=new_name, effect=want, effect_error=None, dry_file=(raw_name if want else None), bytes=len(raw),
+                     sha256=hashlib.sha256(raw).hexdigest(), duration_s=audio["duration_s"] if audio else e.get("duration_s"),
+                     sample_rate=audio["sample_rate"] if audio else e.get("sample_rate"))
+        changed.append(new_name)
+    job = _new_job(run_dir, merged, snapshot.get("draft_id"), cfg, data["chunks"], job_id, data.get("started_at") or time.time())
+    for key in ("status", "message", "joined", "finished_at", "warnings"):
+        if key in data:
+            job[key] = data[key]
+    job["audio_seconds"] = round(sum(float(e.get("duration_s") or 0.0) for e in {x.get("file"): x for x in data["chunks"] if x.get("file")}.values()), 3)
+    final = _merged_draft(old, board, set(ids))
+    _write_json(os.path.join(run_dir, STORY_FILE), {"draft_id": snapshot.get("draft_id"), "draft": final.model_dump()})
+    if changed and merged.settings.join and cfg.format in ("wav", "pcm"):
+        job["joined"] = _join(job, merged, cfg) or job.get("joined")
+    _log(job, "INFO", f"Voice effect changed on {len(changed)} file(s) without a new Fish call: {', '.join(changed[:8])}")
+    _manifest(job, final, cfg, job.get("status") or "done", job.get("message") or "")
+    _persist(job)
+    return _view(job)
+
+
 def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfig,
          api_key: str) -> None:
     fatal: dict = {}
@@ -799,10 +1074,12 @@ def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfi
             "speakers": list(request.speakers),
             "voice": request.voices[0] if request.mode == "single" else list(request.voices),
             "request": body,
+            **({"replacement": True} if job.get("replacing") else {}),
         }
         try:
             raw = client.synthesize(body, api_key=api_key, cfg=dataclasses.replace(cfg, model=request.model or cfg.model), meta=meta)
             name = _request_audio_name(request, draft, ext)
+            raw_name = name
             with open(os.path.join(job["out_dir"], name), "wb") as fh:
                 fh.write(raw)
             audio = _audio_info(raw, cfg.format, cfg)
@@ -813,6 +1090,7 @@ def _run(job: dict, requests: list[_RenderRequest], draft: Draft, cfg: FishConfi
             with job["lock"]:
                 for entry in entries:
                     entry.update(status="done", file=name, bytes=len(raw), sha256=digest, error=None, effect_error=effect_error,
+                                 dry_file=(raw_name if request.effect and not effect_error else None),
                                  attempts=meta.get("attempts", 1), elapsed_ms=meta.get("elapsed_ms", 0),
                                  duration_s=audio["duration_s"] if audio else None,
                                  sample_rate=audio["sample_rate"] if audio else None)

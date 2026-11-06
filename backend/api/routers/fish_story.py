@@ -55,6 +55,17 @@ class _RenderBody(BaseModel):
     draft: Optional[dict] = Field(None, description="Inline draft; defaults to the saved draft_id")
 
 
+class _ReplaceBody(BaseModel):
+    confirm: bool = Field(..., description="Must be true: the chosen lines are sent to Fish Audio again and use credits")
+    draft: dict = Field(..., description="The board's draft: its version of the chosen lines, voices and effect maps is used")
+    chunk_ids: list[str] = Field(..., min_length=1, max_length=3000)
+
+
+class _ReapplyBody(BaseModel):
+    draft: dict
+    chunk_ids: list[str] = Field(..., min_length=1, max_length=3000)
+
+
 class _ResumeBody(BaseModel):
     confirm: bool = Field(..., description="Must be true: the unfinished lines are sent to Fish Audio")
 
@@ -261,6 +272,31 @@ def run_audio(job_id: str = _id(), name: str = Path(..., pattern=r"^[A-Za-z0-9._
     if path is None:
         raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(path)
+
+
+@router.post("/story/jobs/{job_id}/replace")
+async def replace_lines(body: _ReplaceBody, job_id: str = _id()):
+    """Render the chosen lines again and put the new audio into the SAME run folder (the old audio is kept in <story>/replaced/<run>/);
+    manifest, job, story and request records are updated. Contacts Fish."""
+    if not body.confirm:
+        raise HTTPException(status_code=422, detail="confirm must be true")
+    board = _draft(body.draft)
+    try:
+        return await run_in_threadpool(lambda: _jobs().replace_lines(job_id, board, body.chunk_ids))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/story/jobs/{job_id}/reapply-effects")
+async def reapply_effects(body: _ReapplyBody, job_id: str = _id()):
+    """Change the voice effect of lines in a finished run from their untouched Fish response. Local only: Fish is not contacted."""
+    board = _draft(body.draft)
+    try:
+        return await run_in_threadpool(lambda: _jobs().reapply_effects(job_id, board, body.chunk_ids))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/story/jobs/{job_id}/resume")

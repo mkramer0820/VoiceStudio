@@ -52,6 +52,9 @@ interface RunLine {
   file: string | null;
   voice_name: string | null;
   duration_s: number | null;
+  effect?: string | null;
+  model?: string | null;
+  replace_error?: string | null;
 }
 
 interface RunLoad {
@@ -89,9 +92,27 @@ export function useRunningJobs(enabled: boolean): number {
 }
 
 /** Lines of a finished run with a play button each; audio goes through the API client so auth applies. */
-function RunLines({ jobId, onError }: { jobId: string; onError: (message: string) => void }) {
+export function RunLines({
+  jobId,
+  status,
+  onError,
+  getDraft,
+  onChanged,
+}: {
+  jobId: string;
+  status: string;
+  onError: (message: string) => void;
+  /** The board's draft: replacing a line uses the text, voices and effects that are on the board now. */
+  getDraft: () => unknown;
+  onChanged: () => void;
+}) {
   const { t } = useTranslation();
   const [run, setRun] = useState<RunLoad | null>(null);
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [note, setNote] = useState('');
+  const [reload, setReload] = useState(0);
   const [playing, setPlaying] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   const url = useRef<string | null>(null);
@@ -106,7 +127,7 @@ function RunLines({ jobId, onError }: { jobId: string; onError: (message: string
       audio.current?.pause();
       if (url.current) URL.revokeObjectURL(url.current);
     };
-  }, [jobId, onError]);
+  }, [jobId, onError, status, reload]);
 
   const play = async (line: RunLine) => {
     if (!line.file) return;
@@ -133,10 +154,45 @@ function RunLines({ jobId, onError }: { jobId: string; onError: (message: string
 
   if (!run) return <LoaderCircleIcon className="mx-auto size-4 animate-spin" />;
   const text = new Map(run.draft.chunks.map((c) => [c.id, c.text]));
+  const toggle = (id: string) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const call = async (path: 'replace' | 'reapply-effects') => {
+    setWorking(true);
+    setNote('');
+    try {
+      await apiJson(`/api/fish/story/jobs/${jobId}/${path}`, {
+        method: 'POST',
+        body: JSON.stringify({ ...(path === 'replace' ? { confirm: true } : {}), draft: getDraft(), chunk_ids: [...picked] }),
+      });
+      setNote(t(path === 'replace' ? 'fishStory.replace_started' : 'fishStory.reapply_done'));
+      setConfirming(false);
+      setPicked(new Set());
+      setReload((n) => n + 1);
+      onChanged();
+    } catch (reason) {
+      onError(describeError(reason));
+    } finally {
+      setWorking(false);
+    }
+  };
   return (
+    <div className="space-y-2">
     <ol className="max-h-64 space-y-1 overflow-auto rounded-md bg-background/70 p-2 text-xs">
       {run.lines.map((line) => (
         <li key={line.id} className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-2"
+            aria-label={t('fishStory.replace_pick', { index: line.index })}
+            checked={picked.has(line.id)}
+            disabled={!line.file || status === 'running'}
+            onChange={() => toggle(line.id)}
+          />
           <Button
             size="icon-sm"
             variant="ghost"
@@ -150,7 +206,13 @@ function RunLines({ jobId, onError }: { jobId: string; onError: (message: string
           <span className="w-8 shrink-0 pt-1.5 tabular-nums text-muted-foreground">{line.index}</span>
           <span className="min-w-0 flex-1 pt-1.5">
             {line.voice_name && <b className="mr-1">{line.voice_name}</b>}
+            {line.effect && <i className="mr-1 text-muted-foreground">{`{${line.effect}}`}</i>}
             {text.get(line.id)}
+            {line.replace_error && (
+              <span role="alert" className="block text-destructive">
+                {t('fishStory.replace_kept', { error: line.replace_error })}
+              </span>
+            )}
           </span>
           {line.duration_s ? (
             <span className="pt-1.5 tabular-nums text-muted-foreground">{line.duration_s.toFixed(1)}s</span>
@@ -158,6 +220,34 @@ function RunLines({ jobId, onError }: { jobId: string; onError: (message: string
         </li>
       ))}
     </ol>
+    <div className="space-y-1 text-xs">
+      <p className="text-muted-foreground">{t('fishStory.replace_note')}</p>
+      {note && <p role="status">{note}</p>}
+      {picked.size > 0 && !confirming && (
+        <div className="flex flex-wrap gap-2">
+          <Button size="xs" variant="outline" disabled={working} onClick={() => setConfirming(true)}>
+            {t('fishStory.replace_lines', { count: picked.size })}
+          </Button>
+          <Button size="xs" variant="outline" disabled={working} onClick={() => void call('reapply-effects')}>
+            {t('fishStory.reapply_effects')}
+          </Button>
+        </div>
+      )}
+      {picked.size > 0 && confirming && (
+        <div className="space-y-1 rounded-md border border-border/60 p-2">
+          <p>{t('fishStory.replace_confirm', { count: picked.size })}</p>
+          <div className="flex gap-2">
+            <Button size="xs" disabled={working} onClick={() => void call('replace')}>
+              {t('fishStory.replace_go')}
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setConfirming(false)}>
+              {t('common.cancel')}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+    </div>
   );
 }
 
@@ -167,10 +257,13 @@ export function JobsDialog({
   onError,
   onLoad,
   hasBoard,
+  getDraft,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onError: (message: string) => void;
+  /** The board's current draft, used when lines of a finished run are replaced or their effect is changed. */
+  getDraft: () => unknown;
   /** Put a finished run's story and settings on the board. */
   onLoad: (jobId: string) => Promise<void>;
   /** The board has lines, so loading replaces them. */
@@ -408,7 +501,9 @@ export function JobsDialog({
                       </span>
                     )}
                   </div>
-                  {listening === job.id && <RunLines jobId={job.id} onError={onError} />}
+                  {listening === job.id && (
+                    <RunLines jobId={job.id} status={job.status} onError={onError} getDraft={getDraft} onChanged={() => void refresh()} />
+                  )}
                   {logFor === job.id && (
                     <pre
                       aria-label={t('fishStory.jobs_log')}
